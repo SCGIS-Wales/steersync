@@ -40,12 +40,12 @@ def test_exclusive_lock_serialises_and_times_out(tmp_path: Path) -> None:
 def test_concurrent_pulls_share_cache_safely(
     config: Config, env: dict[str, str], project: Path, central: Path
 ) -> None:
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
 
     def worker() -> None:
         try:
             sync.pull(config, workspace_root=project, env=env)
-        except BaseException as exc:  # pragma: no cover - surfaced by the assertion
+        except Exception as exc:  # pragma: no cover - surfaced by the assertion
             errors.append(exc)
 
     threads = [threading.Thread(target=worker) for _ in range(4)]

@@ -7,7 +7,7 @@ import logging
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Literal, NamedTuple, cast
+from typing import Literal, NamedTuple, ParamSpec, TypeVar, cast
 from urllib.parse import urlsplit
 
 from steersync import gitops, paths
@@ -33,6 +33,11 @@ from steersync.steering import (
 log = logging.getLogger(__name__)
 
 Scope = Literal["workspace", "global"]
+
+# Explicit ParamSpec/TypeVar instead of PEP 695 syntax: CodeQL's Python extractor
+# does not model inline type parameters and reports them as uninitialised.
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 class ScopeResult(NamedTuple):
@@ -124,7 +129,7 @@ def _central_snapshot(config: Config, directory: Path) -> Snapshot:
     return snapshot
 
 
-def _with_cache_lock[**P, R](func: Callable[P, R]) -> Callable[P, R]:
+def _with_cache_lock(func: Callable[P, R]) -> Callable[P, R]:  # noqa: UP047
     """Serialise operations that share a cache clone across processes."""
 
     @functools.wraps(func)
