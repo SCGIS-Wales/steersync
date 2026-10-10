@@ -17,6 +17,7 @@ concurrency:
 env:
   PYTHON_VERSION: "3.14"
   TWINE_VERSION: "7.0.0"
+  ACTIONLINT_VERSION: "1.7.12.25"
   FORCE_COLOR: "1"
 
 jobs:
@@ -42,6 +43,8 @@ jobs:
         run: uv run ruff format --check .
       - name: Mypy (strict)
         run: uv run mypy
+      - name: Lint GitHub workflows (actionlint with shellcheck)
+        run: uvx --from "actionlint-py==${ACTIONLINT_VERSION}" actionlint
 
   test:
     name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})

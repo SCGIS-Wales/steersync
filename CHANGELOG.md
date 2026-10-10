@@ -33,6 +33,10 @@ Keep a Changelog and the project uses semantic versioning.
 - GitHub releases carry the wheel, the sdist and a `SHA256SUMS` file with build provenance
   attestations. Releases run the full CI gate first and no longer depend on PyPI being set
   up; publishing to PyPI is enabled with the `PUBLISH_TO_PYPI` repository variable.
+- Releases are driven by `__version__`: merging a version bump to `main`, or running the
+  `Release` workflow manually, creates the annotated tag and the release, so nobody needs
+  permission to push tags.
+- CI lints every workflow with actionlint and shellcheck.
 - `pull --best-effort` warns and exits 0 on failure; the generated Kiro hooks use it.
 - Repository description, homepage and topics are kept in `.github/repository.yml` and
   applied by a workflow when a `REPO_ADMIN_TOKEN` secret is configured.
