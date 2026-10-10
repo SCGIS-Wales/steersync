@@ -6,6 +6,7 @@ pure data, and only then are files or branches written.
 
 ```text
 cli.py          click commands; maps results and errors to output and exit codes
+locking.py      cross process exclusive lock around each cache clone
 mcp_server.py   optional MCP tools calling the same functions as the CLI
 sync.py         pull / push / status orchestration
   ├── gitops.py     hardened subprocess wrapper around git; URL and ref sanitising
@@ -55,6 +56,20 @@ errors.py       exception types carrying exit codes
 | 4 | Lint errors |
 | 5 | Sync conflict (raised only by callers that opt in) |
 | 6 | Unsafe path |
+| 7 | Central or local content exceeds `sync.max_files` or `sync.max_total_bytes` |
+| 8 | Timed out waiting for another steersync process using the same cache |
+| 130 | Interrupted |
+
+## Resiliency
+
+- `locking.py` holds an exclusive `flock` (or `msvcrt` lock on Windows) on
+  `<cache>/repos/<sha>.lock` around every pull, push and status.
+- `gitops.run_git` retries only idempotent network operations, and only for errors that match
+  known transient signatures (DNS, connection reset, early EOF, HTTP 5xx, timeouts).
+- `gitops.ensure_cache_clone` deletes and re-clones a cache that cannot be refreshed for a non
+  transient reason, and removes a stale `index.lock` before checkout.
+- `sync.push` resets the cache clone in a `finally` block so a rejected push cannot leave it on
+  a proposal branch.
 
 ## Design decisions
 

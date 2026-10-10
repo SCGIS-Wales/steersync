@@ -123,6 +123,11 @@ def main(
 )
 @click.option("--strict", is_flag=True, help="Fail when remote steering has lint errors.")
 @click.option("--remote-url", help="Project remote URL used to derive the project slug.")
+@click.option(
+    "--best-effort",
+    is_flag=True,
+    help="Warn and exit 0 on failure (for Kiro session hooks and schedulers).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
 @click.pass_context
 def pull(
@@ -133,10 +138,15 @@ def pull(
     include_global: bool,
     strict: bool,
     remote_url: str | None,
+    best_effort: bool,
     as_json: bool,
 ) -> None:
     """Fetch steering from the central repository into this workspace and ~/.kiro."""
-    config, root = _bootstrap(ctx)
+    try:
+        config, root = _bootstrap(ctx, propagate=True)
+    except SteersyncError as exc:
+        _soft_failure(exc, soft=best_effort, label="steering pull skipped")
+        return
     quiet = bool(ctx.find_root().params.get("quiet"))
     try:
         result = sync.pull(
@@ -149,8 +159,8 @@ def pull(
             dry_run=dry_run,
             strict=strict or None,
         )
-    except SteersyncError as exc:
-        _fail(exc)
+    except (SteersyncError, OSError) as exc:
+        _soft_failure(exc, soft=best_effort, label="steering pull skipped")
         return
     if as_json:
         click.echo(
@@ -219,16 +229,21 @@ def push(
     try:
         config, root = _bootstrap(ctx, propagate=True)
     except SteersyncError as exc:
-        _hook_failure(exc, from_hook, strict)
+        _soft_failure(exc, soft=from_hook and not strict, label="steering sync skipped")
         return
     strict = strict or config.hook.strict
     if from_hook:
+        config = _hook_budget(config)
         remote_url = remote_url or env.get(ENV_FROM_HOOK_URL) or None
         refs = gitops.parse_pre_push_stdin(_read_stdin())
         if refs and all(ref.is_delete for ref in refs):
             return
     if root is None:
-        _hook_failure(SteersyncError("not inside a git repository"), from_hook, strict)
+        _soft_failure(
+            SteersyncError("not inside a git repository"),
+            soft=from_hook and not strict,
+            label="steering sync skipped",
+        )
         return
     try:
         result = sync.push(
@@ -241,8 +256,15 @@ def push(
             run_lint=not no_lint,
             message=message,
         )
-    except SteersyncError as exc:
-        _hook_failure(exc, from_hook, strict)
+    except (SteersyncError, OSError) as exc:
+        _soft_failure(exc, soft=from_hook and not strict, label="steering sync skipped")
+        return
+    except Exception as exc:
+        # The pre-push contract: an unexpected bug must never block the user's push.
+        if not from_hook or strict:
+            raise
+        log.debug("unexpected error in hook mode", exc_info=True)
+        _soft_failure(exc, soft=True, label="steering sync skipped (unexpected error)")
         return
     if as_json:
         click.echo(
@@ -262,11 +284,26 @@ def push(
     )
 
 
-def _hook_failure(exc: SteersyncError, from_hook: bool, strict: bool) -> None:
-    if from_hook and not strict:
-        click.echo(f"steersync: steering sync skipped: {exc}", err=True)
+def _soft_failure(exc: Exception, *, soft: bool, label: str) -> None:
+    """Report ``exc`` and exit non zero, or only warn when ``soft`` is set."""
+    if soft:
+        click.echo(f"steersync: {label}: {exc}", err=True)
         return
-    _fail(exc)
+    if isinstance(exc, SteersyncError):
+        _fail(exc)
+    log.error("%s", exc)
+    sys.exit(1)
+
+
+def _hook_budget(config: Config) -> Config:
+    """Bound git time while running from a hook so a slow server cannot stall a push."""
+    git = config.git.model_copy(
+        update={
+            "timeout_seconds": min(config.git.timeout_seconds, config.hook.timeout_seconds),
+            "retries": min(config.git.retries, 1),
+        }
+    )
+    return config.model_copy(update={"git": git})
 
 
 def _read_stdin() -> str:
@@ -510,9 +547,25 @@ def doctor(ctx: click.Context) -> None:
         click.echo("workspace: not inside a git repository")
 
 
-def _entry() -> None:  # pragma: no cover
-    main(auto_envvar_prefix="STEERSYNC")
+def run() -> None:
+    """Console entry point: turn unexpected failures into a clean message and exit code."""
+    try:
+        main(standalone_mode=True)
+    except KeyboardInterrupt:
+        click.echo("steersync: interrupted", err=True)
+        sys.exit(130)
+    except OSError as exc:
+        click.echo(f"steersync: error: {exc}", err=True)
+        sys.exit(1)
+    except Exception as exc:
+        click.echo(
+            f"steersync: unexpected error: {exc.__class__.__name__}: {exc}\n"
+            "rerun with --log-level DEBUG and report it if the problem persists",
+            err=True,
+        )
+        log.debug("unexpected error", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover
-    _entry()
+    run()

@@ -17,11 +17,6 @@ from steersync.lint import lint_paths
 from steersync.paths import workspace_steering_dir
 
 
-def _workspace(config: Config, cwd: str | None) -> Path | None:
-    start = Path(cwd).expanduser() if cwd else Path.cwd()
-    return gitops.repo_toplevel(config, start, env=gitops.git_environment(os.environ))
-
-
 def _load(cwd: str | None) -> tuple[Config, Path | None]:
     start = Path(cwd).expanduser() if cwd else Path.cwd()
     bootstrap = load_config(workspace_root=None)
@@ -46,10 +41,10 @@ def pull_steering(
     cwd: str | None = None, force: bool = False, dry_run: bool = False
 ) -> dict[str, Any]:
     """Pull global and workspace steering from the central repository."""
-    config, root = _load(cwd)
     try:
+        config, root = _load(cwd)
         result = sync.pull(config, workspace_root=root, force=force, dry_run=dry_run)
-    except SteersyncError as exc:
+    except (SteersyncError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {
         "ok": True,
@@ -70,12 +65,12 @@ def push_steering(
     cwd: str | None = None, dry_run: bool = False, message: str | None = None
 ) -> dict[str, Any]:
     """Propose the workspace steering as a branch on the central repository."""
-    config, root = _load(cwd)
-    if root is None:
-        return {"ok": False, "error": "not inside a git repository"}
     try:
+        config, root = _load(cwd)
+        if root is None:
+            return {"ok": False, "error": "not inside a git repository"}
         result = sync.push(config, workspace_root=root, dry_run=dry_run, message=message)
-    except SteersyncError as exc:
+    except (SteersyncError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {
         "ok": True,
@@ -90,10 +85,10 @@ def push_steering(
 
 def diff_steering(cwd: str | None = None) -> dict[str, Any]:
     """Compare local steering with the central repository without changing anything."""
-    config, root = _load(cwd)
     try:
+        config, root = _load(cwd)
         result = sync.status(config, workspace_root=root)
-    except SteersyncError as exc:
+    except (SteersyncError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {
         "ok": True,
@@ -106,10 +101,13 @@ def diff_steering(cwd: str | None = None) -> dict[str, Any]:
 
 def lint_steering(cwd: str | None = None) -> dict[str, Any]:
     """Lint the workspace steering documents."""
-    config, root = _load(cwd)
-    if root is None:
-        return {"ok": False, "error": "not inside a git repository"}
-    report = lint_paths([workspace_steering_dir(config, root)], config.lint, root)
+    try:
+        config, root = _load(cwd)
+        if root is None:
+            return {"ok": False, "error": "not inside a git repository"}
+        report = lint_paths([workspace_steering_dir(config, root)], config.lint, root)
+    except (SteersyncError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
     return {
         "ok": report.ok,
         "checked": report.checked,

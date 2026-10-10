@@ -38,3 +38,15 @@ class UnsafePathError(SteersyncError):
     """A path escaped the directory it must stay inside."""
 
     exit_code = 6
+
+
+class LimitExceededError(SteersyncError):
+    """Content from the central repository exceeds the configured safety limits."""
+
+    exit_code = 7
+
+
+class LockTimeoutError(SteersyncError):
+    """Another steersync process held the cache lock for too long."""
+
+    exit_code = 8

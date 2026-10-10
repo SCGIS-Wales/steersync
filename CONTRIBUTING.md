@@ -35,6 +35,22 @@ uv run bandit -c pyproject.toml -r src -ll
 
 1. Bump `__version__` in `src/steersync/__init__.py` and move the Unreleased notes in
    `CHANGELOG.md` under the new version.
-2. Merge to `main`, then tag: `git tag v0.2.0 && git push origin v0.2.0`.
-3. The release workflow builds, attests provenance, publishes to PyPI through the `pypi`
-   environment and creates the GitHub release.
+2. Merge to `main`, then tag: `git tag -a v0.2.0 -m "steersync 0.2.0" && git push origin v0.2.0`.
+3. The release workflow runs the full CI gate, builds the wheel and sdist, writes
+   `SHA256SUMS`, attests provenance and creates the GitHub release with the files attached.
+   The workflow refuses a tag that does not match `__version__` or has no changelog section.
+4. Optional PyPI publishing: configure a trusted publisher on PyPI for `release.yml` and the
+   `pypi` environment, then set the repository variable `PUBLISH_TO_PYPI` to `true`.
+
+## Dependency review
+
+pip-audit checks the locked dependencies on every CI run. Pull requests can also run
+GitHub dependency review: enable "Dependency graph" under Settings, Code security, then set
+the repository variable `DEPENDENCY_REVIEW` to `true`.
+
+## Repository metadata
+
+The GitHub description, homepage and topics live in `.github/repository.yml`. The
+`Repository metadata` workflow applies them when the file changes on `main`. It needs a
+repository secret `REPO_ADMIN_TOKEN`: a fine grained token scoped to this repository with
+"Administration: read and write". Without the secret the workflow only warns.

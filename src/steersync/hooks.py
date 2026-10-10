@@ -84,7 +84,10 @@ def install_pre_push_hook(
 
 
 def render_kiro_hook(
-    engine: Literal["v2", "v3"], *, command: str = "steersync pull --quiet", timeout: int = 30
+    engine: Literal["v2", "v3"],
+    *,
+    command: str = "steersync pull --quiet --best-effort",
+    timeout: int = 30,
 ) -> str:
     """Render the Kiro hook definition that pulls steering when a session starts."""
     if engine == "v2":

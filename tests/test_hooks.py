@@ -62,7 +62,7 @@ def test_render_kiro_hooks() -> None:
     v3 = json.loads(hooks.render_kiro_hook("v3"))
     assert v3["version"] == "v1"
     assert v3["hooks"][0]["trigger"] == "SessionStart"
-    assert v3["hooks"][0]["action"]["command"] == "steersync pull --quiet"
+    assert v3["hooks"][0]["action"]["command"] == "steersync pull --quiet --best-effort"
     v2 = json.loads(hooks.render_kiro_hook("v2", command="steersync pull", timeout=5))
     assert v2["hooks"]["agentSpawn"][0] == {"command": "steersync pull", "timeout_ms": 5000}
 

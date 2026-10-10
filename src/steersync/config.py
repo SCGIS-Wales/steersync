@@ -118,6 +118,9 @@ class GitConfig(_Strict):
     binary: str = Field(default="git", min_length=1)
     timeout_seconds: int = Field(default=120, ge=5, le=3600)
     clone_depth: int = Field(default=1, ge=1, le=1000)
+    retries: int = Field(default=2, ge=0, le=10)
+    retry_backoff_seconds: float = Field(default=2.0, ge=0, le=60)
+    retry_max_backoff_seconds: float = Field(default=30.0, ge=0, le=600)
 
     @field_validator("binary")
     @classmethod
@@ -165,10 +168,14 @@ class PathsConfig(_Strict):
 class SyncConfig(_Strict):
     prune: bool = True
     strict_pull: bool = False
+    lock_timeout_seconds: int = Field(default=120, ge=1, le=3600)
+    max_files: int = Field(default=1000, ge=1, le=100_000)
+    max_total_bytes: int = Field(default=10_485_760, ge=1024, le=1_073_741_824)
 
 
 class HookConfig(_Strict):
     strict: bool = False
+    timeout_seconds: int = Field(default=60, ge=5, le=3600)
 
 
 class LoggingConfig(_Strict):

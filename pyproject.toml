@@ -35,7 +35,7 @@ dependencies = [
 mcp = ["mcp>=2.3,<3"]
 
 [project.scripts]
-steersync = "steersync.cli:main"
+steersync = "steersync.cli:run"
 
 [project.urls]
 Homepage = "https://github.com/SCGIS-Wales/steersync"

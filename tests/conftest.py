@@ -106,7 +106,9 @@ def project(tmp_path: Path, env: dict[str, str]) -> Path:
 def config_file(tmp_path: Path, central: Path) -> Path:
     path = tmp_path / "steersync.yaml"
     path.write_text(
-        f"remote:\n  url: {central}\n  allow_local: true\npaths:\n  cache_dir: {tmp_path / 'cache'}\n",
+        f"remote:\n  url: {central}\n  allow_local: true\n"
+        f"paths:\n  cache_dir: {tmp_path / 'cache'}\n"
+        "git:\n  retry_backoff_seconds: 0\n  retry_max_backoff_seconds: 0\n",
         encoding="utf-8",
     )
     return path

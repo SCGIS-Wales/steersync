@@ -1,0 +1,42 @@
+name: Repository metadata
+
+# Applies description, homepage and topics from .github/repository.yml.
+# GITHUB_TOKEN cannot change repository settings, so this needs a repository
+# secret REPO_ADMIN_TOKEN: a fine grained token for this repository only with
+# "Administration: read and write". Without it the job warns and succeeds.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/repository.yml
+      - .github/workflows/repository-metadata.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    name: Apply metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/repository.yml
+          sparse-checkout-cone-mode: false
+      - name: Apply description, homepage and topics
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::REPO_ADMIN_TOKEN is not set; repository metadata was not applied"
+            exit 0
+          fi
+          yq -o=json '{"description": .description, "homepage": .homepage}' .github/repository.yml \
+            | gh api -X PATCH "repos/${GITHUB_REPOSITORY}" --input - --jq '.description'
+          yq -o=json '{"names": .topics}' .github/repository.yml \
+            | gh api -X PUT "repos/${GITHUB_REPOSITORY}/topics" --input - --jq '.names | join(", ")'

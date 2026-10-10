@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import re
+import shutil
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
@@ -25,6 +28,13 @@ _UNSAFE_COMPONENT = re.compile(r"[^A-Za-z0-9._-]+")
 _UNSAFE_REF_CHARS = re.compile(r"[^A-Za-z0-9._/-]+")
 _SCRUBBED_ENV_PREFIXES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_NAMESPACE")
 _CREDENTIAL_IN_URL = re.compile(r"(?<=://)[^/@\s]+@")
+_TRANSIENT_RE = re.compile(
+    r"could not resolve host|connection (?:timed out|reset|refused|closed)|operation timed out"
+    r"|timed out after|early eof|the remote end hung up|rpc failed|unexpected disconnect"
+    r"|http(?:/[0-9.]+)? 5\d\d|returned error: 5\d\d|error: 5\d\d|temporary failure"
+    r"|ssh: connect to host|gnutls_handshake|ssl_read|tls connection was non-properly terminated",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 class GitResult(NamedTuple):
@@ -51,6 +61,18 @@ class PrePushRef(NamedTuple):
 def redact_url(url: str) -> str:
     """Strip user info from URLs before they reach logs."""
     return _CREDENTIAL_IN_URL.sub("***@", url)
+
+
+def is_transient(message: str) -> bool:
+    """Return True when a git error message looks like a temporary network or server fault."""
+    return bool(_TRANSIENT_RE.search(message))
+
+
+def backoff_delay(config: Config, attempt: int) -> float:
+    """Exponential backoff with up to 25 percent jitter, capped by configuration."""
+    base = config.git.retry_backoff_seconds * float(1 << attempt)
+    capped = min(base, config.git.retry_max_backoff_seconds)
+    return capped + random.uniform(0, capped * 0.25)  # noqa: S311  (jitter, not security)
 
 
 def git_environment(base: Mapping[str, str], *, hooks_dir: Path | None = None) -> dict[str, str]:
@@ -80,8 +102,16 @@ def run_git(
     check: bool = True,
     timeout: int | None = None,
     stdin: str | None = None,
+    retries: int = 0,
 ) -> GitResult:
-    """Run git with hardened defaults and return its output."""
+    """Run git with hardened defaults and return its output.
+
+    ``retries`` re-runs the command after transient network or server failures
+    (including timeouts) with exponential backoff. Only idempotent network
+    operations should pass a non zero value. Standard input is never inherited:
+    when the caller is an MCP stdio server, inheriting it would let git read the
+    protocol stream.
+    """
     base_env = os.environ if env is None else env
     command = [
         config.git.binary,
@@ -93,30 +123,54 @@ def run_git(
         "core.askPass=",
         *args,
     ]
+    name = args[0] if args else ""
     log.debug("git %s (cwd=%s)", " ".join(redact_url(a) for a in args), cwd)
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=cwd,
-            env=dict(base_env),
-            capture_output=True,
-            text=True,
-            input=stdin,
-            timeout=timeout or config.git.timeout_seconds,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        msg = f"git binary not found: {config.git.binary}"
-        raise GitError(msg) from exc
-    except subprocess.TimeoutExpired as exc:
-        msg = f"git {args[0] if args else ''} timed out after {exc.timeout:.0f}s"
-        raise GitError(msg) from exc
-    result = GitResult(completed.returncode, completed.stdout, completed.stderr)
+    attempt = 0
+    while True:
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=cwd,
+                env=dict(base_env),
+                capture_output=True,
+                text=True,
+                input=stdin,
+                stdin=None if stdin is not None else subprocess.DEVNULL,
+                timeout=timeout or config.git.timeout_seconds,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            msg = f"git binary not found: {config.git.binary}"
+            raise GitError(msg) from exc
+        except subprocess.TimeoutExpired as exc:
+            if attempt < retries:
+                attempt = _wait_before_retry(config, name, attempt, "timed out")
+                continue
+            msg = f"git {name} timed out after {exc.timeout:.0f}s"
+            raise GitError(msg) from exc
+        result = GitResult(completed.returncode, completed.stdout, completed.stderr)
+        if result.returncode != 0 and attempt < retries and is_transient(result.stderr):
+            attempt = _wait_before_retry(config, name, attempt, result.stderr.strip())
+            continue
+        break
     if check and result.returncode != 0:
         detail = redact_url(result.stderr.strip() or result.stdout.strip())
-        msg = f"git {args[0] if args else ''} failed ({result.returncode}): {detail}"
+        msg = f"git {name} failed ({result.returncode}): {detail}"
         raise GitError(msg)
     return result
+
+
+def _wait_before_retry(config: Config, name: str, attempt: int, reason: str) -> int:
+    delay = backoff_delay(config, attempt)
+    log.warning(
+        "git %s failed transiently (%s); retry %d in %.1fs",
+        name,
+        redact_url(reason.splitlines()[-1] if reason else "unknown"),
+        attempt + 1,
+        delay,
+    )
+    time.sleep(delay)
+    return attempt + 1
 
 
 def git_version(config: Config, env: Mapping[str, str] | None = None) -> str:
@@ -253,6 +307,7 @@ def remote_branch_exists(
         ["ls-remote", "--exit-code", "--heads", "--", url, f"refs/heads/{branch}"],
         env=env,
         check=False,
+        retries=config.git.retries,
     )
     if result.returncode == 0:
         return True
@@ -265,7 +320,12 @@ def remote_branch_exists(
 def remote_head_oid(
     config: Config, url: str, branch: str, env: Mapping[str, str] | None = None
 ) -> str | None:
-    result = run_git(config, ["ls-remote", "--heads", "--", url, f"refs/heads/{branch}"], env=env)
+    result = run_git(
+        config,
+        ["ls-remote", "--heads", "--", url, f"refs/heads/{branch}"],
+        env=env,
+        retries=config.git.retries,
+    )
     first = result.stdout.strip().splitlines()[:1]
     return first[0].split()[0] if first else None
 
@@ -280,56 +340,91 @@ def ensure_cache_clone(
     """Clone the central repository into the cache or refresh an existing clone.
 
     The clone is shallow and single branch. On every call the default branch is
-    reset to the remote tip so the cache never carries stale local state.
+    reset to the remote tip so the cache never carries stale local state. A cache
+    that cannot be refreshed for a non transient reason (corruption, an
+    interrupted clone, a rewritten default branch) is deleted and cloned again.
     """
     validate_remote_url(
         url, allowed_hosts=config.remote.allowed_hosts, allow_local=config.remote.allow_local
     )
-    branch = config.remote.default_branch
     if (cache_dir / ".git").is_dir():
-        stored = remote_url(config, cache_dir, env=env)
-        if stored != url:
-            run_git(config, ["remote", "set-url", "origin", "--", url], cwd=cache_dir, env=env)
-        run_git(
-            config,
-            [
-                "fetch",
-                "--depth",
-                str(config.git.clone_depth),
-                "--prune",
-                "origin",
-                f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
-            ],
-            cwd=cache_dir,
-            env=env,
-        )
-    else:
-        cache_dir.parent.mkdir(parents=True, exist_ok=True)
-        run_git(
-            config,
-            [
-                "clone",
-                "--quiet",
-                "--depth",
-                str(config.git.clone_depth),
-                "--single-branch",
-                "--branch",
-                branch,
-                "--no-tags",
-                "--",
-                url,
-                str(cache_dir),
-            ],
-            env=env,
-        )
+        try:
+            _refresh_clone(config, url=url, cache_dir=cache_dir, env=env)
+        except GitError as exc:
+            if is_transient(str(exc)):
+                raise
+            log.warning("cache clone %s is unusable (%s); recreating it", cache_dir, exc)
+        else:
+            return cache_dir
+    _remove_cache_dir(cache_dir)
+    cache_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    run_git(
+        config,
+        [
+            "clone",
+            "--quiet",
+            "--depth",
+            str(config.git.clone_depth),
+            "--single-branch",
+            "--branch",
+            config.remote.default_branch,
+            "--no-tags",
+            "--",
+            url,
+            str(cache_dir),
+        ],
+        env=env,
+        retries=config.git.retries,
+    )
+    _reset_to_remote(config, cache_dir=cache_dir, env=env)
+    return cache_dir
+
+
+def _refresh_clone(
+    config: Config, *, url: str, cache_dir: Path, env: Mapping[str, str] | None
+) -> None:
+    branch = config.remote.default_branch
+    stored = remote_url(config, cache_dir, env=env)
+    if stored != url:
+        run_git(config, ["remote", "set-url", "origin", "--", url], cwd=cache_dir, env=env)
+    run_git(
+        config,
+        [
+            "fetch",
+            "--depth",
+            str(config.git.clone_depth),
+            "--prune",
+            "--no-tags",
+            "origin",
+            f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+        ],
+        cwd=cache_dir,
+        env=env,
+        retries=config.git.retries,
+    )
+    _reset_to_remote(config, cache_dir=cache_dir, env=env)
+
+
+def _reset_to_remote(config: Config, *, cache_dir: Path, env: Mapping[str, str] | None) -> None:
+    branch = config.remote.default_branch
+    lock = cache_dir / ".git" / "index.lock"
+    if lock.exists():
+        log.warning("removing stale %s left by an interrupted git process", lock)
+        lock.unlink(missing_ok=True)
     run_git(
         config,
         ["checkout", "--quiet", "--force", "-B", branch, f"origin/{branch}"],
         cwd=cache_dir,
         env=env,
     )
-    run_git(config, ["clean", "-fdq"], cwd=cache_dir, env=env)
-    return cache_dir
+    run_git(config, ["clean", "-fdqx"], cwd=cache_dir, env=env)
+
+
+def _remove_cache_dir(cache_dir: Path) -> None:
+    if cache_dir.is_symlink() or cache_dir.is_file():
+        cache_dir.unlink()
+    elif cache_dir.exists():
+        shutil.rmtree(cache_dir)
 
 
 def head_commit(config: Config, repo: Path, env: Mapping[str, str] | None = None) -> str:
@@ -397,13 +492,17 @@ def push_branch(
     for option in push_options:
         args.extend(["--push-option", option])
     args.extend(["--", url, refspec])
-    result = run_git(config, args, cwd=repo, env=env, check=False)
+    result = run_git(config, args, cwd=repo, env=env, check=False, retries=config.git.retries)
     if result.returncode == 0:
         return result, bool(push_options)
     if push_options and "push options" in result.stderr:
         log.warning("remote does not accept push options; pushing without them")
         retry = run_git(
-            config, ["push", "--quiet", "--no-verify", "--", url, refspec], cwd=repo, env=env
+            config,
+            ["push", "--quiet", "--no-verify", "--", url, refspec],
+            cwd=repo,
+            env=env,
+            retries=config.git.retries,
         )
         return retry, False
     detail = redact_url(result.stderr.strip() or result.stdout.strip())
