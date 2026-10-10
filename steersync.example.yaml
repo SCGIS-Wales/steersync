@@ -1,0 +1,44 @@
+# Example steersync configuration.
+# Copy to <repo>/.kiro/steersync.yaml (per project) or ~/.config/steersync/config.yaml (per user).
+# Any key omitted here keeps the packaged default; see `steersync config default`.
+
+remote:
+  url: git@gitlab.example.com:platform/kiro-steering.git
+  default_branch: main
+  global_dir: global
+  projects_dir: projects
+  allowed_hosts:
+    - gitlab.example.com
+  push_options:
+    - merge_request.create
+    - merge_request.target={default_branch}
+    - merge_request.remove_source_branch
+    - "merge_request.title=steering: update {project} from {user}"
+    - merge_request.label=steering
+
+git:
+  timeout_seconds: 120
+  clone_depth: 1
+
+branch:
+  template: "steering/{project}/{user}-{hash}"
+  hash_length: 8
+
+sync:
+  prune: true
+  strict_pull: false
+
+lint:
+  max_file_bytes: 65536
+  require_h1: true
+  pymarkdown:
+    enabled: true
+    severity: warning
+    disabled_rules: [MD013, MD041]
+
+hook:
+  strict: false
+
+logging:
+  level: INFO
+  format: text
