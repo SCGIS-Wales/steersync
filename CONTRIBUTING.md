@@ -33,12 +33,16 @@ uv run bandit -c pyproject.toml -r src -ll
 
 ## Releasing
 
-1. Bump `__version__` in `src/steersync/__init__.py` and move the Unreleased notes in
-   `CHANGELOG.md` under the new version.
-2. Merge to `main`, then tag: `git tag -a v0.2.0 -m "steersync 0.2.0" && git push origin v0.2.0`.
-3. The release workflow runs the full CI gate, builds the wheel and sdist, writes
-   `SHA256SUMS`, attests provenance and creates the GitHub release with the files attached.
-   The workflow refuses a tag that does not match `__version__` or has no changelog section.
+Releases are driven by the version number; nobody needs to push tags.
+
+1. In a pull request, bump `__version__` in `src/steersync/__init__.py` and move the
+   Unreleased notes in `CHANGELOG.md` under the new version.
+2. Merge it. The `Release` workflow sees a version with no GitHub release, runs the full CI
+   gate, builds the wheel and sdist, writes `SHA256SUMS`, attests provenance, creates the
+   annotated `vX.Y.Z` tag and publishes the GitHub release with the files attached.
+3. To retry a failed release, run the `Release` workflow manually on `main`. A version that is
+   already released is skipped, and a version without a changelog section is refused.
+   Pushing a matching `vX.Y.Z` tag by hand also works.
 4. Optional PyPI publishing: configure a trusted publisher on PyPI for `release.yml` and the
    `pypi` environment, then set the repository variable `PUBLISH_TO_PYPI` to `true`.
 
