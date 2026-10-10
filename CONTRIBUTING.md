@@ -42,6 +42,12 @@ uv run bandit -c pyproject.toml -r src -ll
 4. Optional PyPI publishing: configure a trusted publisher on PyPI for `release.yml` and the
    `pypi` environment, then set the repository variable `PUBLISH_TO_PYPI` to `true`.
 
+## Dependency review
+
+pip-audit checks the locked dependencies on every CI run. Pull requests can also run
+GitHub dependency review: enable "Dependency graph" under Settings, Code security, then set
+the repository variable `DEPENDENCY_REVIEW` to `true`.
+
 ## Repository metadata
 
 The GitHub description, homepage and topics live in `.github/repository.yml`. The

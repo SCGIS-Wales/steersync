@@ -46,8 +46,9 @@ Keep a Changelog and the project uses semantic versioning.
 - Lock files never store credentials from the remote URL, and a remote URL with an embedded
   password triggers a warning.
 - git subprocesses never inherit standard input, which protects the MCP stdio protocol stream.
-- Every GitHub Action and pre-commit hook is pinned to a commit SHA, CodeQL also analyses the
-  workflows, and pull requests run dependency review.
+- Every GitHub Action and pre-commit hook is pinned to a commit SHA, and CodeQL also analyses
+  the workflows. Pull requests can run dependency review once the Dependency graph is enabled
+  and the `DEPENDENCY_REVIEW` repository variable is set.
 
 ### Reliability
 

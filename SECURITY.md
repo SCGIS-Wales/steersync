@@ -40,7 +40,7 @@ is deliberately conservative.
 - **Logs redact** user info in URLs and known token formats, and lock files never store
   credentials from the remote URL.
 - **Supply chain.** Dependencies are pinned in `uv.lock`, audited with pip-audit on every
-  change, reviewed with dependency review on pull requests, and statically analysed with
+  change, optionally reviewed with dependency review on pull requests, and statically analysed with
   bandit and CodeQL (Python and workflows). Every GitHub Action and pre-commit hook is pinned
   to a commit SHA and updated by Dependabot. Releases run the full CI gate, publish a
   `SHA256SUMS` file and carry build provenance attestations; PyPI publishing uses trusted
