@@ -1,0 +1,87 @@
+# Default steersync configuration. User configuration files are deep merged over
+# these values. Environment variables override individual settings; see README.
+remote:
+  # URL of the central steering repository. SSH or HTTPS. Authentication is
+  # handled by the git binary (ssh-agent or credential helper), never by steersync.
+  url: ""
+  default_branch: main
+  # Directory in the central repository holding steering applied to every workspace.
+  global_dir: global
+  # Directory in the central repository holding per project steering, keyed by project slug.
+  projects_dir: projects
+  # Optional allow list of remote hosts. Empty means any host is accepted.
+  allowed_hosts: []
+  # Allow file:// and absolute local paths. Only for tests and offline evaluation.
+  allow_local: false
+  # Git push options sent with each proposal branch. Placeholders: {default_branch},
+  # {project}, {user}, {hash}. GitLab turns these into a merge request; other
+  # servers ignore them silently.
+  push_options:
+    - merge_request.create
+    - merge_request.target={default_branch}
+    - merge_request.remove_source_branch
+    - "merge_request.title=steering: update {project} from {user}"
+
+git:
+  binary: git
+  timeout_seconds: 120
+  clone_depth: 1
+
+branch:
+  # Placeholders: {project}, {user}, {hash}
+  template: "steering/{project}/{user}-{hash}"
+  hash_length: 8
+
+paths:
+  workspace_steering: .kiro/steering
+  workspace_lock: .kiro/steersync.lock.json
+  # Resolved against KIRO_HOME when set, else ~/.kiro
+  global_steering: steering
+  global_lock: steersync.lock.json
+  cache_dir: ~/.cache/steersync
+
+sync:
+  # Delete locally managed files that disappeared from the central repository.
+  prune: true
+  # Fail a pull when the remote content has lint errors.
+  strict_pull: false
+
+lint:
+  max_file_bytes: 65536
+  require_h1: true
+  allowed_extra_keys:
+    - x-steersync
+  file_reference_check: true
+  pymarkdown:
+    enabled: true
+    severity: warning
+    disabled_rules:
+      - MD013   # line length is not meaningful for prose steering
+      - MD041   # first line heading is handled by require_h1 with front matter awareness
+  forbidden_patterns:
+    - id: aws-access-key
+      pattern: "(?<![A-Z0-9])(AKIA|ASIA)[0-9A-Z]{16}(?![A-Z0-9])"
+      message: AWS access key identifier
+    - id: private-key
+      pattern: "-----BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY"
+      message: Private key material
+    - id: github-token
+      pattern: "gh[pousr]_[A-Za-z0-9]{36,}"
+      message: GitHub token
+    - id: gitlab-token
+      pattern: "glpat-[A-Za-z0-9_-]{20,}"
+      message: GitLab personal access token
+    - id: slack-token
+      pattern: "xox[abpr]-[0-9A-Za-z-]{10,}"
+      message: Slack token
+    - id: generic-secret
+      pattern: "(?i)(api[_-]?key|secret|password|token)\\s*[:=]\\s*['\"][A-Za-z0-9/+_=-]{16,}['\"]"
+      message: Possible hard coded credential
+
+hook:
+  # When true the pre-push hook aborts the project push if steering sync fails.
+  strict: false
+
+logging:
+  level: INFO
+  format: text

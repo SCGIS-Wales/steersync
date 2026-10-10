@@ -1,0 +1,32 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+Keep a Changelog and the project uses semantic versioning.
+
+## [Unreleased]
+
+## [0.1.0] - 2026-10-10
+
+### Added
+
+- `steersync pull` applies global and per project steering from a central git repository,
+  keeps locally modified files unless `--force` is given, prunes files removed centrally and
+  records what it wrote in a lock file so later pulls can tell local edits from stale copies.
+- `steersync push` proposes workspace or global steering as a content hashed branch with
+  GitLab merge request push options, dedupes identical proposals and falls back to a plain
+  push when the server does not accept push options.
+- `steersync status`, `lint`, `doctor`, `config show|validate|default`.
+- `steersync init` writes `.git/info/exclude` entries and an optional configuration file,
+  and `steersync install-hook` installs a chaining pre-push hook without touching
+  `core.hooksPath`.
+- `.pre-commit-hooks.yaml` exposing `steersync-push` (pre-push) and `steersync-lint`.
+- `steersync kiro-hook` renders Kiro CLI 2.x `agentSpawn` and V3 `SessionStart` hooks and
+  `steersync mcp-config` renders an `mcp.json` fragment.
+- Optional MCP stdio server (`steersync[mcp]`) exposing `pull_steering`, `push_steering`,
+  `diff_steering` and `lint_steering`.
+- Lint rules for Kiro front matter, file size, UTF-8, level one headings, `#[[file:]]` and
+  `#[[folder:]]` references, secret patterns and pymarkdown style checks.
+- Layered YAML configuration with environment overrides and strict pydantic validation.
+- CI pipeline with ruff, mypy strict, pytest with coverage gate, bandit, pip-audit, CodeQL,
+  wheel smoke test, Dependabot and a tag driven release workflow with build provenance and
+  PyPI trusted publishing.

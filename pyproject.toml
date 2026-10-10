@@ -1,0 +1,129 @@
+[build-system]
+requires = ["hatchling>=1.32,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "steersync"
+dynamic = ["version"]
+description = "Sync Kiro steering documents between developer machines and a central git repository."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+authors = [{ name = "Dejan Gregor", email = "dejan.gregor@gmail.com" }]
+keywords = ["kiro", "steering", "git", "pre-push", "mcp", "developer-experience"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Version Control :: Git",
+  "Typing :: Typed",
+]
+dependencies = [
+  "click>=8.5,<9",
+  "pydantic>=2.14,<3",
+  "python-frontmatter>=1.3,<2",
+  "PyYAML>=6.0.3,<7",
+  "pymarkdownlnt>=0.9.40,<1",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=2.3,<3"]
+
+[project.scripts]
+steersync = "steersync.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/SCGIS-Wales/steersync"
+Repository = "https://github.com/SCGIS-Wales/steersync"
+Issues = "https://github.com/SCGIS-Wales/steersync/issues"
+Changelog = "https://github.com/SCGIS-Wales/steersync/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+  "pytest>=9.1,<10",
+  "pytest-cov>=7.1,<8",
+  "ruff>=0.17,<1",
+  "mypy>=2.4,<3",
+  "types-PyYAML>=6.0.12",
+  "bandit[toml]>=1.8,<2",
+  "pip-audit>=2.9,<3",
+  "mcp>=2.3,<3",
+]
+
+[tool.hatch.version]
+path = "src/steersync/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/steersync"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/steersync", "tests", "README.md", "CHANGELOG.md", "LICENSE", "steersync.example.yaml"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "DTZ", "T10", "ISC", "ICN", "PIE",
+  "PT", "Q", "RET", "SIM", "TID", "ARG", "PTH", "PL", "RUF", "S", "ANN", "TRY", "PERF", "FURB",
+]
+ignore = [
+  "PLR0913",  # click commands take many keyword arguments by design
+  "PLR0912",  # branching in orchestration functions
+  "PLR0915",
+  "PLR0917",  # click commands receive each option positionally
+  "PLR0911",  # orchestration functions return distinct outcomes
+  "PLR2004",  # magic values are documented inline where used
+  "TRY003",   # messages inline in exceptions keep the error module small
+  "ISC001",   # conflicts with the formatter
+  "S603",     # subprocess calls use argument lists, never a shell; reviewed in gitops
+  "S607",     # the git binary is resolved from PATH on purpose so credential helpers work
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108", "ANN", "PLR2004", "ARG001", "ARG005", "S106", "S105", "E501", "PLC0415"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["steersync"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["frontmatter", "frontmatter.*", "pymarkdown.*", "mcp.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["steersync"]
+omit = ["src/steersync/__main__.py"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = false
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = ["B404", "B603", "B607"]
