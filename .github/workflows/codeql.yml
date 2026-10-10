@@ -22,7 +22,7 @@ jobs:
       actions: read
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Initialise CodeQL
