@@ -16,12 +16,20 @@ that in both directions:
 
 ## Install
 
-Requires Python 3.14 or newer and git 2.18 or newer.
+Requires Python 3.14 or newer and git 2.18 or newer. Every
+[GitHub release](https://github.com/SCGIS-Wales/steersync/releases) carries the wheel, the
+sdist and a `SHA256SUMS` file, with signed build provenance.
 
 ```bash
-uv tool install steersync            # or: pipx install steersync
-uv tool install "steersync[mcp]"     # adds the MCP server
+VERSION=0.1.0
+uv tool install "https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
+# with the MCP server
+uv tool install "steersync[mcp] @ https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
+# verify where the wheel came from
+gh attestation verify "steersync-${VERSION}-py3-none-any.whl" --repo SCGIS-Wales/steersync
 ```
+
+Once the package is published to PyPI, `uv tool install steersync` works as well.
 
 ## Quick start
 
@@ -71,7 +79,7 @@ replaced, so `ssh://git@gitlab.example.com/acme/platform/api.git` becomes
 
 | Command | Purpose |
 |---|---|
-| `steersync pull [--force] [--dry-run] [--no-global] [--no-workspace] [--strict] [--json]` | Apply central steering locally. |
+| `steersync pull [--force] [--dry-run] [--no-global] [--no-workspace] [--strict] [--best-effort] [--json]` | Apply central steering locally. `--best-effort` warns and exits 0 on failure. |
 | `steersync push [--dry-run] [--scope global] [--no-lint] [-m MSG] [--json]` | Propose local steering centrally. `--from-hook` is used by git hooks and never blocks the push unless strict. |
 | `steersync status [--json]` | Show adds, updates, deletes and local edits in both directions. |
 | `steersync lint [PATHS] [--json]` | Validate steering documents. Exit code 4 on errors. |
@@ -105,6 +113,17 @@ for the packaged defaults.
 
 Unknown keys, invalid patterns, unsafe paths and malformed push options are rejected at load
 time with a precise message.
+
+## Reliability
+
+| Mechanism | Configuration |
+|---|---|
+| Clone, fetch, ls-remote and push retry transient network and server errors with exponential backoff and jitter. Authentication and not found errors fail at once. | `git.retries`, `git.retry_backoff_seconds`, `git.retry_max_backoff_seconds` |
+| An exclusive lock serialises processes sharing a cache clone, such as a Kiro session hook and a git hook. The operating system releases it if a process dies. | `sync.lock_timeout_seconds` |
+| A corrupt or half written cache clone, or a stale `index.lock`, is deleted and cloned again. The cache is never deleted for network errors. | automatic |
+| A failed push always resets the cache clone to a clean default branch. | automatic |
+| From a pre-push hook each git call is capped and retried at most once, and no failure, including an unexpected bug, blocks the push unless strict mode is on. | `hook.timeout_seconds`, `hook.strict` |
+| Central and local content larger than the limits is refused. | `sync.max_files`, `sync.max_total_bytes` |
 
 ## How pull decides what to write
 
@@ -172,7 +191,7 @@ and says so. Push options may use `{default_branch}`, `{project}`, `{user}` and 
 ## Kiro integration
 
 **Session hook (V3).** `steersync kiro-hook --write` creates `.kiro/hooks/steersync.json` with a
-`SessionStart` trigger that runs `steersync pull --quiet`. For CLI 2.x agents paste the output of
+`SessionStart` trigger that runs `steersync pull --quiet --best-effort`. For CLI 2.x agents paste the output of
 `steersync kiro-hook --engine v2` into the agent's `hooks` block. Field reports say Kiro hooks fire
 only in headless runs or with a custom agent active, so treat them as a convenience and keep the
 git hook as the dependable trigger.
@@ -189,9 +208,10 @@ Kiro does not auto include it.
 ## Security
 
 See [SECURITY.md](SECURITY.md). In short: no credentials of its own, no shell, validated remote
-URLs with an optional host allow list, path containment for every write, secret scanning before
-a push, recursion guards in hooks, redacted logs, locked and audited dependencies, signed
-provenance on releases.
+URLs with an optional host allow list, path containment for every write, central symlinks never
+followed, git hooks disabled in the cache, secret scanning before a push, recursion guards in
+hooks, redacted logs, SHA pinned actions, locked and audited dependencies, signed provenance on
+releases.
 
 ## Development
 

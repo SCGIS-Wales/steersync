@@ -5,17 +5,18 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PYTHON_VERSION: "3.14"
-  UV_SYSTEM_CERTS: "1"
+  TWINE_VERSION: "7.0.0"
   FORCE_COLOR: "1"
 
 jobs:
@@ -25,11 +26,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -43,21 +44,21 @@ jobs:
         run: uv run mypy
 
   test:
-    name: Tests (Python ${{ matrix.python }})
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
         python: ["3.14"]
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           python-version: ${{ matrix.python }}
@@ -69,11 +70,11 @@ jobs:
           git config --global user.email "ci@example.com"
       - name: Run tests with coverage
         run: uv run pytest --cov --cov-report=xml --cov-report=term-missing --junitxml=junit.xml
-      - name: Upload coverage report
+      - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: coverage-${{ matrix.python }}
+          name: test-reports-${{ matrix.os }}-${{ matrix.python }}
           path: |
             coverage.xml
             junit.xml
@@ -85,11 +86,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -104,6 +105,17 @@ jobs:
       - name: Lint the shipped steering examples with steersync itself
         run: uv run steersync lint docs/examples
 
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+
   build:
     name: Build distribution
     runs-on: ubuntu-latest
@@ -111,27 +123,29 @@ jobs:
     needs: [lint, test, security]
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Build sdist and wheel
         run: uv build
       - name: Check metadata
-        run: uvx twine check --strict dist/*
+        run: uvx --from "twine==${TWINE_VERSION}" twine check --strict dist/*
       - name: Smoke test the wheel in a clean environment
         run: |
-          uv venv --python ${{ env.PYTHON_VERSION }} /tmp/smoke
-          uv pip install --python /tmp/smoke/bin/python dist/*.whl
-          /tmp/smoke/bin/steersync --version
-          /tmp/smoke/bin/steersync config default >/dev/null
+          uv venv --python "${PYTHON_VERSION}" "${RUNNER_TEMP}/smoke"
+          uv pip install --python "${RUNNER_TEMP}/smoke/bin/python" dist/*.whl
+          "${RUNNER_TEMP}/smoke/bin/steersync" --version
+          "${RUNNER_TEMP}/smoke/bin/steersync" config default >/dev/null
+          "${RUNNER_TEMP}/smoke/bin/steersync" lint docs/examples
       - name: Upload distribution
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
           retention-days: 14

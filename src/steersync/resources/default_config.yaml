@@ -24,8 +24,13 @@ remote:
 
 git:
   binary: git
+  # Per invocation timeout. Network operations (clone, fetch, ls-remote, push)
+  # are retried on transient failures with exponential backoff and jitter.
   timeout_seconds: 120
   clone_depth: 1
+  retries: 2
+  retry_backoff_seconds: 2.0
+  retry_max_backoff_seconds: 30.0
 
 branch:
   # Placeholders: {project}, {user}, {hash}
@@ -45,6 +50,11 @@ sync:
   prune: true
   # Fail a pull when the remote content has lint errors.
   strict_pull: false
+  # Wait this long for another steersync process using the same cache clone.
+  lock_timeout_seconds: 120
+  # Safety limits for content read from the central repository.
+  max_files: 1000
+  max_total_bytes: 10485760
 
 lint:
   max_file_bytes: 65536
@@ -81,6 +91,9 @@ lint:
 hook:
   # When true the pre-push hook aborts the project push if steering sync fails.
   strict: false
+  # Per git call timeout while running from a hook, so a slow server never
+  # stalls the developer's push for long.
+  timeout_seconds: 60
 
 logging:
   level: INFO

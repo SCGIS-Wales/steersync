@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, cast
+from urllib.parse import urlsplit
 
 from steersync import gitops, paths
 from steersync.config import Config, remote_host, validate_remote_url
 from steersync.errors import ConfigError, LintError, SyncConflictError
 from steersync.lint import LintReport, lint_snapshot
+from steersync.locking import exclusive_lock
 from steersync.steering import (
     ChangePlan,
     Snapshot,
     apply_plan,
+    enforce_limits,
     lock_hashes,
     plan_changes,
     read_lock,
@@ -80,7 +84,7 @@ def _env(env: Mapping[str, str] | None) -> Mapping[str, str]:
     return os.environ if env is None else env
 
 
-def _central_url(config: Config) -> str:
+def _validated_url(config: Config) -> str:
     return validate_remote_url(
         config.remote.url,
         allowed_hosts=config.remote.allowed_hosts,
@@ -88,11 +92,53 @@ def _central_url(config: Config) -> str:
     )
 
 
+def _central_url(config: Config) -> str:
+    url = _validated_url(config)
+    if urlsplit(url).password:
+        log.warning(
+            "remote.url embeds a password or token; prefer an ssh key or a git credential helper"
+        )
+    return url
+
+
+def _cache_git_env(config: Config, env: Mapping[str, str]) -> dict[str, str]:
+    """git environment for the cache clone: prompts off and every git hook disabled."""
+    no_hooks = paths.cache_root(config, env) / "no-hooks"
+    no_hooks.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return gitops.git_environment(env, hooks_dir=no_hooks)
+
+
 def _refresh_cache(config: Config, env: Mapping[str, str], url: str) -> tuple[Path, str]:
     cache_dir = paths.cache_repo_dir(config, env, url)
-    git_env = gitops.git_environment(env)
+    git_env = _cache_git_env(config, env)
     gitops.ensure_cache_clone(config, url=url, cache_dir=cache_dir, env=git_env)
     return cache_dir, gitops.head_commit(config, cache_dir, env=git_env)
+
+
+def _central_snapshot(config: Config, directory: Path) -> Snapshot:
+    """Read central repository content without following symlinks, within the size limits."""
+    snapshot = snapshot_directory(directory, follow_symlinks=False)
+    enforce_limits(
+        snapshot, max_files=config.sync.max_files, max_total_bytes=config.sync.max_total_bytes
+    )
+    return snapshot
+
+
+def _with_cache_lock[**P, R](func: Callable[P, R]) -> Callable[P, R]:
+    """Serialise operations that share a cache clone across processes."""
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        config = cast(Config, args[0] if args else kwargs["config"])
+        environment = _env(cast(Mapping[str, str] | None, kwargs.get("env")))
+        url = _validated_url(config)
+        cache_dir = paths.cache_repo_dir(config, environment, url)
+        paths.cache_root(config, environment).mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock_path = cache_dir.with_name(cache_dir.name + ".lock")
+        with exclusive_lock(lock_path, timeout=config.sync.lock_timeout_seconds):
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _project_dir(config: Config, cache_dir: Path, project: str) -> Path:
@@ -109,6 +155,7 @@ def resolve_project(
     return gitops.project_slug(url)
 
 
+@_with_cache_lock
 def pull(
     config: Config,
     *,
@@ -186,7 +233,7 @@ def _apply_scope(
     dry_run: bool,
     strict_pull: bool,
 ) -> ScopeResult:
-    source: Snapshot = snapshot_directory(source_dir)
+    source: Snapshot = _central_snapshot(config, source_dir)
     report = lint_snapshot(source, config.lint, None)
     if strict_pull and not report.ok:
         raise LintError(
@@ -220,6 +267,7 @@ def _apply_scope(
     return ScopeResult(scope, target_dir, plan, written, report)
 
 
+@_with_cache_lock
 def push(
     config: Config,
     *,
@@ -262,6 +310,9 @@ def push(
         local_dir = paths.global_steering_dir(config, environment)
 
     local = snapshot_directory(local_dir)
+    enforce_limits(
+        local, max_files=config.sync.max_files, max_total_bytes=config.sync.max_total_bytes
+    )
     if not local:
         return PushResult(
             "nothing-to-push",
@@ -290,7 +341,7 @@ def push(
         if scope == "workspace"
         else paths.ensure_within(cache_dir, Path(config.remote.global_dir))
     )
-    central = snapshot_directory(central_dir)
+    central = _central_snapshot(config, central_dir)
     plan = plan_changes(local, central, snapshot_hashes(central), prune=True)
     if plan.is_empty:
         return PushResult(
@@ -332,11 +383,7 @@ def push(
             "an identical proposal branch already exists",
         )
 
-    gitops.create_branch(
-        config, cache_dir, branch, f"origin/{config.remote.default_branch}", env=git_env
-    )
-    replace_directory_contents(central_dir, local)
-    relative_dir = central_dir.relative_to(cache_dir).as_posix()
+    cache_env = _cache_git_env(config, environment)
     author_name = (
         gitops.config_value(config, workspace_root, "user.name", env=git_env) or "steersync"
     )
@@ -344,41 +391,44 @@ def push(
         gitops.config_value(config, workspace_root, "user.email", env=git_env)
         or "steersync@localhost"
     )
-    commit_message = message or _commit_message(project, user, plan)
-    commit = gitops.commit_paths(
-        config,
-        cache_dir,
-        paths=[relative_dir],
-        message=commit_message,
-        author_name=author_name,
-        author_email=author_email,
-        env=git_env,
-    )
-    if commit is None:
-        return PushResult(
-            "up-to-date",
-            project,
-            branch,
-            base_commit,
-            digest,
-            plan,
-            report,
-            "no changes after staging",
-        )
-    no_hooks = paths.cache_root(config, environment) / "no-hooks"
-    no_hooks.mkdir(parents=True, exist_ok=True)
-    push_env = gitops.git_environment(environment, hooks_dir=no_hooks)
     options = gitops.render_push_options(config, project=project, user=user, content_hash=digest)
-    _, options_delivered = gitops.push_branch(
-        config, cache_dir, url=url, branch=branch, push_options=options, env=push_env
-    )
-    gitops.create_branch(
-        config,
-        cache_dir,
-        config.remote.default_branch,
-        f"origin/{config.remote.default_branch}",
-        env=git_env,
-    )
+    try:
+        gitops.create_branch(
+            config, cache_dir, branch, f"origin/{config.remote.default_branch}", env=cache_env
+        )
+        replace_directory_contents(central_dir, local)
+        commit = gitops.commit_paths(
+            config,
+            cache_dir,
+            paths=[central_dir.relative_to(cache_dir).as_posix()],
+            message=message or _commit_message(project, user, plan),
+            author_name=author_name,
+            author_email=author_email,
+            env=cache_env,
+        )
+        if commit is None:
+            return PushResult(
+                "up-to-date",
+                project,
+                branch,
+                base_commit,
+                digest,
+                plan,
+                report,
+                "no changes after staging",
+            )
+        _, options_delivered = gitops.push_branch(
+            config, cache_dir, url=url, branch=branch, push_options=options, env=cache_env
+        )
+    finally:
+        # Always leave the cache on a clean default branch, even after a failed push.
+        gitops.create_branch(
+            config,
+            cache_dir,
+            config.remote.default_branch,
+            f"origin/{config.remote.default_branch}",
+            env=cache_env,
+        )
     return PushResult(
         "pushed",
         project,
@@ -429,6 +479,7 @@ def _same_remote(left: str, right: str) -> bool:
     return same_path and same_host
 
 
+@_with_cache_lock
 def status(
     config: Config,
     *,
@@ -441,8 +492,8 @@ def status(
     environment = _env(env)
     url = _central_url(config)
     cache_dir, commit = _refresh_cache(config, environment, url)
-    global_source = snapshot_directory(
-        paths.ensure_within(cache_dir, Path(config.remote.global_dir))
+    global_source = _central_snapshot(
+        config, paths.ensure_within(cache_dir, Path(config.remote.global_dir))
     )
     global_target = snapshot_directory(paths.global_steering_dir(config, environment))
     global_plan = plan_changes(
@@ -460,7 +511,7 @@ def status(
         )
         if project is not None:
             local = snapshot_directory(paths.workspace_steering_dir(config, workspace_root))
-            central = snapshot_directory(_project_dir(config, cache_dir, project))
+            central = _central_snapshot(config, _project_dir(config, cache_dir, project))
             workspace_plan = plan_changes(local, central, snapshot_hashes(central), prune=True)
             if run_lint:
                 report = lint_snapshot(local, config.lint, workspace_root)

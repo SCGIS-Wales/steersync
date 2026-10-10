@@ -16,12 +16,14 @@ from typing import Any, Literal, NamedTuple
 import frontmatter
 import yaml
 
-from steersync.errors import UnsafePathError
+from steersync.errors import LimitExceededError, UnsafePathError
 from steersync.paths import ensure_within
 
 log = logging.getLogger(__name__)
 
 LOCK_VERSION = 1
+FILE_MODE = 0o644
+_USERINFO_RE = re.compile(r"(?<=://)[^/@\s]+@")
 STEERING_SUFFIX = ".md"
 INCLUSION_MODES: tuple[str, ...] = ("always", "fileMatch", "manual", "auto")
 KNOWN_KEYS: frozenset[str] = frozenset({"inclusion", "fileMatchPattern", "name", "description"})
@@ -80,32 +82,49 @@ def validate_relative_path(relative: str) -> str:
     return posix.as_posix()
 
 
-def discover_steering_files(directory: Path) -> list[Path]:
+def discover_steering_files(directory: Path, *, follow_symlinks: bool = True) -> list[Path]:
     """Return steering markdown files under ``directory`` sorted by relative path.
 
-    Hidden directories are skipped. Symlinked files are followed because kiro-cli
-    follows them; symlinked directories are not, to match the Kiro IDE.
+    Hidden directories are skipped and symlinked directories are never entered,
+    to match the Kiro IDE. Symlinked files are included when ``follow_symlinks``
+    is true (kiro-cli follows them). Content from the central repository is read
+    with ``follow_symlinks=False`` so a malicious link such as
+    ``global/x.md -> ~/.ssh/id_rsa`` cannot copy local secrets into steering.
     """
     if not directory.is_dir():
         return []
     found: list[Path] = []
     for root, dirs, files in os.walk(directory, followlinks=False):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
-        found.extend(
-            Path(root) / name
-            for name in sorted(files)
-            if name.endswith(STEERING_SUFFIX) and not name.startswith(".")
-        )
+        for name in sorted(files):
+            if not name.endswith(STEERING_SUFFIX) or name.startswith("."):
+                continue
+            path = Path(root) / name
+            if path.is_symlink() and not follow_symlinks:
+                log.warning("ignoring symlink %s in central repository content", path)
+                continue
+            found.append(path)
     return found
 
 
-def snapshot_directory(directory: Path) -> Snapshot:
+def snapshot_directory(directory: Path, *, follow_symlinks: bool = True) -> Snapshot:
     """Read every steering file under ``directory`` into memory keyed by relative path."""
     result: Snapshot = {}
-    for path in discover_steering_files(directory):
+    for path in discover_steering_files(directory, follow_symlinks=follow_symlinks):
         relative = validate_relative_path(path.relative_to(directory).as_posix())
         result[relative] = path.read_bytes()
     return result
+
+
+def enforce_limits(snapshot: Mapping[str, bytes], *, max_files: int, max_total_bytes: int) -> None:
+    """Refuse snapshots that are larger than the configured safety limits."""
+    if len(snapshot) > max_files:
+        msg = f"{len(snapshot)} steering files exceed sync.max_files ({max_files})"
+        raise LimitExceededError(msg)
+    total = sum(len(data) for data in snapshot.values())
+    if total > max_total_bytes:
+        msg = f"{total} bytes of steering exceed sync.max_total_bytes ({max_total_bytes})"
+        raise LimitExceededError(msg)
 
 
 def file_digest(data: bytes) -> str:
@@ -237,6 +256,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+        tmp.chmod(FILE_MODE)
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -316,7 +336,7 @@ def lock_hashes(lock: Mapping[str, Any]) -> dict[str, str]:
 def write_lock(path: Path, *, remote: str, commit: str | None, files: Mapping[str, str]) -> None:
     record = {
         "version": LOCK_VERSION,
-        "remote": remote,
+        "remote": _USERINFO_RE.sub("", remote),
         "commit": commit,
         "synced_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "files": dict(sorted(files.items())),

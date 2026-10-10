@@ -1,5 +1,10 @@
 name: Release
 
+# Pushing a tag such as v0.1.0 runs the full CI gate, builds the wheel and sdist,
+# attests build provenance and publishes a GitHub release with the files attached.
+# Publishing to PyPI is optional: set the repository variable PUBLISH_TO_PYPI to
+# "true" after configuring a trusted publisher and a "pypi" environment.
+
 on:
   push:
     tags:
@@ -8,15 +13,26 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   PYTHON_VERSION: "3.14"
-  UV_SYSTEM_CERTS: "1"
+  TWINE_VERSION: "7.0.0"
 
 jobs:
+  ci:
+    name: CI gate
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build:
     name: Build and attest
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    needs: ci
     permissions:
       contents: read
       id-token: write
@@ -25,11 +41,11 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Verify the tag matches the package version
@@ -37,30 +53,91 @@ jobs:
         run: |
           version="$(sed -nE 's/^__version__ = "([^"]+)"/\1/p' src/steersync/__init__.py)"
           if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
-            echo "tag ${GITHUB_REF_NAME} does not match package version ${version}" >&2
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package version ${version}"
+            exit 1
+          fi
+          if ! grep -q "^## \[${version}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for ${version}"
             exit 1
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
       - name: Build
         run: uv build
       - name: Check metadata
-        run: uvx twine check --strict dist/*
+        run: uvx --from "twine==${TWINE_VERSION}" twine check --strict dist/*
+      - name: Write checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/*
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
       - name: Upload distribution
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
           if-no-files-found: error
 
-  publish-pypi:
-    name: Publish to PyPI (trusted publishing)
+  github-release:
+    name: GitHub release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: build
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download distribution
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Verify checksums
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 {flag=1; next}
+            /^## \[/ && flag {exit}
+            flag {print}
+          ' CHANGELOG.md > release-notes.md
+          {
+            echo
+            echo "### Install"
+            echo
+            echo '```bash'
+            echo "uv tool install https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
+            echo '```'
+            echo
+            echo "Verify provenance with \`gh attestation verify steersync-${VERSION}-py3-none-any.whl --repo ${GITHUB_REPOSITORY}\`."
+          } >> release-notes.md
+          if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "v${VERSION}" --notes-file release-notes.md --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "v${VERSION}" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "steersync ${VERSION}" \
+              --notes-file release-notes.md \
+              --verify-tag
+          fi
+
+  publish-pypi:
+    name: Publish to PyPI (trusted publishing)
+    if: vars.PUBLISH_TO_PYPI == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build, github-release]
     environment:
       name: pypi
       url: https://pypi.org/project/steersync/${{ needs.build.outputs.version }}
@@ -68,40 +145,13 @@ jobs:
       id-token: write
     steps:
       - name: Download distribution
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
+      - name: Remove non distribution files
+        run: rm -f dist/SHA256SUMS
       - name: Publish
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           print-hash: true
-
-  github-release:
-    name: GitHub release
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: [build, publish-pypi]
-    permissions:
-      contents: write
-    steps:
-      - name: Check out
-        uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - name: Download distribution
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - name: Create release with notes from the changelog
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          awk -v ver="$VERSION" '
-            $0 ~ "^## \\[" ver "\\]" {flag=1; next}
-            /^## \[/ && flag {exit}
-            flag {print}
-          ' CHANGELOG.md > release-notes.md
-          gh release create "v${VERSION}" dist/* --title "steersync ${VERSION}" --notes-file release-notes.md --verify-tag
