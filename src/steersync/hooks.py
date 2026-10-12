@@ -135,7 +135,7 @@ def render_mcp_config(
     return json.dumps(payload, indent=2) + "\n"
 
 
-def render_pre_commit_config(rev: str = "v0.1.0") -> str:
+def render_pre_commit_config(rev: str = "v0.2.0") -> str:
     """Render the ``.pre-commit-config.yaml`` snippet consumers add to their projects."""
     return (
         "repos:\n"
