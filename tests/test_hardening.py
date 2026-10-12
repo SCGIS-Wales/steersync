@@ -20,7 +20,12 @@ from steersync.errors import GitError, LimitExceededError, LockTimeoutError, Uns
 from steersync.locking import exclusive_lock
 from steersync.paths import global_steering_dir, workspace_lock_path
 from steersync.steering import snapshot_directory, write_lock
-from tests.conftest import PROJECT_SLUG, CentralCommit, git
+from tests.conftest import CentralCommit, central_global, central_project, git
+
+PUSH_OPTIONS_REJECTED = (
+    "fatal: the receiving end does not support push options\n"
+    "fatal: the remote end hung up unexpectedly"
+)
 
 # Locking
 
@@ -156,6 +161,7 @@ def test_run_git_passes_input_when_given(config: Config, monkeypatch: pytest.Mon
         ("fatal: Authentication failed", False),
         ("fatal: repository 'x' not found", False),
         ("git@h: Permission denied (publickey).", False),
+        (PUSH_OPTIONS_REJECTED, False),
     ],
 )
 def test_is_transient(message: str, expected: bool) -> None:
@@ -181,7 +187,7 @@ def test_corrupt_cache_is_recreated(
     gitops.ensure_cache_clone(config, url=str(central), cache_dir=cache, env=git_env)
     (cache / ".git" / "HEAD").write_text("garbage\n")
     gitops.ensure_cache_clone(config, url=str(central), cache_dir=cache, env=git_env)
-    assert (cache / "global" / "rules.md").exists()
+    assert (cache / "global" / "steering" / "rules.md").exists()
     assert gitops.head_commit(config, cache, env=git_env)
 
 
@@ -193,7 +199,7 @@ def test_half_written_cache_directory_is_replaced(
     (cache / "leftover").write_text("partial clone")
     gitops.ensure_cache_clone(config, url=str(central), cache_dir=cache, env=env)
     assert not (cache / "leftover").exists()
-    assert (cache / "global" / "rules.md").exists()
+    assert (cache / "global" / "steering" / "rules.md").exists()
 
 
 def test_stale_index_lock_is_removed(
@@ -277,14 +283,14 @@ def test_central_symlinks_are_never_followed(
     secret.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n")
 
     def plant(work: Path) -> None:
-        (work / "global" / "evil.md").symlink_to(secret)
-        (work / "projects" / PROJECT_SLUG / "evil.md").symlink_to("../../../../global/rules.md")
+        (central_global(work) / "evil.md").symlink_to(secret)
+        (central_project(work) / "evil.md").symlink_to("../../../../../global/steering/rules.md")
 
     central_commit(plant, "plant symlinks")
     result = sync.pull(config, workspace_root=project, env=env)
     assert not (global_steering_dir(config, env) / "evil.md").exists()
     assert not (project / ".kiro" / "steering" / "evil.md").exists()
-    assert all("evil.md" not in s.plan.add for s in result.scopes)
+    assert all("evil.md" not in r.plan.add for r in result.results)
 
 
 def test_central_directory_symlink_is_rejected(
@@ -339,7 +345,10 @@ def test_written_files_are_world_readable(
 def test_lock_file_never_stores_credentials(tmp_path: Path) -> None:
     lock = tmp_path / "lock.json"
     write_lock(
-        lock, remote="https://user:glpat-secret@gitlab.example.com/a.git", commit=None, files={}
+        lock,
+        remote="https://user:glpat-secret@gitlab.example.com/a.git",
+        commit=None,
+        collections={},
     )
     data = json.loads(lock.read_text())
     assert data["remote"] == "https://gitlab.example.com/a.git"

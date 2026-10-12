@@ -183,11 +183,13 @@ def test_cache_clone_and_refresh(
     gitops.ensure_cache_clone(config, url=str(central), cache_dir=cache, env=git_env)
     first = gitops.head_commit(config, cache, env=git_env)
     (cache / "junk.txt").write_text("dirty")
-    new = central_commit(lambda w: (w / "global" / "extra.md").write_text("# Extra\n"), "extra")
+    new = central_commit(
+        lambda w: (w / "global" / "steering" / "extra.md").write_text("# Extra\n"), "extra"
+    )
     gitops.ensure_cache_clone(config, url=str(central), cache_dir=cache, env=git_env)
     assert gitops.head_commit(config, cache, env=git_env) == new != first
     assert not (cache / "junk.txt").exists()
-    assert (cache / "global" / "extra.md").exists()
+    assert (cache / "global" / "steering" / "extra.md").exists()
 
 
 def test_cache_clone_updates_remote_url(

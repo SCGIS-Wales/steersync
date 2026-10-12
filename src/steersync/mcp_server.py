@@ -1,7 +1,9 @@
 """Optional MCP stdio server exposing steersync operations as tools.
 
-Requires the ``mcp`` extra: ``pip install "steersync[mcp]"``. All tools shell out
-to the same functions the CLI uses, so behaviour and safety checks are identical.
+Requires the ``mcp`` extra: ``pip install "steersync[mcp]"``. All tools call the
+same functions the CLI uses, so behaviour and safety checks are identical. Every
+tool takes an optional ``collections`` list (steering, specs, skills, agents,
+hooks, settings or any configured name); the default is every enabled collection.
 """
 
 from __future__ import annotations
@@ -13,8 +15,9 @@ from typing import Any
 from steersync import gitops, sync
 from steersync.config import Config, load_config
 from steersync.errors import SteersyncError
-from steersync.lint import lint_paths
-from steersync.paths import workspace_steering_dir
+from steersync.lint import lint_paths, merge_reports
+from steersync.paths import workspace_collection_dir
+from steersync.steering import FileSpec
 
 
 def _load(cwd: str | None) -> tuple[Config, Path | None]:
@@ -37,45 +40,57 @@ def _plan_dict(plan: Any) -> dict[str, Any]:  # noqa: ANN401
     }
 
 
+def _plans_dict(plans: dict[str, Any] | None) -> dict[str, Any]:
+    if plans is None:
+        return {}
+    return {name: _plan_dict(plan) for name, plan in plans.items()}
+
+
 def pull_steering(
-    cwd: str | None = None, force: bool = False, dry_run: bool = False
+    cwd: str | None = None,
+    force: bool = False,
+    dry_run: bool = False,
+    collections: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Pull global and workspace steering from the central repository."""
+    """Pull global and workspace collections (steering, specs, skills, ...) from central."""
     try:
         config, root = _load(cwd)
-        result = sync.pull(config, workspace_root=root, force=force, dry_run=dry_run)
+        result = sync.pull(
+            config, workspace_root=root, force=force, dry_run=dry_run, collections=collections
+        )
     except (SteersyncError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
-    return {
-        "ok": True,
-        "commit": result.commit,
-        "dry_run": result.dry_run,
-        "scopes": {
-            s.scope: {
-                "target": str(s.target_dir),
-                "plan": _plan_dict(s.plan),
-                "written": list(s.written),
-            }
-            for s in result.scopes
-        },
-    }
+    scopes: dict[str, dict[str, Any]] = {}
+    for item in result.results:
+        scopes.setdefault(item.scope, {})[item.collection] = {
+            "target": str(item.target_dir),
+            "plan": _plan_dict(item.plan),
+            "written": list(item.written),
+        }
+    return {"ok": True, "commit": result.commit, "dry_run": result.dry_run, "scopes": scopes}
 
 
 def push_steering(
-    cwd: str | None = None, dry_run: bool = False, message: str | None = None
+    cwd: str | None = None,
+    dry_run: bool = False,
+    message: str | None = None,
+    collections: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Propose the workspace steering as a branch on the central repository."""
+    """Propose the workspace collections as one branch on the central repository."""
     try:
         config, root = _load(cwd)
         if root is None:
             return {"ok": False, "error": "not inside a git repository"}
-        result = sync.push(config, workspace_root=root, dry_run=dry_run, message=message)
+        result = sync.push(
+            config, workspace_root=root, dry_run=dry_run, message=message, collections=collections
+        )
     except (SteersyncError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {
         "ok": True,
         "status": result.status,
         "project": result.project,
+        "collections": list(result.collections),
         "branch": result.branch,
         "commit": result.commit,
         "message": result.message,
@@ -83,29 +98,44 @@ def push_steering(
     }
 
 
-def diff_steering(cwd: str | None = None) -> dict[str, Any]:
-    """Compare local steering with the central repository without changing anything."""
+def diff_steering(cwd: str | None = None, collections: list[str] | None = None) -> dict[str, Any]:
+    """Compare local collections with the central repository without changing anything."""
     try:
         config, root = _load(cwd)
-        result = sync.status(config, workspace_root=root)
+        result = sync.status(config, workspace_root=root, collections=collections)
     except (SteersyncError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {
         "ok": True,
         "project": result.project,
         "remote_commit": result.remote_commit,
-        "workspace": _plan_dict(result.workspace),
-        "global": _plan_dict(result.global_),
+        "workspace": _plans_dict(result.workspace),
+        "global": _plans_dict(result.global_),
     }
 
 
-def lint_steering(cwd: str | None = None) -> dict[str, Any]:
-    """Lint the workspace steering documents."""
+def lint_steering(cwd: str | None = None, collections: list[str] | None = None) -> dict[str, Any]:
+    """Lint the workspace collections with each collection's profile."""
     try:
         config, root = _load(cwd)
         if root is None:
             return {"ok": False, "error": "not inside a git repository"}
-        report = lint_paths([workspace_steering_dir(config, root)], config.lint, root)
+        reports = []
+        for collection in config.select_collections(collections).values():
+            target = workspace_collection_dir(collection, root)
+            if target is None:
+                continue
+            reports.append(
+                lint_paths(
+                    [target],
+                    config.lint,
+                    root,
+                    profile=collection.lint,
+                    spec=FileSpec(collection.include, collection.exclude, collection.max_depth),
+                    max_file_bytes=collection.max_file_bytes,
+                )
+            )
+        report = merge_reports(reports)
     except (SteersyncError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {
@@ -123,7 +153,11 @@ def build_server() -> Any:  # noqa: ANN401
         msg = "the MCP server needs the optional dependency: pip install 'steersync[mcp]'"
         raise SteersyncError(msg) from exc
     server = MCPServer(
-        "steersync", instructions="Sync Kiro steering documents with the central repository."
+        "steersync",
+        instructions=(
+            "Sync Kiro steering, specs, skills, agents, hooks and settings with the central "
+            "repository. Pass collections=[...] to limit a tool to some collections."
+        ),
     )
     server.tool(name="pull_steering")(pull_steering)
     server.tool(name="push_steering")(push_steering)

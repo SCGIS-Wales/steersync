@@ -18,6 +18,22 @@ CentralCommit = Callable[..., str]
 
 GLOBAL_DOC = "---\ninclusion: always\n---\n# Global rules\n\nBe concise.\n"
 PROJECT_DOC = '---\ninclusion: fileMatch\nfileMatchPattern: "**/*.py"\n---\n# Python\n\nUse ruff.\n'
+SKILL_DOC = "---\nname: venafi-tpp-websdk\ndescription: Venafi TPP WebSDK runbook\n---\n# Venafi\n\nSteps.\n"
+HOOK_DOC = (
+    '{"version": "v1", "hooks": [{"name": "tests", "trigger": "Stop", '
+    '"action": {"type": "command", "command": "./gradlew test"}}]}\n'
+)
+AGENT_DOC = '{"name": "entra", "description": "Entra agent", "tools": ["read"]}\n'
+
+
+def central_global(work: Path, collection: str = "steering") -> Path:
+    """Directory of a collection under ``global/`` in the central work tree."""
+    return work / "global" / collection
+
+
+def central_project(work: Path, collection: str = "steering") -> Path:
+    """Directory of a collection under ``projects/<slug>/`` in the central work tree."""
+    return work / "projects" / PROJECT_SLUG / collection
 
 
 def git(*args: str, cwd: Path, env: Mapping[str, str]) -> str:
@@ -58,11 +74,10 @@ def central(tmp_path: Path, env: dict[str, str]) -> Path:
     work = tmp_path / "central-work"
     git("init", "-q", "--bare", str(bare), cwd=tmp_path, env=env)
     git("clone", "-q", str(bare), str(work), cwd=tmp_path, env=env)
-    (work / "global").mkdir()
-    (work / "global" / "rules.md").write_text(GLOBAL_DOC, encoding="utf-8")
-    project_dir = work / "projects" / PROJECT_SLUG
-    project_dir.mkdir(parents=True)
-    (project_dir / "python.md").write_text(PROJECT_DOC, encoding="utf-8")
+    central_global(work).mkdir(parents=True)
+    (central_global(work) / "rules.md").write_text(GLOBAL_DOC, encoding="utf-8")
+    central_project(work).mkdir(parents=True)
+    (central_project(work) / "python.md").write_text(PROJECT_DOC, encoding="utf-8")
     git("add", "-A", cwd=work, env=env)
     git("commit", "-qm", "seed", cwd=work, env=env)
     git("push", "-q", "origin", "main", cwd=work, env=env)

@@ -1,26 +1,34 @@
-"""Pull, push and status orchestration built on the git and steering modules."""
+"""Pull, push and status orchestration built on the git and steering modules.
+
+Every operation works on *collections* (steering, specs, skills, agents, hooks,
+settings or anything configured): a pull applies each collection of each scope,
+a push proposes all selected collections of one scope in a single branch.
+"""
 
 from __future__ import annotations
 
 import functools
 import logging
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple, ParamSpec, TypeVar, cast
 from urllib.parse import urlsplit
 
 from steersync import gitops, paths
-from steersync.config import Config, remote_host, validate_remote_url
+from steersync.config import CollectionConfig, Config, remote_host, validate_remote_url
 from steersync.errors import ConfigError, LintError, SyncConflictError
-from steersync.lint import LintReport, lint_snapshot
+from steersync.lint import LintReport, lint_snapshot, merge_reports, prefix_report
 from steersync.locking import exclusive_lock
 from steersync.steering import (
     ChangePlan,
+    FileSpec,
     Snapshot,
     apply_plan,
+    discover_files,
     enforce_limits,
-    lock_hashes,
+    executable_paths,
+    lock_collections,
     plan_changes,
     read_lock,
     replace_directory_contents,
@@ -40,8 +48,11 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-class ScopeResult(NamedTuple):
+class CollectionResult(NamedTuple):
+    """Outcome of applying one collection in one scope."""
+
     scope: Scope
+    collection: str
     target_dir: Path
     plan: ChangePlan
     written: tuple[str, ...]
@@ -51,16 +62,16 @@ class ScopeResult(NamedTuple):
 class PullResult(NamedTuple):
     remote: str
     commit: str
-    scopes: tuple[ScopeResult, ...]
+    results: tuple[CollectionResult, ...]
     dry_run: bool
 
     @property
     def conflicts(self) -> tuple[str, ...]:
-        return tuple(f"{s.scope}:{c}" for s in self.scopes for c in s.plan.conflict)
+        return tuple(f"{r.scope}:{r.collection}:{c}" for r in self.results for c in r.plan.conflict)
 
     @property
     def change_count(self) -> int:
-        return sum(s.plan.change_count for s in self.scopes)
+        return sum(r.plan.change_count for r in self.results)
 
 
 class PushResult(NamedTuple):
@@ -68,9 +79,11 @@ class PushResult(NamedTuple):
         "pushed", "up-to-date", "already-proposed", "nothing-to-push", "dry-run", "skipped"
     ]
     project: str
+    collections: tuple[str, ...]
     branch: str | None
     commit: str | None
     digest: str | None
+    # Paths in the plan are prefixed with the collection's central directory.
     plan: ChangePlan | None
     lint: LintReport | None
     message: str
@@ -80,9 +93,19 @@ class StatusResult(NamedTuple):
     project: str | None
     remote: str
     remote_commit: str | None
-    workspace: ChangePlan | None
-    global_: ChangePlan | None
+    # Plans keyed by collection name; ``None`` when the scope is unavailable.
+    workspace: dict[str, ChangePlan] | None
+    global_: dict[str, ChangePlan]
     lint: LintReport | None
+
+
+class _ScopeTarget(NamedTuple):
+    """Where a scope reads from in the cache clone and writes to locally."""
+
+    scope: Scope
+    source_base: Path
+    lock_path: Path
+    target_for: Callable[[CollectionConfig], Path | None]
 
 
 def _env(env: Mapping[str, str] | None) -> Mapping[str, str]:
@@ -120,13 +143,47 @@ def _refresh_cache(config: Config, env: Mapping[str, str], url: str) -> tuple[Pa
     return cache_dir, gitops.head_commit(config, cache_dir, env=git_env)
 
 
-def _central_snapshot(config: Config, directory: Path) -> Snapshot:
+def _spec(collection: CollectionConfig) -> FileSpec:
+    return FileSpec(collection.include, collection.exclude, collection.max_depth)
+
+
+def _central_snapshot(config: Config, directory: Path, spec: FileSpec) -> Snapshot:
     """Read central repository content without following symlinks, within the size limits."""
-    snapshot = snapshot_directory(directory, follow_symlinks=False)
+    snapshot = snapshot_directory(directory, spec, follow_symlinks=False)
     enforce_limits(
         snapshot, max_files=config.sync.max_files, max_total_bytes=config.sync.max_total_bytes
     )
     return snapshot
+
+
+def _lint_collection(
+    collection: CollectionConfig,
+    config: Config,
+    snapshot: Snapshot,
+    workspace_root: Path | None,
+) -> LintReport:
+    return lint_snapshot(
+        snapshot,
+        config.lint,
+        workspace_root,
+        profile=collection.lint,
+        max_file_bytes=collection.max_file_bytes,
+    )
+
+
+def _warn_legacy_layout(base: Path, collection: CollectionConfig, source_dir: Path) -> None:
+    """Point at the pre 0.2 flat layout (``global/*.md``) when the collection dir is absent."""
+    if source_dir.is_dir() or not base.is_dir():
+        return
+    flat = FileSpec(collection.include, collection.exclude, max_depth=1)
+    if discover_files(base, flat, follow_symlinks=False):
+        log.warning(
+            "%s has files directly under it but no %s/ directory; since steersync 0.2 each "
+            "collection lives in its own directory, move them to %s/",
+            base,
+            collection.central_dir,
+            collection.central_dir,
+        )
 
 
 def _with_cache_lock(func: Callable[P, R]) -> Callable[P, R]:  # noqa: UP047
@@ -172,104 +229,178 @@ def pull(
     force: bool = False,
     dry_run: bool = False,
     strict: bool | None = None,
+    collections: Sequence[str] | None = None,
 ) -> PullResult:
-    """Fetch the central repository and apply global and workspace steering locally."""
+    """Fetch the central repository and apply every selected collection locally."""
     environment = _env(env)
     url = _central_url(config)
+    selected = config.select_collections(collections)
     cache_dir, commit = _refresh_cache(config, environment, url)
     strict_pull = config.sync.strict_pull if strict is None else strict
-    results: list[ScopeResult] = []
+    targets: list[_ScopeTarget] = []
 
     if include_global:
-        source_dir = paths.ensure_within(cache_dir, Path(config.remote.global_dir))
-        target = paths.global_steering_dir(config, environment)
-        lock_path = paths.global_lock_path(config, environment)
-        results.append(
-            _apply_scope(
+        targets.append(
+            _ScopeTarget(
                 "global",
-                config,
-                source_dir,
-                target,
-                lock_path,
-                url,
-                commit,
-                force,
-                dry_run,
-                strict_pull,
+                paths.ensure_within(cache_dir, Path(config.remote.global_dir)),
+                paths.global_lock_path(config, environment),
+                lambda c: paths.global_collection_dir(c, environment),
             )
         )
-
     if include_workspace and workspace_root is not None:
         project = resolve_project(
             config, workspace_root=workspace_root, env=environment, remote_url=remote_url
         )
         if project is None:
-            log.warning("workspace has no origin remote; skipping workspace steering")
+            log.warning("workspace has no origin remote; skipping workspace collections")
         else:
-            source_dir = _project_dir(config, cache_dir, project)
-            target = paths.workspace_steering_dir(config, workspace_root)
-            lock_path = paths.workspace_lock_path(config, workspace_root)
-            results.append(
-                _apply_scope(
+            targets.append(
+                _ScopeTarget(
                     "workspace",
-                    config,
-                    source_dir,
-                    target,
-                    lock_path,
-                    url,
-                    commit,
-                    force,
-                    dry_run,
-                    strict_pull,
+                    _project_dir(config, cache_dir, project),
+                    paths.workspace_lock_path(config, workspace_root),
+                    lambda c: paths.workspace_collection_dir(c, workspace_root),
                 )
             )
+
+    results: list[CollectionResult] = []
+    for target in targets:
+        results.extend(
+            _pull_scope(
+                target,
+                config,
+                selected,
+                url=url,
+                commit=commit,
+                force=force,
+                dry_run=dry_run,
+                strict_pull=strict_pull,
+                workspace_root=workspace_root if target.scope == "workspace" else None,
+            )
+        )
     return PullResult(url, commit, tuple(results), dry_run)
 
 
-def _apply_scope(
-    scope: Scope,
+def _pull_scope(
+    target: _ScopeTarget,
     config: Config,
-    source_dir: Path,
-    target_dir: Path,
-    lock_path: Path,
+    selected: Mapping[str, CollectionConfig],
+    *,
     url: str,
     commit: str,
     force: bool,
     dry_run: bool,
     strict_pull: bool,
-) -> ScopeResult:
-    source: Snapshot = _central_snapshot(config, source_dir)
-    report = lint_snapshot(source, config.lint, None)
+    workspace_root: Path | None,
+) -> list[CollectionResult]:
+    """Apply every selected collection of one scope and rewrite the scope's lock once."""
+    lock = read_lock(target.lock_path)
+    next_lock = lock_collections(lock)
+    results: list[CollectionResult] = []
+    for name, collection in selected.items():
+        target_dir = target.target_for(collection)
+        if target_dir is None:
+            continue
+        source_dir = paths.central_collection_dir(target.source_base, collection)
+        _warn_legacy_layout(target.source_base, collection, source_dir)
+        result, hashes = _apply_collection(
+            target.scope,
+            name,
+            collection,
+            config,
+            source_dir,
+            target_dir,
+            next_lock.get(name, {}),
+            force=force,
+            dry_run=dry_run,
+            strict_pull=strict_pull,
+            workspace_root=workspace_root,
+        )
+        next_lock[name] = hashes
+        results.append(result)
+    if results and not dry_run:
+        write_lock(target.lock_path, remote=url, commit=commit, collections=next_lock)
+    return results
+
+
+def _apply_collection(
+    scope: Scope,
+    name: str,
+    collection: CollectionConfig,
+    config: Config,
+    source_dir: Path,
+    target_dir: Path,
+    previous: Mapping[str, str],
+    *,
+    force: bool,
+    dry_run: bool,
+    strict_pull: bool,
+    workspace_root: Path | None,
+) -> tuple[CollectionResult, dict[str, str]]:
+    label = f"{scope}/{name}"
+    spec = _spec(collection)
+    source = _central_snapshot(config, source_dir, spec)
+    report = _lint_collection(collection, config, source, None)
     if strict_pull and not report.ok:
         raise LintError(
-            f"{scope}: remote steering has {len(report.errors)} lint error(s); refusing to pull"
+            f"{label}: remote content has {len(report.errors)} lint error(s); refusing to pull"
         )
     for finding in report.findings:
         log.log(
             logging.ERROR if finding.severity == "error" else logging.WARNING,
             "%s: %s",
-            scope,
+            label,
             finding.render(),
         )
-    target = snapshot_directory(target_dir)
-    lock = read_lock(lock_path)
-    plan = plan_changes(source, target, lock_hashes(lock), prune=config.sync.prune)
+    del workspace_root
+    local = snapshot_directory(target_dir, spec)
+    plan = plan_changes(source, local, previous, prune=config.sync.prune)
     if plan.conflict and not force:
         log.warning(
             "%s: %d locally modified file(s) kept; use --force to overwrite",
-            scope,
+            label,
             len(plan.conflict),
         )
     written: tuple[str, ...] = ()
     if not dry_run:
-        written = tuple(apply_plan(target_dir, source, plan, force=force))
-        write_lock(
-            lock_path,
-            remote=url,
-            commit=commit,
-            files=_next_lock(source, plan, lock_hashes(lock), force),
+        executable = executable_paths(source_dir, source)
+        written = tuple(apply_plan(target_dir, source, plan, force=force, executable=executable))
+    return (
+        CollectionResult(scope, name, target_dir, plan, written, report),
+        _next_lock(source, plan, previous, force),
+    )
+
+
+class _LocalCollection(NamedTuple):
+    name: str
+    collection: CollectionConfig
+    local_dir: Path
+    snapshot: Snapshot
+
+
+def _local_collections(
+    config: Config,
+    selected: Mapping[str, CollectionConfig],
+    target_for: Callable[[CollectionConfig], Path | None],
+) -> list[_LocalCollection]:
+    found: list[_LocalCollection] = []
+    for name, collection in selected.items():
+        local_dir = target_for(collection)
+        if local_dir is None:
+            continue
+        snapshot = snapshot_directory(local_dir, _spec(collection))
+        enforce_limits(
+            snapshot, max_files=config.sync.max_files, max_total_bytes=config.sync.max_total_bytes
         )
-    return ScopeResult(scope, target_dir, plan, written, report)
+        found.append(_LocalCollection(name, collection, local_dir, snapshot))
+    return found
+
+
+def _prefixed(collection: CollectionConfig, snapshot: Mapping[str, bytes]) -> Snapshot:
+    """Key a collection snapshot by its path inside the central project directory."""
+    prefix = collection.central_dir or ""
+    return {f"{prefix}/{rel}" if prefix else rel: data for rel, data in snapshot.items()}
 
 
 @_with_cache_lock
@@ -283,11 +414,14 @@ def push(
     dry_run: bool = False,
     run_lint: bool = True,
     message: str | None = None,
+    collections: Sequence[str] | None = None,
 ) -> PushResult:
-    """Propose the local steering as a branch (and merge request) on the central repository."""
+    """Propose the selected local collections as one branch (and merge request) centrally."""
     environment = _env(env)
     url = _central_url(config)
     git_env = gitops.git_environment(environment)
+    selected = config.select_collections(collections)
+    names = tuple(selected)
 
     if scope == "workspace":
         project = resolve_project(
@@ -302,6 +436,7 @@ def push(
             return PushResult(
                 "skipped",
                 project,
+                names,
                 None,
                 None,
                 None,
@@ -309,58 +444,79 @@ def push(
                 None,
                 "workspace is the central repository",
             )
-        local_dir = paths.workspace_steering_dir(config, workspace_root)
+        locals_ = _local_collections(
+            config, selected, lambda c: paths.workspace_collection_dir(c, workspace_root)
+        )
     else:
         project = "global"
-        local_dir = paths.global_steering_dir(config, environment)
+        locals_ = _local_collections(
+            config, selected, lambda c: paths.global_collection_dir(c, environment)
+        )
 
-    local = snapshot_directory(local_dir)
+    combined: Snapshot = {}
+    for item in locals_:
+        combined.update(_prefixed(item.collection, item.snapshot))
     enforce_limits(
-        local, max_files=config.sync.max_files, max_total_bytes=config.sync.max_total_bytes
+        combined, max_files=config.sync.max_files, max_total_bytes=config.sync.max_total_bytes
     )
-    if not local:
+    if not combined:
+        where = ", ".join(str(item.local_dir) for item in locals_) or "the selected collections"
         return PushResult(
             "nothing-to-push",
             project,
+            names,
             None,
             None,
             None,
             None,
             None,
-            f"no steering files in {local_dir}",
+            f"no files in {where}",
         )
 
-    report = (
-        lint_snapshot(local, config.lint, workspace_root if scope == "workspace" else None)
-        if run_lint
-        else None
-    )
-    if report is not None and not report.ok:
-        raise LintError(
-            f"{len(report.errors)} lint error(s) in {local_dir}; fix them or pass --no-lint"
+    report: LintReport | None = None
+    if run_lint:
+        lint_root = workspace_root if scope == "workspace" else None
+        report = merge_reports(
+            prefix_report(
+                _lint_collection(item.collection, config, item.snapshot, lint_root),
+                item.collection.central_dir or "",
+            )
+            for item in locals_
         )
+        if not report.ok:
+            raise LintError(
+                f"{len(report.errors)} lint error(s) in {scope} collections; "
+                "fix them or pass --no-lint"
+            )
 
     cache_dir, base_commit = _refresh_cache(config, environment, url)
-    central_dir = (
+    central_base = (
         _project_dir(config, cache_dir, project)
         if scope == "workspace"
         else paths.ensure_within(cache_dir, Path(config.remote.global_dir))
     )
-    central = _central_snapshot(config, central_dir)
-    plan = plan_changes(local, central, snapshot_hashes(central), prune=True)
+    central: Snapshot = {}
+    remote_sizes: dict[str, int] = {}
+    for item in locals_:
+        central_dir = paths.central_collection_dir(central_base, item.collection)
+        remote_snapshot = _central_snapshot(config, central_dir, _spec(item.collection))
+        remote_sizes[item.name] = len(remote_snapshot)
+        central.update(_prefixed(item.collection, remote_snapshot))
+    plan = plan_changes(combined, central, snapshot_hashes(central), prune=True)
     if plan.is_empty:
         return PushResult(
             "up-to-date",
             project,
+            names,
             None,
             base_commit,
-            snapshot_digest(local),
+            snapshot_digest(combined),
             plan,
             report,
             "central repository already matches",
         )
 
-    digest = snapshot_digest(local)
+    digest = snapshot_digest(combined)
     user = gitops.current_user_id(config, workspace_root, environment)
     branch = gitops.build_branch_name(config, project=project, user=user, content_hash=digest)
     if not gitops.check_ref_format(config, branch, env=git_env):
@@ -369,6 +525,7 @@ def push(
         return PushResult(
             "dry-run",
             project,
+            names,
             branch,
             None,
             digest,
@@ -380,6 +537,7 @@ def push(
         return PushResult(
             "already-proposed",
             project,
+            names,
             branch,
             None,
             digest,
@@ -401,11 +559,22 @@ def push(
         gitops.create_branch(
             config, cache_dir, branch, f"origin/{config.remote.default_branch}", env=cache_env
         )
-        replace_directory_contents(central_dir, local)
+        commit_paths: list[str] = []
+        for item in locals_:
+            if not item.snapshot and not remote_sizes.get(item.name):
+                continue  # nothing to write or delete; git rejects a pathspec with no files
+            central_dir = paths.central_collection_dir(central_base, item.collection)
+            replace_directory_contents(
+                central_dir,
+                item.snapshot,
+                _spec(item.collection),
+                executable=executable_paths(item.local_dir, item.snapshot),
+            )
+            commit_paths.append(central_dir.relative_to(cache_dir).as_posix())
         commit = gitops.commit_paths(
             config,
             cache_dir,
-            paths=[central_dir.relative_to(cache_dir).as_posix()],
+            paths=commit_paths,
             message=message or _commit_message(project, user, plan),
             author_name=author_name,
             author_email=author_email,
@@ -415,6 +584,7 @@ def push(
             return PushResult(
                 "up-to-date",
                 project,
+                names,
                 branch,
                 base_commit,
                 digest,
@@ -437,6 +607,7 @@ def push(
     return PushResult(
         "pushed",
         project,
+        names,
         branch,
         commit,
         digest,
@@ -492,37 +663,64 @@ def status(
     env: Mapping[str, str] | None = None,
     remote_url: str | None = None,
     run_lint: bool = True,
+    collections: Sequence[str] | None = None,
 ) -> StatusResult:
-    """Compare local steering with the central repository without changing anything."""
+    """Compare local collections with the central repository without changing anything."""
     environment = _env(env)
     url = _central_url(config)
+    selected = config.select_collections(collections)
     cache_dir, commit = _refresh_cache(config, environment, url)
-    global_source = _central_snapshot(
-        config, paths.ensure_within(cache_dir, Path(config.remote.global_dir))
-    )
-    global_target = snapshot_directory(paths.global_steering_dir(config, environment))
-    global_plan = plan_changes(
-        global_source,
-        global_target,
-        lock_hashes(read_lock(paths.global_lock_path(config, environment))),
-        prune=config.sync.prune,
-    )
+    global_base = paths.ensure_within(cache_dir, Path(config.remote.global_dir))
+    global_lock = lock_collections(read_lock(paths.global_lock_path(config, environment)))
+    global_plans: dict[str, ChangePlan] = {}
+    for name, collection in selected.items():
+        target = paths.global_collection_dir(collection, environment)
+        if target is None:
+            continue
+        source_dir = paths.central_collection_dir(global_base, collection)
+        _warn_legacy_layout(global_base, collection, source_dir)
+        spec = _spec(collection)
+        global_plans[name] = plan_changes(
+            _central_snapshot(config, source_dir, spec),
+            snapshot_directory(target, spec),
+            global_lock.get(name, {}),
+            prune=config.sync.prune,
+        )
     project: str | None = None
-    workspace_plan: ChangePlan | None = None
+    workspace_plans: dict[str, ChangePlan] | None = None
     report: LintReport | None = None
     if workspace_root is not None:
         project = resolve_project(
             config, workspace_root=workspace_root, env=environment, remote_url=remote_url
         )
         if project is not None:
-            local = snapshot_directory(paths.workspace_steering_dir(config, workspace_root))
-            central = _central_snapshot(config, _project_dir(config, cache_dir, project))
-            workspace_plan = plan_changes(local, central, snapshot_hashes(central), prune=True)
+            workspace_plans = {}
+            reports: list[LintReport] = []
+            project_base = _project_dir(config, cache_dir, project)
+            for name, collection in selected.items():
+                target = paths.workspace_collection_dir(collection, workspace_root)
+                if target is None:
+                    continue
+                spec = _spec(collection)
+                local = snapshot_directory(target, spec)
+                source_dir = paths.central_collection_dir(project_base, collection)
+                _warn_legacy_layout(project_base, collection, source_dir)
+                central = _central_snapshot(config, source_dir, spec)
+                workspace_plans[name] = plan_changes(
+                    local, central, snapshot_hashes(central), prune=True
+                )
+                if run_lint:
+                    reports.append(
+                        prefix_report(
+                            _lint_collection(collection, config, local, workspace_root),
+                            collection.workspace_path or "",
+                        )
+                    )
             if run_lint:
-                report = lint_snapshot(local, config.lint, workspace_root)
-    return StatusResult(project, url, commit, workspace_plan, global_plan, report)
+                report = merge_reports(reports)
+    return StatusResult(project, url, commit, workspace_plans, global_plans, report)
 
 
 def raise_on_conflicts(result: PullResult) -> None:
     if result.conflicts:
-        raise SyncConflictError("locally modified steering kept: " + ", ".join(result.conflicts))
+        raise SyncConflictError("locally modified files kept: " + ", ".join(result.conflicts))

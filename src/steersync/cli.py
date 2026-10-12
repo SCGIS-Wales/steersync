@@ -8,17 +8,28 @@ import os
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import click
 
 from steersync import __version__, gitops, hooks, sync
-from steersync.config import Config, default_config_text, load_config, validate_remote_url
+from steersync.config import (
+    LINT_PROFILES,
+    Config,
+    LintProfile,
+    default_config_text,
+    load_config,
+    validate_remote_url,
+)
 from steersync.errors import SteersyncError
-from steersync.lint import LintReport, lint_paths
+from steersync.lint import LintReport, lint_paths, merge_reports
 from steersync.logging_utils import configure_logging
-from steersync.paths import global_steering_dir, workspace_steering_dir
-from steersync.steering import ChangePlan
+from steersync.paths import (
+    global_collection_dir,
+    workspace_collection_dir,
+    workspace_steering_dir,
+)
+from steersync.steering import ChangePlan, FileSpec
 
 log = logging.getLogger("steersync")
 
@@ -70,6 +81,11 @@ def _plan_lines(label: str, plan: ChangePlan) -> list[str]:
     return lines
 
 
+def _is_blank(plan: ChangePlan) -> bool:
+    """True when a collection has nothing on either side worth a line of output."""
+    return plan.is_empty and not (plan.unchanged or plan.conflict or plan.local_only)
+
+
 def _plan_json(plan: ChangePlan | None) -> dict[str, Any] | None:
     if plan is None:
         return None
@@ -95,6 +111,22 @@ def _fail(exc: SteersyncError) -> None:
     sys.exit(exc.exit_code)
 
 
+def _plans_json(plans: Mapping[str, ChangePlan] | None) -> dict[str, Any] | None:
+    if plans is None:
+        return None
+    return {name: _plan_json(plan) for name, plan in plans.items()}
+
+
+collection_option = click.option(
+    "-c",
+    "--collection",
+    "collections",
+    multiple=True,
+    metavar="NAME",
+    help="Limit to a collection (steering, specs, skills, ...). Repeatable; default is all.",
+)
+
+
 @click.group(context_settings=CONTEXT_SETTINGS)
 @click.option(
     "--config",
@@ -111,7 +143,7 @@ def _fail(exc: SteersyncError) -> None:
 def main(
     config_path: Path | None, log_level: str | None, log_format: str | None, quiet: bool
 ) -> None:
-    """Sync Kiro steering documents with a central git repository."""
+    """Sync Kiro steering, specs, skills, agents, hooks and settings with a central repository."""
 
 
 @main.command()
@@ -128,6 +160,7 @@ def main(
     is_flag=True,
     help="Warn and exit 0 on failure (for Kiro session hooks and schedulers).",
 )
+@collection_option
 @click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
 @click.pass_context
 def pull(
@@ -139,9 +172,10 @@ def pull(
     strict: bool,
     remote_url: str | None,
     best_effort: bool,
+    collections: tuple[str, ...],
     as_json: bool,
 ) -> None:
-    """Fetch steering from the central repository into this workspace and ~/.kiro."""
+    """Fetch every collection (steering, specs, skills, ...) from the central repository."""
     try:
         config, root = _bootstrap(ctx, propagate=True)
     except SteersyncError as exc:
@@ -158,31 +192,30 @@ def pull(
             force=force,
             dry_run=dry_run,
             strict=strict or None,
+            collections=collections or None,
         )
     except (SteersyncError, OSError) as exc:
         _soft_failure(exc, soft=best_effort, label="steering pull skipped")
         return
     if as_json:
+        scopes: dict[str, dict[str, Any]] = {}
+        for item in result.results:
+            scopes.setdefault(item.scope, {})[item.collection] = {
+                "target": str(item.target_dir),
+                "plan": _plan_json(item.plan),
+                "written": list(item.written),
+            }
         click.echo(
             json.dumps(
-                {
-                    "commit": result.commit,
-                    "dry_run": result.dry_run,
-                    "scopes": {
-                        s.scope: {
-                            "target": str(s.target_dir),
-                            "plan": _plan_json(s.plan),
-                            "written": list(s.written),
-                        }
-                        for s in result.scopes
-                    },
-                },
-                indent=2,
+                {"commit": result.commit, "dry_run": result.dry_run, "scopes": scopes}, indent=2
             )
         )
         return
-    for scope in result.scopes:
-        for line in _plan_lines(f"{scope.scope} ({scope.target_dir})", scope.plan):
+    for item in result.results:
+        if _is_blank(item.plan):
+            continue
+        label = f"{item.scope}/{item.collection} ({item.target_dir})"
+        for line in _plan_lines(label, item.plan):
             _echo(line, quiet=quiet)
     verb = "would apply" if dry_run else "applied"
     _echo(f"{verb} {result.change_count} change(s) from {result.commit[:12]}", quiet=quiet)
@@ -208,6 +241,7 @@ def pull(
 @click.option("--dry-run", is_flag=True, help="Compute the proposal without pushing.")
 @click.option("--no-lint", is_flag=True, help="Skip lint checks before pushing.")
 @click.option("-m", "--message", help="Commit message for the proposal.")
+@collection_option
 @click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
 @click.pass_context
 def push(
@@ -219,9 +253,10 @@ def push(
     dry_run: bool,
     no_lint: bool,
     message: str | None,
+    collections: tuple[str, ...],
     as_json: bool,
 ) -> None:
-    """Propose local steering as a branch (and merge request) on the central repository."""
+    """Propose local collections as one branch (and merge request) on the central repository."""
     env = os.environ
     if from_hook and env.get("STEERSYNC_ACTIVE") == "1":
         return
@@ -255,6 +290,7 @@ def push(
             dry_run=dry_run,
             run_lint=not no_lint,
             message=message,
+            collections=collections or None,
         )
     except (SteersyncError, OSError) as exc:
         _soft_failure(exc, soft=from_hook and not strict, label="steering sync skipped")
@@ -318,14 +354,25 @@ def _read_stdin() -> str:
 @main.command()
 @click.option("--remote-url", help="Project remote URL used to derive the project slug.")
 @click.option("--no-lint", is_flag=True, help="Skip lint checks.")
+@collection_option
 @click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
 @click.pass_context
-def status(ctx: click.Context, remote_url: str | None, no_lint: bool, as_json: bool) -> None:
-    """Show how local steering differs from the central repository."""
+def status(
+    ctx: click.Context,
+    remote_url: str | None,
+    no_lint: bool,
+    collections: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """Show how local collections differ from the central repository."""
     config, root = _bootstrap(ctx)
     try:
         result = sync.status(
-            config, workspace_root=root, remote_url=remote_url, run_lint=not no_lint
+            config,
+            workspace_root=root,
+            remote_url=remote_url,
+            run_lint=not no_lint,
+            collections=collections or None,
         )
     except SteersyncError as exc:
         _fail(exc)
@@ -337,8 +384,8 @@ def status(ctx: click.Context, remote_url: str | None, no_lint: bool, as_json: b
                     "project": result.project,
                     "remote": gitops.redact_url(result.remote),
                     "remote_commit": result.remote_commit,
-                    "workspace": _plan_json(result.workspace),
-                    "global": _plan_json(result.global_),
+                    "workspace": _plans_json(result.workspace),
+                    "global": _plans_json(result.global_),
                     "lint": json.loads(result.lint.to_json()) if result.lint else None,
                 },
                 indent=2,
@@ -347,34 +394,127 @@ def status(ctx: click.Context, remote_url: str | None, no_lint: bool, as_json: b
         return
     click.echo(f"central: {gitops.redact_url(result.remote)} @ {(result.remote_commit or '')[:12]}")
     if result.workspace is not None:
-        for line in _plan_lines(f"workspace -> {result.project}", result.workspace):
-            click.echo(line)
+        for name, plan in result.workspace.items():
+            if not _is_blank(plan):
+                for line in _plan_lines(f"workspace/{name} -> {result.project}", plan):
+                    click.echo(line)
     else:
         click.echo("workspace: not in a git repository with an origin remote")
-    if result.global_ is not None:
-        for line in _plan_lines("global <- central", result.global_):
-            click.echo(line)
+    for name, plan in result.global_.items():
+        if not _is_blank(plan):
+            for line in _plan_lines(f"global/{name} <- central", plan):
+                click.echo(line)
     if result.lint is not None:
         _print_lint(result.lint, as_json=False, quiet=False)
 
 
 @main.command()
 @click.argument("paths", nargs=-1, type=click.Path(exists=True, path_type=Path))
+@collection_option
+@click.option(
+    "--profile",
+    type=click.Choice(list(LINT_PROFILES)),
+    help="Lint profile for explicit PATHS (default: steering, or the collection's profile).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
 @click.pass_context
-def lint(ctx: click.Context, paths: tuple[Path, ...], as_json: bool) -> None:
-    """Validate steering documents. Defaults to the workspace steering directory."""
+def lint(
+    ctx: click.Context,
+    paths: tuple[Path, ...],
+    collections: tuple[str, ...],
+    profile: str | None,
+    as_json: bool,
+) -> None:
+    """Validate synced content. Defaults to every collection in this workspace."""
     config, root = _bootstrap(ctx)
-    targets = list(paths)
-    if not targets:
+    quiet = bool(ctx.find_root().params.get("quiet"))
+    try:
+        selected = config.select_collections(collections or None)
+    except SteersyncError as exc:
+        _fail(exc)
+        return
+    if paths:
+        report = _lint_explicit_paths(config, root, paths, collections, profile)
+    else:
         if root is None:
             _fail(SteersyncError("no paths given and not inside a git repository"))
             return
-        targets = [workspace_steering_dir(config, root)]
-    report = lint_paths(targets, config.lint, root)
-    _print_lint(report, as_json=as_json, quiet=bool(ctx.find_root().params.get("quiet")))
+        reports: list[LintReport] = []
+        for collection in selected.values():
+            target = workspace_collection_dir(collection, root)
+            if target is None:
+                continue
+            reports.append(
+                lint_paths(
+                    [target],
+                    config.lint,
+                    root,
+                    profile=collection.lint,
+                    spec=FileSpec(collection.include, collection.exclude, collection.max_depth),
+                    max_file_bytes=collection.max_file_bytes,
+                )
+            )
+        report = merge_reports(reports)
+    _print_lint(report, as_json=as_json, quiet=quiet)
     if not report.ok:
         sys.exit(4)
+
+
+def _lint_explicit_paths(
+    config: Config,
+    root: Path | None,
+    paths: tuple[Path, ...],
+    collections: tuple[str, ...],
+    profile: str | None,
+) -> LintReport:
+    """Lint explicit paths, grouping each by the collection whose directory contains it.
+
+    ``--collection`` forces one collection for every path, ``--profile`` forces one
+    profile; a path outside every collection falls back to the steering profile.
+    """
+    forced = config.collections[collections[0]] if collections else None
+    groups: dict[str | None, list[Path]] = {}
+    for path in paths:
+        name = collections[0] if forced else _collection_for_path(config, root, path)
+        groups.setdefault(name, []).append(path)
+    reports: list[LintReport] = []
+    for name, group in groups.items():
+        chosen = config.collections[name] if name else None
+        reports.append(
+            lint_paths(
+                group,
+                config.lint,
+                root,
+                profile=_profile(profile or (chosen.lint if chosen else "steering")),
+                spec=FileSpec(chosen.include, chosen.exclude, chosen.max_depth) if chosen else None,
+                max_file_bytes=chosen.max_file_bytes if chosen else None,
+            )
+        )
+    return merge_reports(reports)
+
+
+def _collection_for_path(config: Config, root: Path | None, path: Path) -> str | None:
+    """Return the enabled collection whose workspace directory contains ``path``."""
+    if root is None:
+        return None
+    resolved = path.resolve()
+    best: tuple[int, str] | None = None
+    for name, collection in config.enabled_collections().items():
+        target = workspace_collection_dir(collection, root)
+        if target is None:
+            continue
+        base = target.resolve()
+        if resolved == base or base in resolved.parents:
+            depth = len(base.parts)
+            if best is None or depth > best[0]:
+                best = (depth, name)
+    return best[1] if best else None
+
+
+def _profile(name: str) -> LintProfile:
+    if name not in LINT_PROFILES:  # pragma: no cover - click validates the choice
+        raise SteersyncError(f"unknown lint profile {name!r}")
+    return cast(LintProfile, name)
 
 
 @main.command()
@@ -401,7 +541,9 @@ def install_hook(ctx: click.Context, force: bool) -> None:
     "--write-config", is_flag=True, help="Write .kiro/steersync.yaml from the packaged defaults."
 )
 @click.option(
-    "--exclude/--no-exclude", default=True, help="Add .kiro/steering to .git/info/exclude."
+    "--exclude/--no-exclude",
+    default=True,
+    help="Add the synced collection directories to .git/info/exclude.",
 )
 @click.option("--hook/--no-hook", default=False, help="Also install the pre-push hook.")
 @click.pass_context
@@ -420,12 +562,17 @@ def init(ctx: click.Context, write_config: bool, exclude: bool, hook: bool) -> N
             target.write_text(default_config_text(), encoding="utf-8")
             click.echo(f"wrote: {target}")
     if exclude:
-        pattern = f"/{config.paths.workspace_steering.strip('/')}/"
-        lock = f"/{config.paths.workspace_lock.strip('/')}"
-        changed = gitops.write_info_exclude(config, root, pattern)
-        changed |= gitops.write_info_exclude(config, root, lock)
+        patterns = [
+            f"/{c.workspace_path.strip('/')}/"
+            for c in config.enabled_collections().values()
+            if c.workspace_path is not None and c.git_exclude
+        ]
+        patterns.append(f"/{config.paths.workspace_lock.strip('/')}")
+        changed = False
+        for pattern in patterns:
+            changed |= gitops.write_info_exclude(config, root, pattern)
         click.echo(
-            f"{'updated' if changed else 'unchanged'}: .git/info/exclude ({pattern}, {lock})"
+            f"{'updated' if changed else 'unchanged'}: .git/info/exclude ({', '.join(patterns)})"
         )
     if hook:
         result = hooks.install_pre_push_hook(config, root, force=False)
@@ -433,6 +580,7 @@ def init(ctx: click.Context, write_config: bool, exclude: bool, hook: bool) -> N
     steering_dir = workspace_steering_dir(config, root)
     steering_dir.mkdir(parents=True, exist_ok=True)
     click.echo(f"ready: {steering_dir}")
+    click.echo(f"collections: {', '.join(config.enabled_collections()) or '(none)'}")
 
 
 @main.command("kiro-hook")
@@ -522,6 +670,48 @@ def config_default() -> None:
     click.echo(default_config_text(), nl=False)
 
 
+@config.command("collections")
+@click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
+@click.pass_context
+def config_collections(ctx: click.Context, as_json: bool) -> None:
+    """List the configured collections and where each one lives."""
+    cfg, root = _bootstrap(ctx)
+    env = os.environ
+    rows: list[dict[str, Any]] = []
+    for name, collection in cfg.collections.items():
+        workspace = workspace_collection_dir(collection, root) if root is not None else None
+        rows.append(
+            {
+                "name": name,
+                "enabled": collection.enabled,
+                "description": collection.description,
+                "central_dir": collection.central_dir,
+                "workspace_path": collection.workspace_path,
+                "workspace_dir": str(workspace) if workspace else None,
+                "global_path": collection.global_path,
+                "global_dir": (
+                    str(d) if (d := global_collection_dir(collection, env)) is not None else None
+                ),
+                "include": list(collection.include),
+                "exclude": list(collection.exclude),
+                "lint": collection.lint,
+            }
+        )
+    if as_json:
+        click.echo(json.dumps(rows, indent=2))
+        return
+    for name, collection in cfg.collections.items():
+        state = "" if collection.enabled else " (disabled)"
+        click.echo(f"{name}{state}: {collection.description}".rstrip(": "))
+        click.echo(f"  central:   {collection.central_dir}/")
+        click.echo(f"  workspace: {collection.workspace_path or '(none)'}")
+        click.echo(f"  global:    {collection.global_path or '(none)'}")
+        click.echo(f"  include:   {', '.join(collection.include)}")
+        if collection.exclude:
+            click.echo(f"  exclude:   {', '.join(collection.exclude)}")
+        click.echo(f"  lint:      {collection.lint}")
+
+
 @main.command()
 @click.pass_context
 def doctor(ctx: click.Context) -> None:
@@ -535,10 +725,17 @@ def doctor(ctx: click.Context) -> None:
         return
     click.echo(f"config: {config.source_file or 'packaged defaults'}")
     click.echo(f"remote: {gitops.redact_url(config.remote.url) or '(unset)'}")
-    click.echo(f"global steering: {global_steering_dir(config, env)}")
+    click.echo(f"collections: {', '.join(config.enabled_collections()) or '(none)'}")
+    for name, collection in config.enabled_collections().items():
+        global_dir = global_collection_dir(collection, env)
+        if global_dir is not None:
+            click.echo(f"global {name}: {global_dir}")
     if root is not None:
         click.echo(f"workspace: {root}")
-        click.echo(f"workspace steering: {workspace_steering_dir(config, root)}")
+        for name, collection in config.enabled_collections().items():
+            workspace_dir = workspace_collection_dir(collection, root)
+            if workspace_dir is not None:
+                click.echo(f"workspace {name}: {workspace_dir}")
         origin = gitops.remote_url(config, root)
         click.echo(f"origin: {gitops.redact_url(origin) if origin else '(none)'}")
         if origin:

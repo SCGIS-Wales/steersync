@@ -6,11 +6,12 @@ environment variables. Everything is validated with pydantic before use.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from importlib import resources
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -34,6 +35,25 @@ _SCP_LIKE = re.compile(r"^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.\-\[\]]+:(?![/\\]{2})[
 _HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 _ALLOWED_PLACEHOLDERS = frozenset({"default_branch", "project", "user", "hash"})
+_COLLECTION_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+
+LintProfile = Literal["steering", "markdown", "skill", "agent", "hooks", "json", "generic"]
+LINT_PROFILES: tuple[str, ...] = (
+    "steering",
+    "markdown",
+    "skill",
+    "agent",
+    "hooks",
+    "json",
+    "generic",
+)
+# Deprecated ``paths`` keys and the collection setting that replaced each one.
+_LEGACY_PATH_KEYS: dict[str, tuple[str, str]] = {
+    "workspace_steering": ("steering", "workspace_path"),
+    "global_steering": ("steering", "global_path"),
+}
+
+log = logging.getLogger(__name__)
 
 
 class _Strict(BaseModel):
@@ -149,20 +169,79 @@ class BranchConfig(_Strict):
         return value
 
 
+def _relative_path(value: str) -> str:
+    """Validate a path that must stay inside its base directory."""
+    if Path(value).is_absolute() or ".." in Path(value).parts or not value.strip():
+        msg = "must be a relative path without parent references"
+        raise ValueError(msg)
+    return value.strip().strip("/")
+
+
+class CollectionConfig(_Strict):
+    """One kind of Kiro content that is synced as a unit.
+
+    A collection maps a directory in the workspace (and optionally one under the
+    Kiro home) onto a directory in the central repository, and says which files
+    inside it are synced and how they are validated.
+    """
+
+    enabled: bool = True
+    description: str = Field(default="", max_length=200)
+    # Directory relative to the workspace root; ``null`` means the collection has no
+    # workspace scope (it is only synced globally).
+    workspace_path: str | None = None
+    # Directory relative to the Kiro home (``KIRO_HOME`` or ``~/.kiro``); ``null`` means
+    # the collection has no global scope.
+    global_path: str | None = None
+    # Directory under ``global/`` and ``projects/<slug>/`` in the central repository.
+    # Defaults to the collection name.
+    central_dir: str | None = None
+    # Glob patterns relative to the collection directory. ``**`` spans directories.
+    include: tuple[str, ...] = ("**/*",)
+    exclude: tuple[str, ...] = ()
+    # Limit discovery to this many directory levels (1 = only the top level).
+    max_depth: int | None = Field(default=None, ge=1, le=64)
+    lint: LintProfile = "generic"
+    # Overrides ``lint.max_file_bytes`` for this collection.
+    max_file_bytes: int | None = Field(default=None, ge=1024, le=100_000_000)
+    # Add the workspace directory to ``.git/info/exclude`` on ``steersync init``.
+    git_exclude: bool = True
+
+    @field_validator("workspace_path", "global_path", "central_dir")
+    @classmethod
+    def _relative(cls, value: str | None) -> str | None:
+        return None if value is None else _relative_path(value)
+
+    @field_validator("include", "exclude")
+    @classmethod
+    def _patterns(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for pattern in value:
+            if not pattern.strip() or pattern.startswith(("/", "\\")) or "\\" in pattern:
+                msg = f"invalid glob pattern {pattern!r}: patterns are relative posix globs"
+                raise ValueError(msg)
+            if ".." in PurePosixPath(pattern).parts or "\0" in pattern:
+                msg = f"invalid glob pattern {pattern!r}: parent references are not allowed"
+                raise ValueError(msg)
+        return value
+
+    @field_validator("include")
+    @classmethod
+    def _not_empty(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value:
+            msg = "include must list at least one glob pattern"
+            raise ValueError(msg)
+        return value
+
+
 class PathsConfig(_Strict):
-    workspace_steering: str = ".kiro/steering"
     workspace_lock: str = ".kiro/steersync.lock.json"
-    global_steering: str = "steering"
     global_lock: str = "steersync.lock.json"
     cache_dir: str = "~/.cache/steersync"
 
-    @field_validator("workspace_steering", "workspace_lock", "global_steering", "global_lock")
+    @field_validator("workspace_lock", "global_lock")
     @classmethod
     def _relative(cls, value: str) -> str:
-        if Path(value).is_absolute() or ".." in Path(value).parts or not value:
-            msg = "must be a relative path without parent references"
-            raise ValueError(msg)
-        return value
+        return _relative_path(value)
 
 
 class SyncConfig(_Strict):
@@ -190,11 +269,69 @@ class Config(_Strict):
     git: GitConfig = GitConfig()
     branch: BranchConfig = BranchConfig()
     paths: PathsConfig = PathsConfig()
+    collections: dict[str, CollectionConfig] = {}
     sync: SyncConfig = SyncConfig()
     lint: LintConfig = LintConfig()
     hook: HookConfig = HookConfig()
     logging: LoggingConfig = LoggingConfig()
     source_file: Path | None = None
+
+    @field_validator("collections", mode="before")
+    @classmethod
+    def _default_central_dir(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        filled: dict[str, Any] = {}
+        for name, raw in value.items():
+            needs_default = isinstance(raw, dict) and raw.get("central_dir") is None
+            filled[name] = {**raw, "central_dir": name} if needs_default else raw
+        return filled
+
+    @field_validator("collections")
+    @classmethod
+    def _collections(cls, value: dict[str, CollectionConfig]) -> dict[str, CollectionConfig]:
+        seen: dict[str, dict[str, str]] = {
+            "central_dir": {},
+            "workspace_path": {},
+            "global_path": {},
+        }
+        for name, collection in value.items():
+            if not _COLLECTION_NAME_RE.match(name):
+                msg = f"invalid collection name {name!r}: use lowercase letters, digits and dashes"
+                raise ValueError(msg)
+            if collection.workspace_path is None and collection.global_path is None:
+                msg = f"collection {name!r} needs a workspace_path or a global_path"
+                raise ValueError(msg)
+            if not collection.enabled:
+                continue
+            for key, used in seen.items():
+                path = getattr(collection, key)
+                if path is None:
+                    continue
+                if path in used:
+                    msg = f"collections {used[path]!r} and {name!r} share the same {key} {path!r}"
+                    raise ValueError(msg)
+                used[path] = name
+        return value
+
+    def enabled_collections(self) -> dict[str, CollectionConfig]:
+        """Return the enabled collections in configuration order."""
+        return {name: c for name, c in self.collections.items() if c.enabled}
+
+    def select_collections(self, names: Sequence[str] | None) -> dict[str, CollectionConfig]:
+        """Return the enabled collections named in ``names`` (all of them when empty)."""
+        enabled = self.enabled_collections()
+        if not names:
+            return enabled
+        unknown = [n for n in names if n not in self.collections]
+        if unknown:
+            msg = f"unknown collection(s): {', '.join(sorted(unknown))}"
+            raise ConfigError(msg)
+        disabled = [n for n in names if n not in enabled]
+        if disabled:
+            msg = f"collection(s) disabled in configuration: {', '.join(sorted(disabled))}"
+            raise ConfigError(msg)
+        return {name: enabled[name] for name in dict.fromkeys(names)}
 
 
 def default_config_text() -> str:
@@ -308,6 +445,7 @@ def load_config(
             raise ConfigError(msg) from exc
         data = deep_merge(data, _load_yaml(text, str(source)))
     data = deep_merge(data, _env_overrides(environment))
+    data = _migrate_legacy_paths(data, str(source) if source else "configuration")
     data["source_file"] = source
     try:
         return Config.model_validate(data)
@@ -317,6 +455,30 @@ def load_config(
         )
         msg = f"invalid configuration: {details}"
         raise ConfigError(msg) from exc
+
+
+def _migrate_legacy_paths(data: dict[str, Any], origin: str) -> dict[str, Any]:
+    """Map the pre 0.2 ``paths.*_steering`` keys onto the steering collection."""
+    paths_section = data.get("paths")
+    if not isinstance(paths_section, dict):
+        return data
+    legacy = {k: v for k, v in paths_section.items() if k in _LEGACY_PATH_KEYS}
+    if not legacy:
+        return data
+    migrated = dict(data)
+    migrated["paths"] = {k: v for k, v in paths_section.items() if k not in _LEGACY_PATH_KEYS}
+    collections = dict(migrated.get("collections") or {})
+    for key, value in legacy.items():
+        collection, setting = _LEGACY_PATH_KEYS[key]
+        existing = collections.get(collection)
+        target = dict(existing) if isinstance(existing, dict) else {}
+        target[setting] = value
+        collections[collection] = target
+        log.warning(
+            "%s: paths.%s is deprecated; use collections.%s.%s", origin, key, collection, setting
+        )
+    migrated["collections"] = collections
+    return migrated
 
 
 def validate_remote_url(

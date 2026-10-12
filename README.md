@@ -1,18 +1,40 @@
 # steersync
 
-Sync [Kiro](https://kiro.dev) steering documents between developer machines and a central
-git repository. A plain Python CLI runs from a git pre-push hook and shells out to the `git`
-binary, so your existing SSH agent or credential helper does the authentication. An MCP server
-and Kiro session hooks are optional layers on top of the same core.
+Sync the whole [Kiro](https://kiro.dev) `.kiro/` configuration, steering, specs, skills,
+agents, hooks and settings, between developer machines and a central git repository. A plain
+Python CLI runs from a git pre-push hook and shells out to the `git` binary, so your existing
+SSH agent or credential helper does the authentication. An MCP server and Kiro session hooks
+are optional layers on top of the same core.
 
-Kiro CLI has no built in command to import or sync steering from a remote repository; its
-guidance is to copy files from a central repository into `~/.kiro/steering`. steersync automates
-that in both directions:
+Kiro CLI has no built in command to import or sync its configuration from a remote
+repository; its guidance is to copy files from a central repository into `~/.kiro/` and
+`.kiro/`. steersync automates that in both directions for every *collection* it is
+configured with:
 
 | Direction | Command | What happens |
 |---|---|---|
-| Central to local | `steersync pull` | Shallow clones or refreshes the central repository, writes `global/*.md` to `~/.kiro/steering/` and `projects/<slug>/**/*.md` to `<repo>/.kiro/steering/`, prunes files removed centrally, keeps files you edited locally. |
-| Local to central | `steersync push` | Lints `.kiro/steering`, pushes it to a branch named after the project, user and content hash, and sends GitLab push options so a merge request is opened for review. |
+| Central to local | `steersync pull` | Shallow clones or refreshes the central repository, writes `global/<collection>/` to `~/.kiro/<dir>/` and `projects/<slug>/<collection>/` to `<repo>/.kiro/<dir>/`, prunes files removed centrally, keeps files you edited locally. |
+| Local to central | `steersync push` | Lints every collection with its own profile, pushes them together to one branch named after the project, user and content hash, and sends GitLab push options so a merge request is opened for review. |
+
+## Collections
+
+A collection is one kind of Kiro content. The packaged defaults cover the full `.kiro/`
+layout; each one is configurable and new ones are added with a single YAML block.
+
+| Collection | Workspace | Global (`~/.kiro`) | Central directory | Files | Lint profile |
+|---|---|---|---|---|---|
+| `steering` | `.kiro/steering` | `steering` | `steering/` | `**/*.md` | `steering`: Kiro front matter, references, secrets, markdown |
+| `specs` | `.kiro/specs` | none | `specs/` | `**/*.md` | `markdown`: secrets and markdown style |
+| `skills` | `.kiro/skills` | `skills` | `skills/` | everything (`SKILL.md`, `scripts/`, `references/`, `assets/`) | `skill`: `SKILL.md` needs `name` and `description`, secrets in scripts |
+| `agents` | `.kiro/agents` | `agents` | `agents/` | `**/*.json`, `**/*.md` | `agent`: valid JSON with a `name`, flags deprecated `toolsSettings` |
+| `hooks` | `.kiro/hooks` | `hooks` | `hooks/` | `**/*.json` | `hooks`: `version`, `hooks[]` with `name`, `trigger`, `action` |
+| `settings` | `.kiro/settings` | none | `settings/` | `lsp.json`, `mcp.json` | `json`: valid JSON and secrets |
+
+Execute bits on skill scripts survive the round trip, hidden files are never synced, and
+files a collection's patterns do not select are never touched on either side. Limit any
+command to some collections with `--collection NAME` (repeatable), list them with
+`steersync config collections`, and see [docs/central-layout.md](docs/central-layout.md) for
+a worked example of a full `.kiro/` tree in the central repository.
 
 ## Install
 
@@ -45,9 +67,10 @@ Once the package is published to PyPI, `uv tool install steersync` works as well
    steersync config validate
    ```
 
-2. Prepare a project. This adds `.kiro/steering/` and the lock file to `.git/info/exclude`
-   (so steering is never committed to the project by accident) and installs a chaining
-   pre-push hook:
+2. Prepare a project. This adds every synced directory (`.kiro/steering/`, `.kiro/specs/`,
+   `.kiro/skills/`, ...) and the lock file to `.git/info/exclude` (so centrally managed
+   content is never committed to the project by accident; set `git_exclude: false` on a
+   collection to keep committing it) and installs a chaining pre-push hook:
 
    ```bash
    cd ~/code/my-service
@@ -55,40 +78,51 @@ Once the package is published to PyPI, `uv tool install steersync` works as well
    steersync pull
    ```
 
-3. Edit `.kiro/steering/*.md`. On your next `git push`, or on demand with `steersync push`,
-   the steering is proposed to the central repository as a merge request.
+3. Edit anything under `.kiro/`. On your next `git push`, or on demand with
+   `steersync push`, every collection is proposed to the central repository as one merge
+   request.
 
 Run `steersync doctor` at any time to see what steersync has resolved.
 
 ## Central repository layout
 
 ```text
-kiro-steering/
-├── global/                       # applied to every workspace (~/.kiro/steering)
-│   └── engineering-rules.md
+kiro-config/
+├── global/                        # applied to every machine (~/.kiro)
+│   ├── steering/engineering-rules.md
+│   ├── skills/release-checklist/SKILL.md
+│   └── hooks/steersync.json
 └── projects/
-    └── acme/platform/api/        # derived from the project's origin URL
-        └── python.md
+    └── acme/platform/api/         # derived from the project's origin URL
+        ├── steering/product.md
+        ├── specs/tls-cert-staged-rotation/tasks.md
+        ├── skills/venafi-tpp-websdk/SKILL.md
+        ├── agents/entra-app-registration.json
+        ├── hooks/tests-on-stop.json
+        └── settings/lsp.json
 ```
 
 The project slug is the remote path with the host and `.git` removed and unsafe characters
 replaced, so `ssh://git@gitlab.example.com/acme/platform/api.git` becomes
-`acme/platform/api`. Both directory names are configurable.
+`acme/platform/api`. The `global` and `projects` directory names and every collection
+directory are configurable. Repositories created with steersync 0.1, which kept steering
+directly under `global/` and `projects/<slug>/`, need their files moved into a `steering/`
+subdirectory; `pull` and `status` print a warning pointing at them until that is done.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `steersync pull [--force] [--dry-run] [--no-global] [--no-workspace] [--strict] [--best-effort] [--json]` | Apply central steering locally. `--best-effort` warns and exits 0 on failure. |
-| `steersync push [--dry-run] [--scope global] [--no-lint] [-m MSG] [--json]` | Propose local steering centrally. `--from-hook` is used by git hooks and never blocks the push unless strict. |
-| `steersync status [--json]` | Show adds, updates, deletes and local edits in both directions. |
-| `steersync lint [PATHS] [--json]` | Validate steering documents. Exit code 4 on errors. |
+| `steersync pull [--force] [--dry-run] [--no-global] [--no-workspace] [--strict] [--best-effort] [-c NAME] [--json]` | Apply central collections locally. `--best-effort` warns and exits 0 on failure. |
+| `steersync push [--dry-run] [--scope global] [--no-lint] [-m MSG] [-c NAME] [--json]` | Propose local collections centrally in one branch. `--from-hook` is used by git hooks and never blocks the push unless strict. |
+| `steersync status [-c NAME] [--json]` | Show adds, updates, deletes and local edits per collection in both directions. |
+| `steersync lint [PATHS] [-c NAME] [--profile P] [--json]` | Validate every collection with its profile, or explicit paths. Exit code 4 on errors. |
 | `steersync init [--write-config] [--hook] [--no-exclude]` | Prepare a repository. |
 | `steersync install-hook [--force]` | Install or update the chaining pre-push hook. |
 | `steersync kiro-hook [--engine v2\|v3] [--write]` | Render a Kiro hook that runs `steersync pull --quiet` at session start. |
 | `steersync mcp-config [--remote URL]` | Render an `mcp.json` fragment. |
 | `steersync mcp` | Run the MCP stdio server. |
-| `steersync config show\|validate\|default` | Inspect configuration. |
+| `steersync config show\|validate\|default\|collections` | Inspect configuration and the resolved collection directories. |
 | `steersync doctor` | Report git version, resolved paths, remote and project slug. |
 
 Global options: `--config PATH`, `--log-level`, `--log-format text|json`, `--quiet`.
@@ -112,7 +146,37 @@ for the packaged defaults.
 | `KIRO_HOME` | Location of `~/.kiro`, as honoured by kiro-cli |
 
 Unknown keys, invalid patterns, unsafe paths and malformed push options are rejected at load
-time with a precise message.
+time with a precise message. The pre 0.2 keys `paths.workspace_steering` and
+`paths.global_steering` still load, with a deprecation warning, as the steering collection's
+`workspace_path` and `global_path`.
+
+### Adding or changing a collection
+
+Collections are merged over the packaged defaults, so a project only lists what differs:
+
+```yaml
+collections:
+  specs:
+    enabled: false                # do not sync plans for this project
+  settings:
+    include: [lsp.json]           # keep mcp.json local
+  runbooks:                       # a new collection, central directory runbooks/
+    description: Operational runbooks
+    workspace_path: docs/runbooks
+    include: ["**/*.md"]
+    lint: markdown
+    git_exclude: false            # the project keeps committing these too
+  agents-md:                      # a single file at the repository root
+    workspace_path: .
+    include: [AGENTS.md]
+    max_depth: 1
+    lint: markdown
+    git_exclude: false
+```
+
+Every key is documented in `steersync config default`. A collection needs a `workspace_path`
+or a `global_path`; `central_dir` defaults to the collection name; enabled collections may not
+share a directory on either side.
 
 ## Reliability
 
@@ -127,8 +191,10 @@ time with a precise message.
 
 ## How pull decides what to write
 
-steersync records the hash of every file it wrote in a lock file (`.kiro/steersync.lock.json`
-in the workspace, `~/.kiro/steersync.lock.json` globally). On the next pull:
+steersync records the hash of every file it wrote, per collection, in a lock file
+(`.kiro/steersync.lock.json` in the workspace, `~/.kiro/steersync.lock.json` globally).
+Version 1 lock files written by steersync 0.1 are read as the steering collection. On the
+next pull:
 
 | Local file | Compared with | Result |
 |---|---|---|
@@ -140,7 +206,8 @@ in the workspace, `~/.kiro/steersync.lock.json` globally). On the next pull:
 | Never synced | | Left alone and reported as local only |
 
 Kiro metadata is never written into steering front matter; all tool state lives in the lock
-file, so documents stay exactly as authored.
+file, so documents stay exactly as authored. Pulling a subset of collections leaves the lock
+entries of the others untouched.
 
 ## Git hook
 
@@ -163,6 +230,9 @@ repos:
       - id: steersync-lint
 ```
 
+The lint hook receives the changed files under `.kiro/` and lints each with the profile of
+the collection it belongs to.
+
 ## GitLab merge requests
 
 The default push options create a merge request against the default branch, remove the source
@@ -173,6 +243,14 @@ options (GitHub, plain bare repositories) make git fail, so steersync retries on
 and says so. Push options may use `{default_branch}`, `{project}`, `{user}` and `{hash}`.
 
 ## Lint rules
+
+Each collection runs one lint profile. The `steering` profile applies every rule below.
+`markdown` (specs, prompts, references) applies the encoding, size, secret and markdown rules
+without Kiro front matter checks. `skill` adds `skill-front-matter-required`,
+`skill-requires-metadata` and `skill-name-mismatch` for `SKILL.md`. `json` adds `json-syntax`,
+`hooks` adds `hook-schema`, `hook-trigger` and `hook-action`, `agent` adds `agent-schema`,
+`agent-name` and `agent-deprecated-key`, and `generic` only enforces the size limit and secret
+scanning, allowing binary assets. New profiles are one function in `steersync.lint.PROFILES`.
 
 | Rule | Severity | Check |
 |---|---|---|
@@ -202,8 +280,11 @@ not pass the shell's `PATH`, `SSH_AUTH_SOCK` or proxy variables to MCP servers, 
 fragment forwards them explicitly through `env`; use an absolute `--command` if `uvx` is not on
 Kiro's path.
 
-**Custom agents** must list steering in `resources` (`file://.kiro/steering/**/*.md`), otherwise
-Kiro does not auto include it.
+**Custom agents.** On Kiro CLI V3 custom agents inherit steering, skills and `AGENTS.md` by
+default, so list only the always on steering files in `resources` and reference skills with
+`skill://.kiro/skills/*/SKILL.md`. A `file://.kiro/steering/**/*.md` glob loads every document
+at startup and defeats the `fileMatch`, `manual` and `auto` inclusion modes. On CLI 2.x list
+the documents you need explicitly.
 
 ## Security
 

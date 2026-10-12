@@ -12,6 +12,7 @@ from steersync.steering import (
     discover_steering_files,
     file_digest,
     file_references,
+    lock_collections,
     lock_hashes,
     parse_front_matter,
     plan_changes,
@@ -210,18 +211,45 @@ def test_replace_directory_contents(tmp_path: Path) -> None:
 
 def test_lock_round_trip(tmp_path: Path) -> None:
     lock = tmp_path / "lock.json"
-    assert read_lock(lock) == {"version": 1, "files": {}}
-    write_lock(lock, remote="r", commit="c", files={"b.md": "2", "a.md": "1"})
+    assert read_lock(lock) == {"version": 2, "collections": {}}
+    write_lock(
+        lock,
+        remote="r",
+        commit="c",
+        collections={"steering": {"b.md": "2", "a.md": "1"}, "skills": {"s/SKILL.md": "3"}},
+    )
     data = read_lock(lock)
     assert data["remote"] == "r"
     assert data["commit"] == "c"
-    assert list(data["files"]) == ["a.md", "b.md"]
+    assert data["version"] == 2
+    assert list(data["collections"]["steering"]["files"]) == ["a.md", "b.md"]
     assert lock_hashes(data) == {"a.md": "1", "b.md": "2"}
+    assert lock_hashes(data, "skills") == {"s/SKILL.md": "3"}
+    assert lock_hashes(data, "missing") == {}
+    assert lock_collections(data) == {
+        "skills": {"s/SKILL.md": "3"},
+        "steering": {"a.md": "1", "b.md": "2"},
+    }
     lock.write_text("{not json")
-    assert read_lock(lock)["files"] == {}
+    assert read_lock(lock)["collections"] == {}
     lock.write_text(json.dumps({"files": "nope"}))
-    assert read_lock(lock)["files"] == {}
-    assert lock_hashes({"files": "nope"}) == {}
+    assert read_lock(lock)["collections"] == {}
+    lock.write_text(json.dumps([1, 2]))
+    assert read_lock(lock)["collections"] == {}
+    assert lock_hashes({"collections": "nope"}) == {}
+    assert lock_collections({"collections": {"x": {"files": "nope"}, "y": 3}}) == {}
+
+
+def test_lock_version_one_is_read_as_steering(tmp_path: Path) -> None:
+    lock = tmp_path / "lock.json"
+    lock.write_text(
+        json.dumps({"version": 1, "remote": "r", "commit": "c", "files": {"a.md": "1"}})
+    )
+    data = read_lock(lock)
+    assert data["version"] == 2
+    assert data["remote"] == "r"
+    assert lock_hashes(data) == {"a.md": "1"}
+    assert lock_hashes(data, "specs") == {}
 
 
 def test_read_document(tmp_path: Path) -> None:

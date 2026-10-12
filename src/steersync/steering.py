@@ -1,14 +1,20 @@
-"""Steering document discovery, front matter parsing, snapshots and change plans."""
+"""File discovery, front matter parsing, snapshots, change plans and lock files.
+
+The module is named after steering, its first use, but every function works on
+any collection of files described by a :class:`FileSpec`.
+"""
 
 from __future__ import annotations
 
+import functools
+import glob
 import hashlib
 import json
 import logging
 import os
 import re
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, NamedTuple
@@ -21,8 +27,10 @@ from steersync.paths import ensure_within
 
 log = logging.getLogger(__name__)
 
-LOCK_VERSION = 1
+LOCK_VERSION = 2
 FILE_MODE = 0o644
+EXECUTABLE_MODE = 0o755
+DEFAULT_COLLECTION = "steering"
 _USERINFO_RE = re.compile(r"(?<=://)[^/@\s]+@")
 STEERING_SUFFIX = ".md"
 INCLUSION_MODES: tuple[str, ...] = ("always", "fileMatch", "manual", "auto")
@@ -32,6 +40,31 @@ _FRONT_MATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)"
 
 Snapshot = dict[str, bytes]
 InclusionMode = Literal["always", "fileMatch", "manual", "auto"]
+
+
+class FileSpec(NamedTuple):
+    """Which files inside a collection directory take part in a sync."""
+
+    include: tuple[str, ...] = ("**/*",)
+    exclude: tuple[str, ...] = ()
+    max_depth: int | None = None
+
+    def matcher(self) -> Callable[[str], bool]:
+        """Return a predicate over posix relative paths."""
+        includes = [_glob_regex(p) for p in self.include]
+        excludes = [_glob_regex(p) for p in self.exclude]
+        return lambda relative: (
+            any(r.match(relative) for r in includes)
+            and not any(r.match(relative) for r in excludes)
+        )
+
+
+STEERING_SPEC = FileSpec(include=(f"**/*{STEERING_SUFFIX}",))
+
+
+@functools.cache
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    return re.compile(glob.translate(pattern, recursive=True, include_hidden=True))
 
 
 class FrontMatter(NamedTuple):
@@ -82,48 +115,78 @@ def validate_relative_path(relative: str) -> str:
     return posix.as_posix()
 
 
-def discover_steering_files(directory: Path, *, follow_symlinks: bool = True) -> list[Path]:
-    """Return steering markdown files under ``directory`` sorted by relative path.
+def discover_files(
+    directory: Path, spec: FileSpec = STEERING_SPEC, *, follow_symlinks: bool = True
+) -> list[Path]:
+    """Return the files under ``directory`` selected by ``spec`` sorted by relative path.
 
-    Hidden directories are skipped and symlinked directories are never entered,
-    to match the Kiro IDE. Symlinked files are included when ``follow_symlinks``
-    is true (kiro-cli follows them). Content from the central repository is read
-    with ``follow_symlinks=False`` so a malicious link such as
-    ``global/x.md -> ~/.ssh/id_rsa`` cannot copy local secrets into steering.
+    Hidden files and directories are skipped and symlinked directories are never
+    entered, to match the Kiro IDE. Symlinked files are included when
+    ``follow_symlinks`` is true (kiro-cli follows them). Content from the central
+    repository is read with ``follow_symlinks=False`` so a malicious link such as
+    ``global/x.md -> ~/.ssh/id_rsa`` cannot copy local secrets into the sync.
     """
     if not directory.is_dir():
         return []
+    matches = spec.matcher()
     found: list[Path] = []
     for root, dirs, files in os.walk(directory, followlinks=False):
-        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        depth = len(Path(root).relative_to(directory).parts)
+        if spec.max_depth is not None and depth + 1 >= spec.max_depth:
+            dirs[:] = []
+        else:
+            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         for name in sorted(files):
-            if not name.endswith(STEERING_SUFFIX) or name.startswith("."):
+            if name.startswith("."):
                 continue
             path = Path(root) / name
+            if not matches(path.relative_to(directory).as_posix()):
+                continue
             if path.is_symlink() and not follow_symlinks:
                 log.warning("ignoring symlink %s in central repository content", path)
                 continue
             found.append(path)
-    return found
+    return sorted(found, key=lambda p: p.relative_to(directory).as_posix())
 
 
-def snapshot_directory(directory: Path, *, follow_symlinks: bool = True) -> Snapshot:
-    """Read every steering file under ``directory`` into memory keyed by relative path."""
+def discover_steering_files(directory: Path, *, follow_symlinks: bool = True) -> list[Path]:
+    """Return steering markdown files under ``directory`` sorted by relative path."""
+    return discover_files(directory, STEERING_SPEC, follow_symlinks=follow_symlinks)
+
+
+def snapshot_directory(
+    directory: Path, spec: FileSpec = STEERING_SPEC, *, follow_symlinks: bool = True
+) -> Snapshot:
+    """Read every selected file under ``directory`` into memory keyed by relative path."""
     result: Snapshot = {}
-    for path in discover_steering_files(directory, follow_symlinks=follow_symlinks):
+    for path in discover_files(directory, spec, follow_symlinks=follow_symlinks):
         relative = validate_relative_path(path.relative_to(directory).as_posix())
         result[relative] = path.read_bytes()
     return result
 
 
+def executable_paths(directory: Path, relatives: Iterable[str]) -> frozenset[str]:
+    """Return the relative paths whose file has an execute bit set (skill scripts)."""
+    executable: set[str] = set()
+    for relative in relatives:
+        path = directory / relative
+        try:
+            mode = path.stat().st_mode
+        except OSError:
+            continue
+        if mode & 0o111:
+            executable.add(relative)
+    return frozenset(executable)
+
+
 def enforce_limits(snapshot: Mapping[str, bytes], *, max_files: int, max_total_bytes: int) -> None:
     """Refuse snapshots that are larger than the configured safety limits."""
     if len(snapshot) > max_files:
-        msg = f"{len(snapshot)} steering files exceed sync.max_files ({max_files})"
+        msg = f"{len(snapshot)} files exceed sync.max_files ({max_files})"
         raise LimitExceededError(msg)
     total = sum(len(data) for data in snapshot.values())
     if total > max_total_bytes:
-        msg = f"{total} bytes of steering exceed sync.max_total_bytes ({max_total_bytes})"
+        msg = f"{total} bytes exceed sync.max_total_bytes ({max_total_bytes})"
         raise LimitExceededError(msg)
 
 
@@ -247,7 +310,7 @@ def plan_changes(
     )
 
 
-def _atomic_write(path: Path, data: bytes) -> None:
+def _atomic_write(path: Path, data: bytes, *, mode: int = FILE_MODE) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     tmp = Path(tmp_name)
@@ -256,7 +319,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        tmp.chmod(FILE_MODE)
+        tmp.chmod(mode)
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -269,10 +332,12 @@ def apply_plan(
     plan: ChangePlan,
     *,
     force: bool = False,
+    executable: Collection[str] = (),
 ) -> list[str]:
     """Write adds and updates, remove deletes, and optionally overwrite conflicts.
 
-    Returns the list of relative paths that were written or removed.
+    Files listed in ``executable`` are written with mode 0755 so skill scripts
+    stay runnable. Returns the list of relative paths that were written or removed.
     """
     touched: list[str] = []
     writes = list(plan.add) + list(plan.update)
@@ -281,7 +346,8 @@ def apply_plan(
     for relative in writes:
         validate_relative_path(relative)
         path = ensure_within(target_dir, Path(relative))
-        _atomic_write(path, source[relative])
+        mode = EXECUTABLE_MODE if relative in executable else FILE_MODE
+        _atomic_write(path, source[relative], mode=mode)
         touched.append(relative)
     removals = list(plan.delete)
     if force:
@@ -306,39 +372,86 @@ def _remove_empty_parents(stop: Path, directory: Path) -> None:
         current = current.parent
 
 
-def replace_directory_contents(target_dir: Path, source: Mapping[str, bytes]) -> list[str]:
-    """Make ``target_dir`` contain exactly ``source``. Used inside the cache clone."""
-    existing = snapshot_directory(target_dir)
+def replace_directory_contents(
+    target_dir: Path,
+    source: Mapping[str, bytes],
+    spec: FileSpec = STEERING_SPEC,
+    *,
+    executable: Collection[str] = (),
+) -> list[str]:
+    """Make the files selected by ``spec`` in ``target_dir`` match ``source`` exactly.
+
+    Used inside the cache clone. Files that ``spec`` does not select are left alone.
+    """
+    existing = snapshot_directory(target_dir, spec)
     plan = plan_changes(source, existing, snapshot_hashes(existing), prune=True)
-    return apply_plan(target_dir, source, plan, force=True)
+    return apply_plan(target_dir, source, plan, force=True, executable=executable)
+
+
+def _empty_lock() -> dict[str, Any]:
+    return {"version": LOCK_VERSION, "collections": {}}
 
 
 def read_lock(path: Path) -> dict[str, Any]:
-    """Read a lock file; a missing or corrupt lock yields an empty record."""
+    """Read a lock file; a missing or corrupt lock yields an empty record.
+
+    Version 1 locks (one ``files`` mapping) are read as the steering collection so
+    an upgrade keeps telling local edits from stale copies.
+    """
     if not path.is_file():
-        return {"version": LOCK_VERSION, "files": {}}
+        return _empty_lock()
     try:
         data = json.loads(path.read_text("utf-8"))
     except OSError, json.JSONDecodeError:
         log.warning("ignoring unreadable lock file %s", path)
-        return {"version": LOCK_VERSION, "files": {}}
-    if not isinstance(data, dict) or not isinstance(data.get("files"), dict):
+        return _empty_lock()
+    if not isinstance(data, dict):
         log.warning("ignoring malformed lock file %s", path)
-        return {"version": LOCK_VERSION, "files": {}}
-    return data
+        return _empty_lock()
+    if isinstance(data.get("collections"), dict):
+        return data
+    if isinstance(data.get("files"), dict):
+        upgraded = {k: v for k, v in data.items() if k != "files"}
+        upgraded["version"] = LOCK_VERSION
+        upgraded["collections"] = {DEFAULT_COLLECTION: {"files": data["files"]}}
+        return upgraded
+    log.warning("ignoring malformed lock file %s", path)
+    return _empty_lock()
 
 
-def lock_hashes(lock: Mapping[str, Any]) -> dict[str, str]:
-    files = lock.get("files", {})
-    return {str(k): str(v) for k, v in files.items()} if isinstance(files, dict) else {}
+def lock_collections(lock: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    """Return every collection's recorded hashes from a lock record."""
+    collections = lock.get("collections", {})
+    if not isinstance(collections, dict):
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for name, entry in collections.items():
+        files = entry.get("files") if isinstance(entry, dict) else None
+        if isinstance(files, dict):
+            result[str(name)] = {str(k): str(v) for k, v in files.items()}
+    return result
 
 
-def write_lock(path: Path, *, remote: str, commit: str | None, files: Mapping[str, str]) -> None:
+def lock_hashes(lock: Mapping[str, Any], collection: str = DEFAULT_COLLECTION) -> dict[str, str]:
+    """Return the recorded hashes of one collection."""
+    return lock_collections(lock).get(collection, {})
+
+
+def write_lock(
+    path: Path,
+    *,
+    remote: str,
+    commit: str | None,
+    collections: Mapping[str, Mapping[str, str]],
+) -> None:
     record = {
         "version": LOCK_VERSION,
         "remote": _USERINFO_RE.sub("", remote),
         "commit": commit,
         "synced_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "files": dict(sorted(files.items())),
+        "collections": {
+            name: {"files": dict(sorted(files.items()))}
+            for name, files in sorted(collections.items())
+        },
     }
     _atomic_write(path, (json.dumps(record, indent=2, sort_keys=False) + "\n").encode("utf-8"))

@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from steersync import __version__
 from steersync.cli import main
 from steersync.config import Config
-from tests.conftest import PROJECT_SLUG, CentralCommit, git
+from tests.conftest import PROJECT_SLUG, CentralCommit, central_project, git
 
 
 @pytest.fixture
@@ -99,7 +99,11 @@ def test_init_and_install_hook(runner: CliRunner, in_project: Path) -> None:
     assert result.exit_code == 0, result.output
     assert (in_project / ".kiro" / "steersync.yaml").exists()
     assert (in_project / ".kiro" / "steering").is_dir()
-    assert "/.kiro/steering/" in (in_project / ".git" / "info" / "exclude").read_text()
+    excluded = (in_project / ".git" / "info" / "exclude").read_text()
+    assert "/.kiro/steering/" in excluded
+    assert "/.kiro/skills/" in excluded
+    assert "/.kiro/steersync.lock.json" in excluded
+    assert "collections: steering, specs" in result.output
     assert (in_project / ".git" / "hooks" / "pre-push").exists()
     second = runner.invoke(main, ["init", "--write-config"])
     assert "exists:" in second.output
@@ -127,7 +131,7 @@ def test_pull_push_status_round_trip(
     assert status.exit_code == 0
     assert "+ api.md" in status.output
     status_json = runner.invoke(main, ["status", "--json", "--no-lint"])
-    assert json.loads(status_json.output)["workspace"]["add"] == ["api.md"]
+    assert json.loads(status_json.output)["workspace"]["steering"]["add"] == ["api.md"]
     push = runner.invoke(main, ["push"])
     assert push.exit_code == 0, push.output
     assert "pushed:" in push.output
@@ -137,7 +141,9 @@ def test_pull_push_status_round_trip(
     assert data["branch"].startswith("steering/")
     assert runner.invoke(main, ["-q", "push", "--dry-run"]).exit_code == 0
     pull_json = runner.invoke(main, ["pull", "--json", "--no-global"])
-    assert json.loads(pull_json.output)["scopes"]["workspace"]["plan"]["local_only"] == ["api.md"]
+    pulled = json.loads(pull_json.output)["scopes"]["workspace"]
+    assert pulled["steering"]["plan"]["local_only"] == ["api.md"]
+    assert set(pulled) == {"steering", "specs", "skills", "agents", "hooks", "settings"}
     assert runner.invoke(main, ["--quiet", "pull", "--dry-run"]).exit_code == 0
 
 
@@ -146,7 +152,7 @@ def test_pull_conflict_message(
 ) -> None:
     runner.invoke(main, ["pull"])
     (in_project / ".kiro" / "steering" / "python.md").write_text("# Mine\n")
-    central_commit(lambda w: (w / "projects" / PROJECT_SLUG / "python.md").write_text("# Theirs\n"))
+    central_commit(lambda w: (central_project(w) / "python.md").write_text("# Theirs\n"))
     result = runner.invoke(main, ["pull"])
     assert result.exit_code == 0
     assert "locally modified" in result.output
