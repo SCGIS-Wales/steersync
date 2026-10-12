@@ -1,20 +1,26 @@
 name: CI
 
+# CI on every push and pull request, and releases on main.
+#
+# Releases are driven by the package version in src/steersync/__init__.py:
+# merging a version bump to main, running this workflow manually on main, or
+# pushing a matching vX.Y.Z tag releases that version when no GitHub release
+# exists for it yet. The release jobs publish the distribution built by this run
+# to PyPI through trusted publishing, then attest it, create the annotated tag
+# and the GitHub release with the same files attached.
+#
+# The PyPI trusted publisher is registered for this file. Publishing must happen
+# in the top level workflow, not in a reusable one: PyPI verifies the PEP 740
+# attestation against the workflow that owns the run, and a reusable workflow
+# would present the caller's name instead.
+
 on:
   push:
     branches: [main]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
   pull_request:
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      publish_to_pypi:
-        description: Publish the distribution built by this run to PyPI (Release workflow only).
-        type: boolean
-        default: false
-      version:
-        description: Package version the distribution must carry when publishing.
-        type: string
-        default: ""
 
 permissions:
   contents: read
@@ -164,35 +170,96 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  prepare:
+    # Pull requests never release; pushes to main, tag pushes and manual runs
+    # decide from the package version whether a release is due.
+    name: Decide whether to release
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
+      release: ${{ steps.decide.outputs.release }}
+      tag_exists: ${{ steps.decide.outputs.tag_exists }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the version and check release state
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(sed -nE 's/^__version__ = "([^"]+)"/\1/p' src/steersync/__init__.py)"
+          if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::cannot read a semantic version from src/steersync/__init__.py"
+            exit 1
+          fi
+          tag="v${version}"
+          if ! grep -q "^## \[${version}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for ${version}"
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if [ "${GITHUB_REF_NAME}" != "${tag}" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match package version ${version}"
+              exit 1
+            fi
+            tag_exists=true
+          elif [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::notice::releases are only made from main (got ${GITHUB_REF}); skipping"
+            {
+              echo "version=${version}"
+              echo "tag=${tag}"
+              echo "release=false"
+              echo "tag_exists=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          elif gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            tagged="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)"
+            if [ "${tagged}" != "${GITHUB_SHA}" ]; then
+              echo "::error::${tag} points at ${tagged}, not ${GITHUB_SHA}; bump the version to release this commit"
+              exit 1
+            fi
+            tag_exists=true
+          else
+            tag_exists=false
+          fi
+          release=true
+          if [ "${GITHUB_REF_TYPE}" != "tag" ] && gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::notice::${tag} is already released; nothing to do"
+            release=false
+          fi
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "release=${release}"
+            echo "tag_exists=${tag_exists}"
+          } >> "$GITHUB_OUTPUT"
+
   publish-pypi:
-    # The PyPI trusted publisher for the steersync project is registered for this
-    # workflow file, so the job that exchanges the OIDC token has to live here. It
-    # only runs when the Release workflow calls CI with publish_to_pypi, after the
-    # build job has twine checked and smoke tested the very files it uploads.
     name: Publish to PyPI (trusted publishing)
-    if: inputs.publish_to_pypi
+    needs: [prepare, build]
+    if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [build]
     environment:
       name: pypi
-      url: https://pypi.org/project/steersync/${{ inputs.version }}
+      url: https://pypi.org/project/steersync/${{ needs.prepare.outputs.version }}
     permissions:
       id-token: write
     steps:
-      - name: Download distribution
+      - name: Download the distribution built by this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
       - name: Check the built version
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          if [ -z "${VERSION}" ]; then
-            echo "::error::publish_to_pypi needs the version input"
-            exit 1
-          fi
           test -f "dist/steersync-${VERSION}-py3-none-any.whl"
           test -f "dist/steersync-${VERSION}.tar.gz"
           ls -l dist/
@@ -200,6 +267,114 @@ jobs:
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           print-hash: true
-          # A re-run after a failed GitHub release step must not fail on files
-          # that the first run already uploaded.
+          # A re-run after a failed later step must not fail on files that the
+          # first run already uploaded.
           skip-existing: true
+
+  attest:
+    name: Attest the published distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [prepare, publish-pypi]
+    if: needs.prepare.outputs.release == 'true'
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the distribution built by this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Check the built version
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: test -f "dist/steersync-${VERSION}-py3-none-any.whl"
+      - name: Write checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+      - name: Upload distribution
+        # Not "dist": that is the build job's artifact in the same run.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+
+  github-release:
+    name: GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [prepare, attest]
+    if: needs.prepare.outputs.release == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download distribution
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist/
+      - name: Verify checksums
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: Create the annotated tag
+        if: needs.prepare.outputs.tag_exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags" \
+            -f tag="${TAG}" \
+            -f object="${GITHUB_SHA}" \
+            -f type=commit \
+            -f message="steersync ${VERSION}: sync Kiro steering documents with a central git repository. Release assets: wheel, sdist, SHA256SUMS and build provenance." \
+            -f "tagger[name]=github-actions[bot]" \
+            -f "tagger[email]=41898282+github-actions[bot]@users.noreply.github.com" \
+            --jq .sha)"
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${TAG}" -f sha="${tag_sha}" --jq .ref
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 {flag=1; next}
+            /^## \[/ && flag {exit}
+            flag {print}
+          ' CHANGELOG.md > release-notes.md
+          {
+            echo
+            echo "### Install"
+            echo
+            echo '```bash'
+            echo "uv tool install https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/steersync-${VERSION}-py3-none-any.whl"
+            echo '```'
+            echo
+            echo "Verify provenance with \`gh attestation verify steersync-${VERSION}-py3-none-any.whl --repo ${GITHUB_REPOSITORY}\`."
+          } >> release-notes.md
+          if gh release view "${TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "${TAG}" --notes-file release-notes.md --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "${TAG}" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "steersync ${VERSION}" \
+              --notes-file release-notes.md \
+              --verify-tag \
+              --latest
+          fi
+
