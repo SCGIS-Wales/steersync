@@ -6,6 +6,15 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      publish_to_pypi:
+        description: Publish the distribution built by this run to PyPI (Release workflow only).
+        type: boolean
+        default: false
+      version:
+        description: Package version the distribution must carry when publishing.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -154,3 +163,43 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
+
+  publish-pypi:
+    # The PyPI trusted publisher for the steersync project is registered for this
+    # workflow file, so the job that exchanges the OIDC token has to live here. It
+    # only runs when the Release workflow calls CI with publish_to_pypi, after the
+    # build job has twine checked and smoke tested the very files it uploads.
+    name: Publish to PyPI (trusted publishing)
+    if: inputs.publish_to_pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build]
+    environment:
+      name: pypi
+      url: https://pypi.org/project/steersync/${{ inputs.version }}
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distribution
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Check the built version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -z "${VERSION}" ]; then
+            echo "::error::publish_to_pypi needs the version input"
+            exit 1
+          fi
+          test -f "dist/steersync-${VERSION}-py3-none-any.whl"
+          test -f "dist/steersync-${VERSION}.tar.gz"
+          ls -l dist/
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          print-hash: true
+          # A re-run after a failed GitHub release step must not fail on files
+          # that the first run already uploaded.
+          skip-existing: true

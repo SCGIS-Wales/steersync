@@ -7,11 +7,11 @@ name: Release
 #   creates the annotated tag itself, so nobody needs permission to push tags.
 # * Pushing a tag such as v0.1.0 by hand still works; the tag must match the version.
 #
-# Every release runs the full CI gate, builds the wheel and sdist, writes
-# SHA256SUMS, attests build provenance and publishes a GitHub release with the
-# files attached. Publishing to PyPI is optional: set the repository variable
-# PUBLISH_TO_PYPI to "true" after configuring a trusted publisher and a "pypi"
-# environment.
+# Every release runs the full CI gate, which builds the wheel and sdist and
+# publishes them to PyPI through trusted publishing (the publisher on PyPI is
+# registered for ci.yml, so that job lives there). The same files then get
+# SHA256SUMS and build provenance and are attached to a GitHub release, so PyPI
+# and GitHub carry byte identical distributions.
 
 on:
   push:
@@ -28,10 +28,6 @@ permissions:
 concurrency:
   group: release
   cancel-in-progress: false
-
-env:
-  PYTHON_VERSION: "3.14"
-  TWINE_VERSION: "7.0.0"
 
 jobs:
   prepare:
@@ -95,15 +91,19 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   ci:
-    name: CI gate
+    name: CI gate and PyPI publish
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     uses: ./.github/workflows/ci.yml
+    with:
+      publish_to_pypi: true
+      version: ${{ needs.prepare.outputs.version }}
     permissions:
       contents: read
+      id-token: write
 
   build:
-    name: Build and attest
+    name: Attest the published distribution
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [prepare, ci]
@@ -113,18 +113,11 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download the distribution built by the CI gate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          persist-credentials: false
-      - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Build
-        run: uv build
-      - name: Check metadata
-        run: uvx --from "twine==${TWINE_VERSION}" twine check --strict dist/*
+          name: dist
+          path: dist/
       - name: Check the built version
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -139,7 +132,7 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
       - name: Upload distribution
-        # Not "dist": the CI gate uploads an artifact with that name in the same run.
+        # Not "dist": that is the CI gate's artifact in the same run.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-dist
@@ -216,26 +209,3 @@ jobs:
               --latest
           fi
 
-  publish-pypi:
-    name: Publish to PyPI (trusted publishing)
-    if: needs.prepare.outputs.release == 'true' && vars.PUBLISH_TO_PYPI == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: [prepare, build, github-release]
-    environment:
-      name: pypi
-      url: https://pypi.org/project/steersync/${{ needs.prepare.outputs.version }}
-    permissions:
-      id-token: write
-    steps:
-      - name: Download distribution
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release-dist
-          path: dist/
-      - name: Remove non distribution files
-        run: rm -f dist/SHA256SUMS
-      - name: Publish
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          print-hash: true

@@ -38,13 +38,18 @@ Releases are driven by the version number; nobody needs to push tags.
 1. In a pull request, bump `__version__` in `src/steersync/__init__.py` and move the
    Unreleased notes in `CHANGELOG.md` under the new version.
 2. Merge it. The `Release` workflow sees a version with no GitHub release, runs the full CI
-   gate, builds the wheel and sdist, writes `SHA256SUMS`, attests provenance, creates the
-   annotated `vX.Y.Z` tag and publishes the GitHub release with the files attached.
+   gate, which builds the wheel and sdist and publishes them to PyPI, then writes
+   `SHA256SUMS`, attests provenance, creates the annotated `vX.Y.Z` tag and publishes the
+   GitHub release with the same files attached.
 3. To retry a failed release, run the `Release` workflow manually on `main`. A version that is
-   already released is skipped, and a version without a changelog section is refused.
-   Pushing a matching `vX.Y.Z` tag by hand also works.
-4. Optional PyPI publishing: configure a trusted publisher on PyPI for `release.yml` and the
-   `pypi` environment, then set the repository variable `PUBLISH_TO_PYPI` to `true`.
+   already released on GitHub is skipped, files already on PyPI are skipped, and a version
+   without a changelog section is refused. Pushing a matching `vX.Y.Z` tag by hand also works.
+4. PyPI publishing uses [trusted publishing](https://docs.pypi.org/trusted-publishers/): the
+   publisher on PyPI is registered for the repository `SCGIS-Wales/steersync` and the
+   workflow `ci.yml`, with no environment restriction. The publishing job lives in `ci.yml`
+   for that reason and runs only when `release.yml` calls it with `publish_to_pypi`. No API
+   token or secret is stored anywhere. If the publisher is ever re-registered, keep the
+   workflow name `ci.yml` or move the job to the file named on PyPI.
 
 ## Dependency review
 

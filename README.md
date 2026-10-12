@@ -51,7 +51,9 @@ uv tool install "steersync[mcp] @ https://github.com/SCGIS-Wales/steersync/relea
 gh attestation verify "steersync-${VERSION}-py3-none-any.whl" --repo SCGIS-Wales/steersync
 ```
 
-Once the package is published to PyPI, `uv tool install steersync` works as well.
+Every release is also published to [PyPI](https://pypi.org/project/steersync/) through
+trusted publishing, so `uv tool install steersync` (or `steersync[mcp]`) installs the same
+files that the GitHub release carries.
 
 ## Quick start
 

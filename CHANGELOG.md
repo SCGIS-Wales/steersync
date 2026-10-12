@@ -42,6 +42,11 @@ Keep a Changelog and the project uses semantic versioning.
   collection in a single branch and commit.
 - File discovery returns paths sorted by relative path, independent of directory walk order.
 
+- Releases publish to PyPI through trusted publishing. The publishing job lives in `ci.yml`,
+  where the PyPI publisher is registered, and runs when the `Release` workflow calls CI
+  with `publish_to_pypi`; the GitHub release then attests and attaches the very files that
+  went to PyPI instead of building a second time. The `PUBLISH_TO_PYPI` variable is gone.
+
 ### Fixed
 
 - A server that rejects push options also closes the connection, which the retry logic
