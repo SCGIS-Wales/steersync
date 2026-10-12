@@ -44,10 +44,13 @@ Keep a Changelog and the project uses semantic versioning.
   collection in a single branch and commit.
 - File discovery returns paths sorted by relative path, independent of directory walk order.
 
-- Releases publish to PyPI through trusted publishing. The publishing job lives in `ci.yml`,
-  where the PyPI publisher is registered, and runs when the `Release` workflow calls CI
-  with `publish_to_pypi`; the GitHub release then attests and attaches the very files that
-  went to PyPI instead of building a second time. The `PUBLISH_TO_PYPI` variable is gone.
+- Releases publish to PyPI through trusted publishing with PEP 740 attestations. The
+  release jobs now live in `ci.yml`, the workflow the PyPI publisher is registered for, and
+  run after the normal CI jobs on `main` when the package version has no release yet; the
+  separate `Release` workflow is gone. PyPI rejects attestations produced from a reusable
+  workflow, which is why the earlier split between `release.yml` and `ci.yml` could not
+  publish. The GitHub release attests and attaches the very files that went to PyPI
+  instead of building a second time. The `PUBLISH_TO_PYPI` variable is gone.
 
 ### Fixed
 
