@@ -38,12 +38,66 @@ branch:
   hash_length: 8
 
 paths:
-  workspace_steering: .kiro/steering
   workspace_lock: .kiro/steersync.lock.json
   # Resolved against KIRO_HOME when set, else ~/.kiro
-  global_steering: steering
   global_lock: steersync.lock.json
   cache_dir: ~/.cache/steersync
+
+# Collections are the kinds of Kiro content that are synced. Each one maps a
+# workspace directory (relative to the repository root) and, optionally, a global
+# directory (relative to KIRO_HOME, default ~/.kiro) onto a directory in the
+# central repository: global/<central_dir>/ and projects/<slug>/<central_dir>/.
+#
+# include and exclude are glob patterns relative to the collection directory
+# (** spans directories). lint selects the validation profile: steering,
+# markdown, skill, agent, hooks, json or generic. Set enabled: false to switch a
+# collection off, or add a new key to sync something else. Hidden files and
+# directories are never synced.
+collections:
+  steering:
+    description: Kiro steering documents
+    workspace_path: .kiro/steering
+    global_path: steering
+    central_dir: steering
+    include: ["**/*.md"]
+    lint: steering
+  specs:
+    description: Spec driven development plans (requirements, design, tasks)
+    workspace_path: .kiro/specs
+    global_path: null
+    central_dir: specs
+    include: ["**/*.md"]
+    lint: markdown
+  skills:
+    description: Agent Skills (SKILL.md with scripts, references and assets)
+    workspace_path: .kiro/skills
+    global_path: skills
+    central_dir: skills
+    include: ["**/*"]
+    exclude: ["**/__pycache__/**", "**/node_modules/**"]
+    lint: skill
+    max_file_bytes: 1048576
+  agents:
+    description: Custom agent definitions and their prompt files
+    workspace_path: .kiro/agents
+    global_path: agents
+    central_dir: agents
+    include: ["**/*.json", "**/*.md"]
+    lint: agent
+  hooks:
+    description: Standalone Kiro hooks (V3 and IDE 1.0)
+    workspace_path: .kiro/hooks
+    global_path: hooks
+    central_dir: hooks
+    include: ["**/*.json"]
+    lint: hooks
+  settings:
+    description: Workspace settings such as the language server configuration
+    workspace_path: .kiro/settings
+    global_path: null
+    central_dir: settings
+    include: ["lsp.json", "mcp.json"]
+    lint: json
 
 sync:
   # Delete locally managed files that disappeared from the central repository.

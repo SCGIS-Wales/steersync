@@ -5,6 +5,49 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Collections: the whole `.kiro/` layout is synced, not only steering. The packaged defaults
+  define `steering`, `specs`, `skills` (with execute bits preserved on scripts), `agents`,
+  `hooks` and `settings` (`lsp.json`, `mcp.json`); each maps a workspace directory, an
+  optional global directory and a central directory, with include and exclude globs, an
+  optional depth limit, a lint profile and a per collection size limit. Collections are
+  configured in YAML, can be disabled, and new ones need no code.
+- `--collection NAME` (repeatable) on `pull`, `push`, `status` and `lint`, and
+  `steersync config collections` to list the resolved directories. The MCP tools accept a
+  `collections` list.
+- Lint profiles: `markdown`, `skill` (`SKILL.md` must carry `name` and `description`, name
+  should match its directory), `agent`, `hooks` (schema and trigger names), `json` and
+  `generic` (binary assets allowed, secrets still scanned), next to the existing `steering`
+  rules. `steersync lint` validates every collection with its profile; `--profile` applies one
+  to explicit paths.
+- `docs/central-layout.md` describes a full `.kiro/` tree in the central repository.
+
+### Changed
+
+- **Central repository layout.** Each collection lives in its own directory:
+  `global/steering/`, `projects/<slug>/steering/`, `projects/<slug>/specs/` and so on.
+  Repositories created with 0.1 must move their files into `steering/`; `pull` and `status`
+  warn while files are still found directly under `global/` or `projects/<slug>/`.
+- Lock files are version 2 and record hashes per collection. Version 1 files are read as the
+  steering collection and upgraded on the next pull. Pulling a subset of collections keeps the
+  lock entries of the others.
+- `paths.workspace_steering` and `paths.global_steering` are deprecated in favour of
+  `collections.steering.workspace_path` and `collections.steering.global_path`; the old keys
+  still load with a warning.
+- `steersync init` excludes every synced workspace directory from the project repository
+  unless a collection sets `git_exclude: false`.
+- Push plans, JSON output and the MCP results are keyed by collection; push plan paths carry
+  the central directory prefix (`steering/api.md`). One push proposes every selected
+  collection in a single branch and commit.
+- File discovery returns paths sorted by relative path, independent of directory walk order.
+
+### Fixed
+
+- A server that rejects push options also closes the connection, which the retry logic
+  treated as a network fault; each proposal to such a server ran two needless retries with
+  backoff before the push without options. The rejection is now recognised as permanent.
+
 ## [0.1.0] - 2026-10-10
 
 ### Added

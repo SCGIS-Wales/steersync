@@ -35,6 +35,9 @@ _TRANSIENT_RE = re.compile(
     r"|ssh: connect to host|gnutls_handshake|ssl_read|tls connection was non-properly terminated",
     re.IGNORECASE | re.MULTILINE,
 )
+# A server that does not support push options drops the connection, so git also prints
+# "the remote end hung up"; that rejection is permanent and must not be retried.
+_PERMANENT_RE = re.compile(r"push options", re.IGNORECASE)
 
 
 class GitResult(NamedTuple):
@@ -65,6 +68,8 @@ def redact_url(url: str) -> str:
 
 def is_transient(message: str) -> bool:
     """Return True when a git error message looks like a temporary network or server fault."""
+    if _PERMANENT_RE.search(message):
+        return False
     return bool(_TRANSIENT_RE.search(message))
 
 

@@ -27,6 +27,19 @@ branch:
   template: "steering/{project}/{user}-{hash}"
   hash_length: 8
 
+# Collections are merged over the packaged defaults (steering, specs, skills, agents,
+# hooks, settings); list only what differs. See `steersync config default` for every key.
+collections:
+  settings:
+    include: [lsp.json]           # keep mcp.json local to each machine
+  runbooks:
+    description: Operational runbooks shared through the central repository
+    workspace_path: docs/runbooks
+    central_dir: runbooks
+    include: ["**/*.md"]
+    lint: markdown
+    git_exclude: false
+
 sync:
   prune: true
   strict_pull: false

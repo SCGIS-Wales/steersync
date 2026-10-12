@@ -162,3 +162,85 @@ def test_allowed_hosts() -> None:
         validate_remote_url("git@evil.example.com:a/b.git", allowed_hosts=("gitlab.example.com",))
     assert remote_host("https://GitLab.Example.com/a/b.git") == "gitlab.example.com"
     assert remote_host("git@gitlab.example.com:a/b.git") == "gitlab.example.com"
+
+
+def test_collections_defaults_and_overrides(env: dict[str, str], tmp_path: Path) -> None:
+    default = load_config(env=env)
+    assert list(default.collections) == [
+        "steering",
+        "specs",
+        "skills",
+        "agents",
+        "hooks",
+        "settings",
+    ]
+    assert default.collections["steering"].lint == "steering"
+    assert default.collections["specs"].global_path is None
+    assert default.collections["skills"].max_file_bytes == 1_048_576
+    path = tmp_path / "c.yaml"
+    path.write_text(
+        "collections:\n"
+        "  steering:\n    include: ['**/*.md', '**/*.markdown']\n"
+        "  specs:\n    enabled: false\n"
+        "  runbooks:\n    workspace_path: docs/runbooks\n    lint: markdown\n"
+    )
+    config = load_config(env=env, explicit=path)
+    assert config.collections["steering"].include == ("**/*.md", "**/*.markdown")
+    assert config.collections["steering"].global_path == "steering"
+    assert "specs" not in config.enabled_collections()
+    assert config.collections["runbooks"].central_dir == "runbooks"
+    assert list(config.select_collections(["runbooks", "steering"])) == ["runbooks", "steering"]
+    assert list(config.select_collections(None)) == list(config.enabled_collections())
+    with pytest.raises(ConfigError, match="disabled"):
+        config.select_collections(["specs"])
+    with pytest.raises(ConfigError, match="unknown"):
+        config.select_collections(["missing"])
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "collections:\n  Bad Name:\n    workspace_path: x\n",
+        "collections:\n  nowhere:\n    lint: generic\n",
+        "collections:\n  dup:\n    workspace_path: .kiro/steering\n",
+        "collections:\n  dup:\n    workspace_path: other\n    central_dir: steering\n",
+        "collections:\n  dup:\n    global_path: skills\n",
+        "collections:\n  esc:\n    workspace_path: ../outside\n",
+        "collections:\n  abs:\n    workspace_path: /abs\n",
+        "collections:\n  pat:\n    workspace_path: x\n    include: ['/abs/**']\n",
+        "collections:\n  pat:\n    workspace_path: x\n    include: ['../**']\n",
+        "collections:\n  pat:\n    workspace_path: x\n    include: []\n",
+        "collections:\n  pat:\n    workspace_path: x\n    lint: nope\n",
+        "collections:\n  pat:\n    workspace_path: x\n    bogus: 1\n",
+        "collections:\n  steering:\n    max_depth: 0\n",
+    ],
+)
+def test_invalid_collections_are_rejected(env: dict[str, str], tmp_path: Path, text: str) -> None:
+    path = tmp_path / "c.yaml"
+    path.write_text(text)
+    with pytest.raises(ConfigError):
+        load_config(env=env, explicit=path)
+
+
+def test_disabled_collections_may_share_paths(env: dict[str, str], tmp_path: Path) -> None:
+    path = tmp_path / "c.yaml"
+    path.write_text(
+        "collections:\n  steering:\n    enabled: false\n"
+        "  rules:\n    workspace_path: .kiro/steering\n    central_dir: steering\n    lint: steering\n"
+    )
+    config = load_config(env=env, explicit=path)
+    assert "steering" not in config.enabled_collections()
+    assert config.enabled_collections()["rules"].workspace_path == ".kiro/steering"
+
+
+def test_legacy_path_keys_map_to_steering_collection(
+    env: dict[str, str], tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "c.yaml"
+    path.write_text("paths:\n  workspace_steering: kiro/rules\n  global_steering: rules\n")
+    with caplog.at_level("WARNING", logger="steersync.config"):
+        config = load_config(env=env, explicit=path)
+    assert config.collections["steering"].workspace_path == "kiro/rules"
+    assert config.collections["steering"].global_path == "rules"
+    assert config.collections["specs"].workspace_path == ".kiro/specs"
+    assert any("deprecated" in record.message for record in caplog.records)

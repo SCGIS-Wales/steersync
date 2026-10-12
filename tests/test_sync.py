@@ -9,22 +9,38 @@ from steersync import gitops, paths, sync
 from steersync.config import Config, load_config
 from steersync.errors import ConfigError, LintError, SyncConflictError
 from steersync.paths import global_lock_path, global_steering_dir, workspace_lock_path
-from tests.conftest import GLOBAL_DOC, PROJECT_DOC, PROJECT_SLUG, CentralCommit, git
+from tests.conftest import (
+    GLOBAL_DOC,
+    PROJECT_DOC,
+    PROJECT_SLUG,
+    CentralCommit,
+    central_global,
+    central_project,
+    git,
+)
 
 
 def test_pull_applies_global_and_workspace(
     config: Config, env: dict[str, str], project: Path, central: Path
 ) -> None:
     result = sync.pull(config, workspace_root=project, env=env)
-    assert {s.scope for s in result.scopes} == {"global", "workspace"}
+    assert {r.scope for r in result.results} == {"global", "workspace"}
+    assert {r.collection for r in result.results if r.scope == "global"} == {
+        "steering",
+        "skills",
+        "agents",
+        "hooks",
+    }
     assert (global_steering_dir(config, env) / "rules.md").read_text() == GLOBAL_DOC
     assert (project / ".kiro" / "steering" / "python.md").read_text() == PROJECT_DOC
     assert result.change_count == 2
     assert not result.conflicts
     lock = json.loads(workspace_lock_path(config, project).read_text())
     assert lock["commit"] == result.commit
-    assert "python.md" in lock["files"]
-    assert json.loads(global_lock_path(config, env).read_text())["files"].keys() == {"rules.md"}
+    assert "python.md" in lock["collections"]["steering"]["files"]
+    assert lock["collections"]["specs"]["files"] == {}
+    global_lock = json.loads(global_lock_path(config, env).read_text())
+    assert global_lock["collections"]["steering"]["files"].keys() == {"rules.md"}
     again = sync.pull(config, workspace_root=project, env=env)
     assert again.change_count == 0
 
@@ -33,8 +49,9 @@ def test_pull_dry_run_and_scopes(
     config: Config, env: dict[str, str], project: Path, central: Path
 ) -> None:
     result = sync.pull(config, workspace_root=project, env=env, dry_run=True, include_global=False)
-    assert [s.scope for s in result.scopes] == ["workspace"]
-    assert result.scopes[0].plan.add == ("python.md",)
+    assert {r.scope for r in result.results} == {"workspace"}
+    assert result.results[0].collection == "steering"
+    assert result.results[0].plan.add == ("python.md",)
     assert not (project / ".kiro" / "steering").exists()
     assert not workspace_lock_path(config, project).exists()
 
@@ -43,10 +60,10 @@ def test_pull_without_workspace_or_origin(
     config: Config, env: dict[str, str], project: Path, central: Path
 ) -> None:
     result = sync.pull(config, workspace_root=None, env=env)
-    assert [s.scope for s in result.scopes] == ["global"]
+    assert {r.scope for r in result.results} == {"global"}
     git("remote", "remove", "origin", cwd=project, env=env)
     result = sync.pull(config, workspace_root=project, env=env, include_global=False)
-    assert result.scopes == ()
+    assert result.results == ()
     with_url = sync.pull(
         config,
         workspace_root=project,
@@ -54,7 +71,7 @@ def test_pull_without_workspace_or_origin(
         include_global=False,
         remote_url="git@h:acme/platform/api.git",
     )
-    assert with_url.scopes[0].plan.add == ("python.md",)
+    assert with_url.results[0].plan.add == ("python.md",)
 
 
 def test_pull_keeps_local_edits_unless_forced(
@@ -63,16 +80,16 @@ def test_pull_keeps_local_edits_unless_forced(
     sync.pull(config, workspace_root=project, env=env)
     local = project / ".kiro" / "steering" / "python.md"
     local.write_text("# Mine\n")
-    central_commit(lambda w: (w / "projects" / PROJECT_SLUG / "python.md").write_text("# Theirs\n"))
+    central_commit(lambda w: (central_project(w) / "python.md").write_text("# Theirs\n"))
     result = sync.pull(config, workspace_root=project, env=env, include_global=False)
-    assert result.conflicts == ("workspace:python.md",)
+    assert result.conflicts == ("workspace:steering:python.md",)
     assert local.read_text() == "# Mine\n"
     with pytest.raises(SyncConflictError):
         sync.raise_on_conflicts(result)
     again = sync.pull(config, workspace_root=project, env=env, include_global=False)
-    assert again.conflicts == ("workspace:python.md",)
+    assert again.conflicts == ("workspace:steering:python.md",)
     forced = sync.pull(config, workspace_root=project, env=env, include_global=False, force=True)
-    assert forced.conflicts == ("workspace:python.md",)
+    assert forced.conflicts == ("workspace:steering:python.md",)
     assert local.read_text() == "# Theirs\n"
     assert (
         sync.pull(config, workspace_root=project, env=env, include_global=False).change_count == 0
@@ -95,30 +112,30 @@ def test_pull_prunes_removed_files_and_updates(
     local_only.write_text("# Local\n")
 
     def mutate(work: Path) -> None:
-        (work / "projects" / PROJECT_SLUG / "python.md").unlink()
-        (work / "projects" / PROJECT_SLUG / "team" / "style.md").parent.mkdir(parents=True)
-        (work / "projects" / PROJECT_SLUG / "team" / "style.md").write_text("# Style\n")
-        (work / "global" / "rules.md").write_text("# Global rules\n\nUpdated.\n")
+        (central_project(work) / "python.md").unlink()
+        (central_project(work) / "team" / "style.md").parent.mkdir(parents=True)
+        (central_project(work) / "team" / "style.md").write_text("# Style\n")
+        (central_global(work) / "rules.md").write_text("# Global rules\n\nUpdated.\n")
 
     central_commit(mutate, "restructure")
     result = sync.pull(config, workspace_root=project, env=env)
-    ws = next(s for s in result.scopes if s.scope == "workspace")
+    ws = next(r for r in result.results if r.scope == "workspace" and r.collection == "steering")
     assert ws.plan.delete == ("python.md",)
     assert ws.plan.add == ("team/style.md",)
     assert ws.plan.local_only == ("local.md",)
     assert not (project / ".kiro" / "steering" / "python.md").exists()
     assert (project / ".kiro" / "steering" / "team" / "style.md").exists()
     assert local_only.exists()
-    gl = next(s for s in result.scopes if s.scope == "global")
+    gl = next(r for r in result.results if r.scope == "global" and r.collection == "steering")
     assert gl.plan.update == ("rules.md",)
     no_prune_file = tmp_path / "np.yaml"
     no_prune_file.write_text(
         f"remote:\n  url: {central}\n  allow_local: true\npaths:\n  cache_dir: {tmp_path / 'cache'}\nsync:\n  prune: false\n"
     )
     no_prune = load_config(env=env, explicit=no_prune_file)
-    central_commit(lambda w: (w / "projects" / PROJECT_SLUG / "team" / "style.md").unlink(), "drop")
+    central_commit(lambda w: (central_project(w) / "team" / "style.md").unlink(), "drop")
     result = sync.pull(no_prune, workspace_root=project, env=env, include_global=False)
-    assert result.scopes[0].plan.delete == ()
+    assert result.results[0].plan.delete == ()
     assert (project / ".kiro" / "steering" / "team" / "style.md").exists()
 
 
@@ -126,10 +143,10 @@ def test_pull_strict_rejects_bad_remote_content(
     config: Config, env: dict[str, str], project: Path, central: Path, central_commit: CentralCommit
 ) -> None:
     central_commit(
-        lambda w: (w / "global" / "bad.md").write_text("---\ninclusion: nope\n---\n# Bad\n")
+        lambda w: (central_global(w) / "bad.md").write_text("---\ninclusion: nope\n---\n# Bad\n")
     )
     result = sync.pull(config, workspace_root=None, env=env)
-    assert not result.scopes[0].lint.ok
+    assert not result.results[0].lint.ok
     assert (global_steering_dir(config, env) / "bad.md").exists()
     with pytest.raises(LintError):
         sync.pull(config, workspace_root=None, env=env, strict=True)
@@ -151,7 +168,7 @@ def test_push_creates_branch_then_dedupes(
     assert dry.status == "dry-run"
     assert dry.branch
     assert dry.plan is not None
-    assert dry.plan.add == ("api.md",)
+    assert dry.plan.add == ("steering/api.md",)
     git_env = gitops.git_environment(env)
     assert not gitops.remote_branch_exists(config, str(central), dry.branch, env=git_env)
 
@@ -165,7 +182,7 @@ def test_push_creates_branch_then_dedupes(
     show = git("show", "--stat", "--format=%an <%ae>%n%s", pushed.branch, cwd=central, env=env)
     assert "Test User <test.user@example.com>" in show
     assert f"steering: update {PROJECT_SLUG} from test.user" in show
-    assert f"projects/{PROJECT_SLUG}/api.md" in show
+    assert f"projects/{PROJECT_SLUG}/steering/api.md" in show
     assert "python.md" not in git(
         "ls-tree",
         "-r",
@@ -176,6 +193,9 @@ def test_push_creates_branch_then_dedupes(
         cwd=central,
         env=env,
     )
+    assert pushed.collections == ("steering", "specs", "skills", "agents", "hooks", "settings")
+    assert pushed.plan is not None
+    assert pushed.plan.add == ("steering/api.md",)
 
     again = sync.push(config, workspace_root=project, env=env)
     assert again.status == "already-proposed"
@@ -221,7 +241,7 @@ def test_push_global_scope(
     assert result.project == "global"
     assert result.branch
     assert result.branch.startswith("steering/global/")
-    assert "global/rules.md" in git("show", "--stat", result.branch, cwd=central, env=env)
+    assert "global/steering/rules.md" in git("show", "--stat", result.branch, cwd=central, env=env)
 
 
 def test_push_lint_gate(config: Config, env: dict[str, str], project: Path, central: Path) -> None:
@@ -280,9 +300,10 @@ def test_status(config: Config, env: dict[str, str], project: Path, central: Pat
     assert result.project == PROJECT_SLUG
     assert result.remote_commit
     assert result.workspace is not None
-    assert result.workspace.delete == ("python.md",)
-    assert result.global_ is not None
-    assert result.global_.add == ("rules.md",)
+    assert result.workspace["steering"].delete == ("python.md",)
+    assert result.workspace["specs"].is_empty
+    assert result.global_["steering"].add == ("rules.md",)
+    assert "specs" not in result.global_
     assert result.lint is not None
     assert result.lint.checked == 0
     no_ws = sync.status(config, workspace_root=None, env=env, run_lint=False)

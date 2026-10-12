@@ -1,7 +1,7 @@
 # Hook definitions consumed by projects that add steersync to their .pre-commit-config.yaml.
 - id: steersync-push
-  name: steersync push (.kiro/steering to central repository)
-  description: Propose workspace steering to the central repository before a push. Never blocks the push unless STEERSYNC_STRICT=1.
+  name: steersync push (.kiro collections to central repository)
+  description: Propose the workspace .kiro collections (steering, specs, skills, agents, hooks, settings) to the central repository before a push. Never blocks the push unless STEERSYNC_STRICT=1.
   entry: steersync push --from-hook
   language: python
   stages: [pre-push]
@@ -9,10 +9,10 @@
   always_run: true
   minimum_pre_commit_version: "3.2.0"
 - id: steersync-lint
-  name: steersync lint (.kiro/steering)
-  description: Validate steering front matter, size, references and secrets.
+  name: steersync lint (.kiro collections)
+  description: Validate steering front matter, skill metadata, hook and agent JSON, references and secrets.
   entry: steersync lint
   language: python
-  files: ^\.kiro/steering/.*\.md$
+  files: ^\.kiro/
   pass_filenames: true
   minimum_pre_commit_version: "3.2.0"

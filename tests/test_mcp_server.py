@@ -20,19 +20,20 @@ def in_project(
 def test_tools_round_trip(in_project: Path) -> None:
     pulled = mcp_server.pull_steering()
     assert pulled["ok"]
-    assert pulled["scopes"]["workspace"]["plan"]["add"] == ["python.md"]
+    assert pulled["scopes"]["workspace"]["steering"]["plan"]["add"] == ["python.md"]
     (in_project / ".kiro" / "steering" / "api.md").write_text("# API\n\nRules.\n")
     diff = mcp_server.diff_steering(str(in_project))
     assert diff["ok"]
     assert diff["project"] == PROJECT_SLUG
-    assert diff["workspace"]["add"] == ["api.md"]
+    assert diff["workspace"]["steering"]["add"] == ["api.md"]
     lint = mcp_server.lint_steering()
     assert lint["ok"]
     assert lint["checked"] == 2
     pushed = mcp_server.push_steering(dry_run=True)
     assert pushed["ok"]
     assert pushed["status"] == "dry-run"
-    assert pushed["plan"]["add"] == ["api.md"]
+    assert pushed["plan"]["add"] == ["steering/api.md"]
+    assert pushed["collections"] == ["steering", "specs", "skills", "agents", "hooks", "settings"]
     assert mcp_server.push_steering(message="via mcp")["status"] == "pushed"
 
 

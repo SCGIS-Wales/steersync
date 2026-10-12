@@ -16,7 +16,7 @@ CHAINED_SUFFIX = ".local"
 
 PRE_PUSH_TEMPLATE = """#!/bin/sh
 {marker} (do not edit; reinstall with `steersync install-hook --force`)
-# Chains to {chained} when present, then proposes .kiro/steering to the central repository.
+# Chains to {chained} when present, then proposes the .kiro collections to the central repository.
 set -u
 hook_dir=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp "${{TMPDIR:-/tmp}}/steersync-prepush.XXXXXX") || exit 1

@@ -128,3 +128,109 @@ def test_lint_paths_and_report(config: Config, tmp_path: Path) -> None:
 
 def test_lint_config_defaults() -> None:
     assert LintConfig().max_file_bytes == 65536
+
+
+def profile_rules(config: Config, name: str, profile: str, text: str | bytes) -> set[str]:
+    raw = text.encode("utf-8") if isinstance(text, str) else text
+    return rules(lint_document(document_from_bytes(name, raw), config.lint, profile=profile))  # type: ignore[arg-type]
+
+
+def test_markdown_profile(config: Config) -> None:
+    assert profile_rules(config, "specs/design.md", "markdown", "# Design\n\nText.\n") == set()
+    assert profile_rules(config, "specs/design.md", "markdown", "no heading\n") == set()
+    assert "forbidden-aws-access-key" in profile_rules(
+        config, "specs/x.md", "markdown", "# T\n\nAKIAIOSFODNN7EXAMPLE\n"
+    )
+    assert "encoding-utf8" in profile_rules(config, "specs/x.md", "markdown", b"\xff\xfe")
+    assert profile_rules(config, "specs/diagram.png", "markdown", b"\x89PNG\xff") == set()
+    assert "inclusion-value" not in profile_rules(
+        config, "specs/x.md", "markdown", "---\ninclusion: nope\n---\n# T\n"
+    )
+
+
+def test_skill_profile(config: Config) -> None:
+    good = "---\nname: venafi\ndescription: Venafi runbook\n---\n# Venafi\n\nSteps.\n"
+    assert profile_rules(config, "venafi/SKILL.md", "skill", good) == set()
+    assert "skill-name-mismatch" in profile_rules(config, "other/SKILL.md", "skill", good)
+    assert "skill-front-matter-required" in profile_rules(
+        config, "venafi/SKILL.md", "skill", "# No front matter\n"
+    )
+    assert "skill-front-matter-required" in profile_rules(
+        config, "venafi/SKILL.md", "skill", "\n---\nname: venafi\ndescription: d\n---\n# T\n"
+    )
+    assert "front-matter-yaml" in profile_rules(
+        config, "venafi/SKILL.md", "skill", "---\nname: [\n---\n# T\n"
+    )
+    found = profile_rules(config, "venafi/SKILL.md", "skill", "---\nname: venafi\n---\n# T\n")
+    assert "skill-requires-metadata" in found
+    assert "encoding-utf8" in profile_rules(config, "venafi/SKILL.md", "skill", b"\xff")
+    assert profile_rules(config, "venafi/scripts/run.sh", "skill", "#!/bin/sh\necho hi\n") == set()
+    assert "forbidden-github-token" in profile_rules(
+        config, "venafi/scripts/run.sh", "skill", "TOKEN=ghp_" + "a" * 36 + "\n"
+    )
+    assert profile_rules(config, "venafi/assets/logo.png", "skill", b"\x89PNG\x00\xff") == set()
+    assert profile_rules(config, "venafi/references/r.md", "skill", "# Ref\n\nBody.\n") == set()
+
+
+def test_json_and_hooks_profiles(config: Config) -> None:
+    assert profile_rules(config, "lsp.json", "json", '{"languages": {}}\n') == set()
+    assert "json-syntax" in profile_rules(config, "lsp.json", "json", "{nope")
+    assert "encoding-utf8" in profile_rules(config, "lsp.json", "json", b"\xff")
+    assert profile_rules(config, "notes.txt", "json", "{nope") == set()
+    assert "forbidden-github-token" in profile_rules(
+        config, "mcp.json", "json", '{"env": {"GITHUB_TOKEN": "ghp_' + "a" * 36 + '"}}'
+    )
+    hook = '{"version": "v1", "hooks": [{"name": "t", "trigger": "Stop", "action": {"type": "command", "command": "x"}}]}'
+    assert profile_rules(config, "h.json", "hooks", hook) == set()
+    assert "json-syntax" in profile_rules(config, "h.json", "hooks", "{")
+    assert "hook-schema" in profile_rules(config, "h.json", "hooks", '{"hooks": {}}')
+    assert "hook-schema" in profile_rules(config, "h.json", "hooks", "[]")
+    assert "hook-schema" in profile_rules(
+        config, "h.json", "hooks", '{"version": "v1", "hooks": [1]}'
+    )
+    found = profile_rules(
+        config,
+        "h.json",
+        "hooks",
+        '{"version": "v2", "hooks": [{"name": "t", "trigger": "onStop", "action": {"type": "shell"}}]}',
+    )
+    assert {"hook-schema", "hook-trigger", "hook-action"} <= found
+    assert profile_rules(config, "README.md", "hooks", "# Hooks\n") == set()
+
+
+def test_agent_and_generic_profiles(config: Config) -> None:
+    assert profile_rules(config, "entra.json", "agent", '{"name": "entra"}') == set()
+    assert "agent-name" in profile_rules(config, "entra.json", "agent", '{"description": "x"}')
+    assert "agent-schema" in profile_rules(config, "entra.json", "agent", "[]")
+    assert "agent-deprecated-key" in profile_rules(
+        config, "entra.json", "agent", '{"name": "e", "toolsSettings": {}}'
+    )
+    assert "json-syntax" in profile_rules(config, "entra.json", "agent", "{")
+    assert "encoding-utf8" in profile_rules(config, "entra.json", "agent", b"\xff")
+    assert profile_rules(config, "prompts/entra.md", "agent", "# Prompt\n\nText.\n") == set()
+    assert profile_rules(config, "notes.txt", "agent", "anything") == set()
+    assert profile_rules(config, "blob.bin", "generic", b"\x00\xff") == set()
+    assert "forbidden-private-key" in profile_rules(
+        config, "key.txt", "generic", "-----BEGIN RSA PRIVATE KEY-----\n"
+    )
+
+
+def test_size_limit_override_and_report_helpers(config: Config) -> None:
+    from steersync.lint import LintReport, merge_reports, prefix_report
+
+    big = b"x" * 2048
+    assert "max-size" in rules(
+        lint_document(
+            document_from_bytes("a.bin", big), config.lint, profile="generic", max_file_bytes=1024
+        )
+    )
+    assert "max-size" not in rules(
+        lint_document(document_from_bytes("a.bin", big), config.lint, profile="generic")
+    )
+    report = lint_snapshot({"x.md": b"no heading\n"}, config.lint, profile="steering")
+    prefixed = prefix_report(report, ".kiro/steering/")
+    assert prefixed.findings[0].path == ".kiro/steering/x.md"
+    assert prefix_report(report, "") is report
+    merged = merge_reports([report, prefixed, LintReport((), 2)])
+    assert merged.checked == 4
+    assert len(merged.findings) == 2
