@@ -102,7 +102,7 @@ projects/acme/platform/entra-app-registration/
 
 ### Flow
 
-The numbers match the diagram.
+The diagram shows the loop; these are its steps.
 
 1. **Install and configure, once per machine.** `uv tool install steersync`, then write
    `~/.config/steersync/config.yaml` with `remote.url` and `remote.allowed_hosts`, and run
