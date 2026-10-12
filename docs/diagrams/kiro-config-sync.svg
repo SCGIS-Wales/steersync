@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="980" viewBox="0 0 1500 980" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
+<title>steersync: central Kiro configuration sync between a project and GitLab</title>
+<defs>
+<marker id="m_arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#1F8A70"/></marker>
+<marker id="m_arrow_git" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#4A77B4"/></marker>
+<marker id="m_arrow_review" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#D8732E"/></marker>
+<marker id="m_arrow_kiro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7A5AB8"/></marker>
+</defs>
+<rect width="1500" height="980" fill="#FFFFFF"/>
+<text x="30" y="38" font-size="22" font-weight="700" fill="#1F2933">steersync: central Kiro configuration for entra-app-registration</text>
+<text x="30" y="58" font-size="13" fill="#52606D">High level flow between a developer workstation, the project repository and the central kiro-config repository on GitLab</text>
+<rect id="lane_ws" x="30" y="70" width="760" height="720" rx="10" fill="#EEF4FB" stroke="#9DB7D5" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="44" y="94" font-size="16" font-weight="700" fill="#9DB7D5">Developer workstation</text>
+<rect id="lane_gl" x="850" y="70" width="620" height="720" rx="10" fill="#FDF1E7" stroke="#E0A878" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="864" y="94" font-size="16" font-weight="700" fill="#E0A878">GitLab</text>
+<rect id="kiro" x="60" y="110" width="640" height="95" rx="8" fill="#F3EEFB" stroke="#7A5AB8" stroke-width="1.5"/>
+<text x="72" y="132" font-size="14" font-weight="700" fill="#1F2933">Kiro CLI (agent sessions)</text>
+<line x1="72" y1="140" x2="688" y2="140" stroke="#7A5AB8" stroke-opacity="0.5"/>
+<text x="72" y="158" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">loads steering, specs, skills, agents, hooks and settings from .kiro/ and ~/.kiro/</text>
+<text x="72" y="175" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">SessionStart hook runs steersync pull; the MCP server exposes pull, push, diff and lint</text>
+<rect id="proj" x="60" y="245" width="330" height="195" rx="8" fill="#FFFFFF" stroke="#4A77B4" stroke-width="1.5"/>
+<text x="72" y="267" font-size="14" font-weight="700" fill="#1F2933">Project clone: entra-app-registration</text>
+<line x1="72" y1="275" x2="378" y2="275" stroke="#4A77B4" stroke-opacity="0.5"/>
+<text x="72" y="293" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">Application code (Groovy plugins, Terraform)</text>
+<text x="72" y="310" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">.kiro/steering/   specs/   skills/</text>
+<text x="72" y="327" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">.kiro/agents/     hooks/   settings/</text>
+<text x="72" y="344" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">.kiro/steersync.lock.json</text>
+<text x="72" y="361" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">(hash of every synced file, per collection)</text>
+<text x="72" y="395" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">.kiro/ is in .git/info/exclude, so it is never</text>
+<text x="72" y="412" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">committed to the project repository</text>
+<rect id="home" x="420" y="245" width="280" height="130" rx="8" fill="#FFFFFF" stroke="#4A77B4" stroke-width="1.5"/>
+<text x="432" y="267" font-size="14" font-weight="700" fill="#1F2933">Global Kiro home: ~/.kiro/</text>
+<line x1="432" y1="275" x2="688" y2="275" stroke="#4A77B4" stroke-opacity="0.5"/>
+<text x="432" y="293" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">steering/  skills/  agents/  hooks/</text>
+<text x="432" y="310" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">steersync.lock.json</text>
+<text x="432" y="327" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">applied to every workspace</text>
+<rect id="ss" x="60" y="490" width="640" height="150" rx="8" fill="#E6F4F1" stroke="#1F8A70" stroke-width="1.5"/>
+<text x="72" y="512" font-size="14" font-weight="700" fill="#1F2933">steersync CLI  (uv tool install steersync)</text>
+<line x1="72" y1="520" x2="688" y2="520" stroke="#1F8A70" stroke-opacity="0.5"/>
+<text x="72" y="538" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">config: ~/.config/steersync/config.yaml  (remote.url, allowed_hosts, collections)</text>
+<text x="72" y="555" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">cache clone: ~/.cache/steersync/repos/&lt;sha&gt;  (shallow, locked, git hooks disabled)</text>
+<text x="72" y="572" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">lints each collection with its profile, plans add / update / delete / conflict per file</text>
+<text x="72" y="589" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">shells out to the git binary: the SSH agent or credential helper does the authentication</text>
+<rect id="hook" x="60" y="680" width="330" height="90" rx="8" fill="#FFFFFF" stroke="#4A77B4" stroke-width="1.5"/>
+<text x="72" y="702" font-size="14" font-weight="700" fill="#1F2933">git pre-push hook  (steersync init --hook)</text>
+<line x1="72" y1="710" x2="378" y2="710" stroke="#4A77B4" stroke-opacity="0.5"/>
+<text x="72" y="728" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">runs steersync push --from-hook on each push</text>
+<text x="72" y="745" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">never blocks the push unless strict mode is on</text>
+<rect id="dev" x="420" y="680" width="280" height="90" rx="8" fill="#FFFBE6" stroke="#C9A227" stroke-width="1.5"/>
+<text x="432" y="702" font-size="14" font-weight="700" fill="#1F2933">Developer</text>
+<line x1="432" y1="710" x2="688" y2="710" stroke="#C9A227" stroke-opacity="0.5"/>
+<text x="432" y="728" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">edits .kiro/ while working with Kiro</text>
+<text x="432" y="745" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">git push  |  steersync push  |  steersync pull</text>
+<rect id="projrepo" x="880" y="110" width="560" height="95" rx="8" fill="#FFFFFF" stroke="#D8732E" stroke-width="1.5"/>
+<text x="892" y="132" font-size="14" font-weight="700" fill="#1F2933">Project repository: acme/platform/entra-app-registration</text>
+<line x1="892" y1="140" x2="1428" y2="140" stroke="#D8732E" stroke-opacity="0.5"/>
+<text x="892" y="158" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">application code only, with the service&#x27;s own CI/CD</text>
+<text x="892" y="175" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">the origin URL gives the project slug used in the central repository</text>
+<rect id="central" x="880" y="245" width="560" height="315" rx="8" fill="#FFFFFF" stroke="#D8732E" stroke-width="1.5"/>
+<text x="892" y="267" font-size="14" font-weight="700" fill="#1F2933">Central repository: platform/kiro-config</text>
+<line x1="892" y1="275" x2="1428" y2="275" stroke="#D8732E" stroke-opacity="0.5"/>
+<text x="892" y="293" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">main</text>
+<text x="892" y="310" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">  global/steering/   global/skills/   global/agents/   global/hooks/</text>
+<text x="892" y="327" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">  projects/acme/platform/entra-app-registration/</text>
+<text x="892" y="344" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">      steering/  specs/  skills/  agents/  hooks/  settings/</text>
+<text x="892" y="378" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">proposal branch  steering/&lt;project&gt;/&lt;user&gt;-&lt;hash&gt;</text>
+<text x="892" y="395" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">  one commit carrying every changed collection</text>
+<text x="892" y="412" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">  git push options open the merge request automatically</text>
+<text x="892" y="446" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">merge request: reviewed like code, then merged to main</text>
+<text x="892" y="463" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">the project slug and the collection directories make the diff self explanatory</text>
+<rect id="reviewer" x="880" y="680" width="560" height="90" rx="8" fill="#FFFBE6" stroke="#C9A227" stroke-width="1.5"/>
+<text x="892" y="702" font-size="14" font-weight="700" fill="#1F2933">Reviewers (platform and security owners)</text>
+<line x1="892" y1="710" x2="1428" y2="710" stroke="#C9A227" stroke-opacity="0.5"/>
+<text x="892" y="728" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">review the proposal like any code change</text>
+<text x="892" y="745" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#52606D" xml:space="preserve">after the merge, every workstation receives it on its next steersync pull</text>
+<rect id="legend" x="30" y="820" width="1440" height="140" rx="8" fill="#FFFBE6" stroke="#C9A227" stroke-width="1.5"/>
+<text x="42" y="842" font-size="14" font-weight="700" fill="#1F2933">Tooling and commands, in order</text>
+<line x1="42" y1="850" x2="1458" y2="850" stroke="#C9A227" stroke-opacity="0.5"/>
+<text x="42" y="868" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">1  uv tool install steersync;  write ~/.config/steersync/config.yaml (remote.url, allowed_hosts);  steersync config validate;  steersync doctor</text>
+<text x="42" y="885" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">2  cd entra-app-registration;  steersync init --hook;  steersync kiro-hook --write;  steersync mcp-config  (into .kiro/settings/mcp.json)</text>
+<text x="42" y="902" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">3  steersync pull  (every collection, or -c steering -c skills);  steersync status;  steersync lint</text>
+<text x="42" y="919" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">4  edit .kiro/ ...;  git push  (the pre-push hook runs steersync push --from-hook)  or  steersync push -m &quot;...&quot;  -&gt;  merge request in kiro-config</text>
+<text x="42" y="936" font-family="JetBrains Mono, Menlo, Consolas, monospace" font-size="12" fill="#52606D" xml:space="preserve">5  review and merge in GitLab  -&gt;  every workstation receives the change on its next steersync pull (session start, pre-push, manual or scheduled)</text>
+<path id="e_kiro_proj" d="M 160 205 L 160 245" fill="none" stroke="#7A5AB8" stroke-width="2" marker-end="url(#m_arrow_kiro)"/>
+<rect x="166" y="217" width="87" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="166" y="229" font-size="11.5" fill="#7A5AB8" text-anchor="start">loads .kiro/</text>
+<path id="e_kiro_home" d="M 560 205 L 560 245" fill="none" stroke="#7A5AB8" stroke-width="2" marker-end="url(#m_arrow_kiro)"/>
+<rect x="566" y="217" width="100" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="566" y="229" font-size="11.5" fill="#7A5AB8" text-anchor="start">loads ~/.kiro/</text>
+<path id="e_kiro_ss" d="M 60 160 L 45 160 L 45 600 L 60 600" fill="none" stroke="#7A5AB8" stroke-width="2" marker-end="url(#m_arrow_kiro)"/>
+<g transform="translate(52 390) rotate(-90)"><rect x="-152" y="-12" width="304" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/><text font-size="11.5" fill="#7A5AB8" text-anchor="middle">SessionStart hook and MCP tools call steersync</text></g>
+<circle cx="46" cy="160" r="9" fill="#7A5AB8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="46" y="164" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<path id="e_proj_ss" d="M 140 440 L 140 490" fill="none" stroke="#1F8A70" stroke-width="2" marker-end="url(#m_arrow)"/>
+<rect x="146" y="457" width="151" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="146" y="469" font-size="11.5" fill="#1F8A70" text-anchor="start">snapshot + lint .kiro/</text>
+<circle cx="140" cy="454" r="9" fill="#1F8A70" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="140" y="458" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+<path id="e_ss_proj" d="M 330 490 L 330 440" fill="none" stroke="#1F8A70" stroke-width="2" marker-end="url(#m_arrow)"/>
+<rect x="336" y="457" width="202" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="336" y="469" font-size="11.5" fill="#1F8A70" text-anchor="start">write, prune, keep local edits</text>
+<circle cx="330" cy="476" r="9" fill="#1F8A70" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="330" y="480" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<path id="e_home_ss" d="M 520 375 L 520 490" fill="none" stroke="#1F8A70" stroke-width="2" marker-end="url(#m_arrow)"/>
+<rect x="393" y="420" width="119" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="512" y="432" font-size="11.5" fill="#1F8A70" text-anchor="end">snapshot ~/.kiro/</text>
+<path id="e_ss_home" d="M 640 490 L 640 375" fill="none" stroke="#1F8A70" stroke-width="2" marker-end="url(#m_arrow)"/>
+<rect x="646" y="424" width="164" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="646" y="436" font-size="11.5" fill="#1F8A70" text-anchor="start">write global collections</text>
+<circle cx="640" cy="476" r="9" fill="#1F8A70" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="640" y="480" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<path id="e_hook_ss" d="M 225 680 L 225 640" fill="none" stroke="#1F8A70" stroke-width="2" marker-end="url(#m_arrow)"/>
+<rect x="231" y="652" width="176" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="231" y="664" font-size="11.5" fill="#1F8A70" text-anchor="start">steersync push --from-hook</text>
+<path id="e_dev_hook" d="M 420 762 L 390 762" fill="none" stroke="#4A77B4" stroke-width="2" marker-end="url(#m_arrow_git)"/>
+<path id="e_dev_projrepo" d="M 700 700 L 820 700 L 820 150 L 880 150" fill="none" stroke="#4A77B4" stroke-width="2" marker-end="url(#m_arrow_git)"/>
+<g transform="translate(808 330) rotate(-90)"><rect x="-91" y="-12" width="183" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/><text font-size="11.5" fill="#4A77B4" text-anchor="middle">git push (application code)</text></g>
+<circle cx="714" cy="700" r="9" fill="#4A77B4" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="714" y="704" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+<path id="e_central_ss" d="M 880 515 L 700 515" fill="none" stroke="#1F8A70" stroke-width="2" marker-end="url(#m_arrow)"/>
+<rect x="695" y="497" width="189" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="790" y="509" font-size="11.5" fill="#1F8A70" text-anchor="middle">pull: fetch main, then apply</text>
+<circle cx="866" cy="515" r="9" fill="#1F8A70" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="866" y="519" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<path id="e_ss_central" d="M 700 550 L 880 550" fill="none" stroke="#1F8A70" stroke-width="2" marker-end="url(#m_arrow)"/>
+<rect x="702" y="532" width="176" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="790" y="544" font-size="11.5" fill="#1F8A70" text-anchor="middle">push: proposal branch + MR</text>
+<circle cx="714" cy="550" r="9" fill="#1F8A70" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="714" y="554" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+<path id="e_review" d="M 1160 680 L 1160 560" fill="none" stroke="#D8732E" stroke-width="2" marker-end="url(#m_arrow_review)"/>
+<rect x="1166" y="612" width="202" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.9"/>
+<text x="1166" y="624" font-size="11.5" fill="#D8732E" text-anchor="start">review, approve, merge to main</text>
+<circle cx="1160" cy="666" r="9" fill="#D8732E" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1160" y="670" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">5</text>
+</svg>

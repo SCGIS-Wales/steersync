@@ -35,6 +35,10 @@ files a collection's patterns do not select are never touched on either side. Li
 command to some collections with `--collection NAME` (repeatable), list them with
 `steersync config collections`, and see [docs/central-layout.md](docs/central-layout.md) for
 a worked example of a full `.kiro/` tree in the central repository.
+[RFC 0001](docs/rfc/0001-central-kiro-configuration-sync.md) describes the end to end flow
+between a project repository, the workstations and the central repository, with an
+architecture diagram in [SVG](docs/diagrams/kiro-config-sync.svg),
+[PNG](docs/diagrams/kiro-config-sync.png) and [draw.io](docs/diagrams/kiro-config-sync.drawio).
 
 ## Install
 
