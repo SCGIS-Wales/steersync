@@ -28,6 +28,8 @@ ENV_LOG_LEVEL = "STEERSYNC_LOG_LEVEL"
 ENV_LOG_FORMAT = "STEERSYNC_LOG_FORMAT"
 ENV_STRICT = "STEERSYNC_STRICT"
 ENV_GIT_BINARY = "STEERSYNC_GIT_BINARY"
+ENV_GITLAB_API_URL = "STEERSYNC_GITLAB_API_URL"
+ENV_GITLAB_PROJECT = "STEERSYNC_GITLAB_PROJECT"
 
 CONFIG_FILE_NAMES: tuple[str, ...] = ("steersync.yaml", "steersync.yml")
 
@@ -37,13 +39,17 @@ _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 _ALLOWED_PLACEHOLDERS = frozenset({"default_branch", "project", "user", "hash"})
 _COLLECTION_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
-LintProfile = Literal["steering", "markdown", "skill", "agent", "hooks", "json", "generic"]
+LintProfile = Literal[
+    "steering", "markdown", "skill", "agent", "hooks", "settings", "prompt", "json", "generic"
+]
 LINT_PROFILES: tuple[str, ...] = (
     "steering",
     "markdown",
     "skill",
     "agent",
     "hooks",
+    "settings",
+    "prompt",
     "json",
     "generic",
 )
@@ -84,8 +90,24 @@ class PyMarkdownConfig(_Strict):
     disabled_rules: tuple[str, ...] = ()
 
 
+class PracticeLimitsConfig(_Strict):
+    """Thresholds behind the best practice warnings (see docs/validation.md)."""
+
+    always_file_bytes: int = Field(default=16_384, ge=1024)
+    always_total_bytes: int = Field(default=49_152, ge=1024)
+    auto_description_min_chars: int = Field(default=20, ge=1)
+    skill_name_max_chars: int = Field(default=64, ge=1)
+    skill_description_max_chars: int = Field(default=1024, ge=1)
+    skill_body_max_lines: int = Field(default=500, ge=1)
+    hook_timeout_max_seconds: int = Field(default=300, ge=1)
+    prompt_name_max_chars: int = Field(default=50, ge=1)
+
+
 class LintConfig(_Strict):
     max_file_bytes: int = Field(default=65536, ge=1024, le=10_000_000)
+    # Best practice warnings from the Kiro documentation. Never errors.
+    practices: bool = True
+    practice_limits: PracticeLimitsConfig = PracticeLimitsConfig()
     require_h1: bool = True
     allowed_extra_keys: tuple[str, ...] = ("x-steersync",)
     file_reference_check: bool = True
@@ -151,9 +173,21 @@ class GitConfig(_Strict):
         return value
 
 
+UserSource = Literal["os", "email", "name"]
+
+
 class BranchConfig(_Strict):
-    template: str = Field(default="steering/{project}/{user}-{hash}", min_length=1)
+    # Placeholders: {project} (the project slug), {user}, {hash}. The template must
+    # start with a fixed prefix followed by {project} so proposals for one project
+    # can be found with a glob.
+    template: str = Field(default="kiro-config/{project}/{user}-{hash}", min_length=1)
     hash_length: int = Field(default=8, ge=6, le=64)
+    # Where {user} comes from, first match wins: the operating system user name
+    # (letters and digits only), the local part of the git user.email, or the git
+    # user.name. Everything is lowercased and reduced to letters, digits and dashes.
+    user_from: tuple[UserSource, ...] = ("os", "email", "name")
+    # Warn when another proposal branch for the same project is still on the remote.
+    warn_existing: bool = True
 
     @field_validator("template")
     @classmethod
@@ -166,7 +200,23 @@ class BranchConfig(_Strict):
         if "{hash}" not in value:
             msg = "branch template must contain {hash} so identical pushes dedupe"
             raise ValueError(msg)
+        if "{project}" not in value:
+            msg = "branch template must contain {project} so proposals are per repository"
+            raise ValueError(msg)
         return value
+
+    @field_validator("user_from")
+    @classmethod
+    def _user_from(cls, value: tuple[UserSource, ...]) -> tuple[UserSource, ...]:
+        if not value:
+            msg = "user_from must list at least one source"
+            raise ValueError(msg)
+        return value
+
+    def project_glob(self, project: str) -> str:
+        """Return the glob matching every proposal branch of ``project``."""
+        head = self.template.split("{user}", 1)[0]
+        return head.format(project=project) + "*"
 
 
 def _relative_path(value: str) -> str:
@@ -247,9 +297,52 @@ class PathsConfig(_Strict):
 class SyncConfig(_Strict):
     prune: bool = True
     strict_pull: bool = False
+    # When the central repository cannot be reached and a cache clone exists, pull
+    # from the cached copy of the default branch and warn instead of failing.
+    offline_fallback: bool = True
     lock_timeout_seconds: int = Field(default=120, ge=1, le=3600)
     max_files: int = Field(default=1000, ge=1, le=100_000)
     max_total_bytes: int = Field(default=10_485_760, ge=1024, le=1_073_741_824)
+
+
+class GitLabConfig(_Strict):
+    """Merge request automation through the GitLab REST API (optional)."""
+
+    # Name of the environment variable holding a GitLab token with the api scope.
+    token_env: str = Field(default="GITLAB_TOKEN", min_length=1, pattern=r"^[A-Z][A-Z0-9_]*$")
+    # Base URL of the API, e.g. https://gitlab.example.com/api/v4. Empty derives it
+    # from the host of remote.url.
+    api_url: str = ""
+    # Project path of the central repository, e.g. platform/kiro-config. Empty
+    # derives it from remote.url.
+    project: str = ""
+    # Branch merge requests target. Empty uses remote.default_branch.
+    target_branch: str = ""
+    # Create a merge request through the API after a successful push when the
+    # token is available and no open merge request exists for the branch.
+    auto_merge_request: bool = True
+    remove_source_branch: bool = True
+    squash: bool = False
+    labels: tuple[str, ...] = ("kiro-config",)
+    timeout_seconds: int = Field(default=30, ge=5, le=300)
+
+    @field_validator("api_url")
+    @classmethod
+    def _api_url(cls, value: str) -> str:
+        candidate = value.strip().rstrip("/")
+        if candidate and not candidate.startswith("https://"):
+            msg = "gitlab.api_url must start with https://"
+            raise ValueError(msg)
+        return candidate
+
+    @field_validator("project")
+    @classmethod
+    def _project(cls, value: str) -> str:
+        candidate = value.strip().strip("/")
+        if candidate and (".." in candidate.split("/") or any(c in candidate for c in " \t\n")):
+            msg = "gitlab.project must be a group/project path"
+            raise ValueError(msg)
+        return candidate
 
 
 class HookConfig(_Strict):
@@ -271,6 +364,7 @@ class Config(_Strict):
     paths: PathsConfig = PathsConfig()
     collections: dict[str, CollectionConfig] = {}
     sync: SyncConfig = SyncConfig()
+    gitlab: GitLabConfig = GitLabConfig()
     lint: LintConfig = LintConfig()
     hook: HookConfig = HookConfig()
     logging: LoggingConfig = LoggingConfig()
@@ -385,6 +479,8 @@ def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
         ENV_LOG_LEVEL: "logging.level",
         ENV_LOG_FORMAT: "logging.format",
         ENV_GIT_BINARY: "git.binary",
+        ENV_GITLAB_API_URL: "gitlab.api_url",
+        ENV_GITLAB_PROJECT: "gitlab.project",
     }
     overrides: dict[str, Any] = {}
     for env_name, dotted in mapping.items():

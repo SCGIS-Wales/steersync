@@ -140,11 +140,20 @@ jobs:
     name: Build distribution
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [lint, test, security]
+    needs: [lint, test, security, prepare]
+    # prepare is skipped on pull requests; everything else must have passed.
+    if: >-
+      !cancelled()
+      && needs.lint.result == 'success'
+      && needs.test.result == 'success'
+      && needs.security.result == 'success'
+      && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The release commit prepared on main, or the commit that triggered the run.
+          ref: ${{ needs.prepare.outputs.sha || github.sha }}
           persist-credentials: false
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -171,23 +180,39 @@ jobs:
           retention-days: 14
 
   prepare:
-    # Pull requests never release; pushes to main, tag pushes and manual runs
-    # decide from the package version whether a release is due.
-    name: Decide whether to release
+    # Pull requests never release. A push to main releases automatically: the job
+    # finds the merged pull request, decides the version bump (release:* label, then
+    # a Conventional Commits title prefix, then the Unreleased changelog section),
+    # commits the version and changelog to main and hands the new commit to the
+    # release jobs. A version bumped by hand in the pull request is released as is.
+    # Tag pushes and manual runs release the version in the file when it has no
+    # release yet. See scripts/prepare_release.py and CONTRIBUTING.md.
+    name: Decide and prepare the release
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: read
     outputs:
       version: ${{ steps.decide.outputs.version }}
       tag: ${{ steps.decide.outputs.tag }}
       release: ${{ steps.decide.outputs.release }}
       tag_exists: ${{ steps.decide.outputs.tag_exists }}
+      sha: ${{ steps.decide.outputs.sha }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
-      - name: Read the version and check release state
+          # A token that may push to main. RELEASE_TOKEN is only needed when main is
+          # protected against the GitHub Actions bot; otherwise the job token works.
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          persist-credentials: true
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Decide the version, commit the changelog and version bump
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
@@ -197,47 +222,86 @@ jobs:
             echo "::error::cannot read a semantic version from src/steersync/__init__.py"
             exit 1
           fi
-          tag="v${version}"
-          if ! grep -q "^## \[${version}\]" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no section for ${version}"
-            exit 1
-          fi
+          emit() {
+            {
+              echo "version=$1"
+              echo "tag=v$1"
+              echo "release=$2"
+              echo "tag_exists=$3"
+              echo "sha=$4"
+            } >> "$GITHUB_OUTPUT"
+          }
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            if [ "${GITHUB_REF_NAME}" != "${tag}" ]; then
+            if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
               echo "::error::tag ${GITHUB_REF_NAME} does not match package version ${version}"
               exit 1
             fi
-            tag_exists=true
-          elif [ "${GITHUB_REF}" != "refs/heads/main" ]; then
-            echo "::notice::releases are only made from main (got ${GITHUB_REF}); skipping"
-            {
-              echo "version=${version}"
-              echo "tag=${tag}"
-              echo "release=false"
-              echo "tag_exists=false"
-            } >> "$GITHUB_OUTPUT"
+            emit "${version}" true true "${GITHUB_SHA}"
             exit 0
-          elif gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
-            tagged="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)"
-            if [ "${tagged}" != "${GITHUB_SHA}" ]; then
-              echo "::error::${tag} points at ${tagged}, not ${GITHUB_SHA}; bump the version to release this commit"
+          fi
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::notice::releases are only made from main (got ${GITHUB_REF}); skipping"
+            emit "${version}" false false "${GITHUB_SHA}"
+            exit 0
+          fi
+          released() { gh release view "v$1" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; }
+          if ! released "${version}"; then
+            # The version in the file is new: a manual bump, or a retry of a release
+            # whose later steps failed. Release it as it is.
+            if ! grep -q "^## \[${version}\]" CHANGELOG.md; then
+              echo "::error::CHANGELOG.md has no section for ${version}"
               exit 1
             fi
-            tag_exists=true
-          else
             tag_exists=false
+            if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${version}" >/dev/null 2>&1; then
+              tag_exists=true
+            fi
+            emit "${version}" true "${tag_exists}" "${GITHUB_SHA}"
+            exit 0
           fi
-          release=true
-          if [ "${GITHUB_REF_TYPE}" != "tag" ] && gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "::notice::${tag} is already released; nothing to do"
-            release=false
+          if [ "${GITHUB_EVENT_NAME}" != "push" ]; then
+            echo "::notice::v${version} is already released; a manual run only retries unreleased versions"
+            emit "${version}" false true "${GITHUB_SHA}"
+            exit 0
           fi
-          {
-            echo "version=${version}"
-            echo "tag=${tag}"
-            echo "release=${release}"
-            echo "tag_exists=${tag_exists}"
-          } >> "$GITHUB_OUTPUT"
+          # Find the pull request merged by this push and decide the bump from it.
+          pulls="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '[.[] | select(.merged_at != null)] | sort_by(.merged_at) | last // empty')"
+          title="$(printf '%s' "${pulls}" | jq -r '.title // ""')"
+          number="$(printf '%s' "${pulls}" | jq -r '.number // ""')"
+          labels="$(printf '%s' "${pulls}" | jq -r '[.labels[]?.name] | join(",")')"
+          if [ -z "${title}" ]; then
+            title="$(git log -1 --format=%s "${GITHUB_SHA}")"
+          fi
+          echo "merged: #${number:-?} ${title} [${labels}]"
+          uv run --no-sync --python "${PYTHON_VERSION}" python scripts/prepare_release.py decide \
+            --labels "${labels}" --title "${title}" | tee decision.txt
+          bump="$(sed -n 's/^bump=//p' decision.txt)"
+          next="$(sed -n 's/^version=//p' decision.txt)"
+          if [ "${bump}" = "skip" ]; then
+            echo "::notice::no release for this merge ($(sed -n 's/^reason=//p' decision.txt))"
+            emit "${version}" false true "${GITHUB_SHA}"
+            exit 0
+          fi
+          note="${title}"
+          if [ -n "${number}" ]; then
+            note="${title} (#${number})"
+          fi
+          uv run --no-sync --python "${PYTHON_VERSION}" python scripts/prepare_release.py apply \
+            --version "${next}" --fallback-note "${note}" \
+            --replace "README.md::VERSION=${version}::VERSION=${next}" \
+            --replace "README.md::rev: v${version}::rev: v${next}" \
+            --replace "src/steersync/hooks.py::\"v${version}\"::\"v${next}\""
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/steersync/__init__.py CHANGELOG.md README.md src/steersync/hooks.py
+          git commit --quiet -m "Release ${next}" \
+            -m "Bump ${version} to ${next} (${bump}) after ${note}. Automated by the CI workflow."
+          if ! git push origin HEAD:main; then
+            echo "::error::could not push the release commit to main. If main is protected, add a RELEASE_TOKEN secret with permission to bypass the protection."
+            exit 1
+          fi
+          emit "${next}" true false "$(git rev-parse HEAD)"
 
   publish-pypi:
     name: Publish to PyPI (trusted publishing)
@@ -320,6 +384,7 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       - name: Download distribution
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -335,12 +400,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
         run: |
           tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags" \
             -f tag="${TAG}" \
-            -f object="${GITHUB_SHA}" \
+            -f object="${RELEASE_SHA}" \
             -f type=commit \
-            -f message="steersync ${VERSION}: sync Kiro steering documents with a central git repository. Release assets: wheel, sdist, SHA256SUMS and build provenance." \
+            -f message="steersync ${VERSION}: sync Kiro configuration with a central git repository. Release assets: wheel, sdist, SHA256SUMS and build provenance." \
             -f "tagger[name]=github-actions[bot]" \
             -f "tagger[email]=41898282+github-actions[bot]@users.noreply.github.com" \
             --jq .sha)"

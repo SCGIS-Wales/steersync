@@ -28,13 +28,20 @@ layout; each one is configurable and new ones are added with a single YAML block
 | `skills` | `.kiro/skills` | `skills` | `skills/` | everything (`SKILL.md`, `scripts/`, `references/`, `assets/`) | `skill`: `SKILL.md` needs `name` and `description`, secrets in scripts |
 | `agents` | `.kiro/agents` | `agents` | `agents/` | `**/*.json`, `**/*.md` | `agent`: valid JSON with a `name`, flags deprecated `toolsSettings` |
 | `hooks` | `.kiro/hooks` | `hooks` | `hooks/` | `**/*.json` | `hooks`: `version`, `hooks[]` with `name`, `trigger`, `action` |
-| `settings` | `.kiro/settings` | none | `settings/` | `lsp.json`, `mcp.json` | `json`: valid JSON and secrets |
+| `settings` | `.kiro/settings` | none | `settings/` | `lsp.json`, `mcp.json` | `settings`: valid JSON, `mcpServers` and `languages` shapes, machine paths |
+| `prompts` | `.kiro/prompts` | `prompts` | `prompts/` | `**/*.md` | `prompt`: markdown plus the 50 character name limit |
+| `agents-md` | `AGENTS.md` at the root | none | `agents-md/` | `AGENTS.md` | `markdown` (kept in the project repository too) |
 
 Execute bits on skill scripts survive the round trip, hidden files are never synced, and
 files a collection's patterns do not select are never touched on either side. Limit any
 command to some collections with `--collection NAME` (repeatable), list them with
 `steersync config collections`, and see [docs/central-layout.md](docs/central-layout.md) for
 a worked example of a full `.kiro/` tree in the central repository.
+
+Not synced on purpose: `~/.kiro/powers/` (installed by Kiro from a registry, not authored),
+`~/.kiro/settings/cli.json` and `permissions.yaml` (per user, outside any repository) and
+knowledge bases (declared in agent resources, indexed by Kiro). Every path above comes from
+the Kiro configuration scopes documentation; a new kind of content is one YAML block.
 
 ## Install
 
@@ -72,7 +79,9 @@ files that the GitHub release carries.
 2. Prepare a project. This adds every synced directory (`.kiro/steering/`, `.kiro/specs/`,
    `.kiro/skills/`, ...) and the lock file to `.git/info/exclude` (so centrally managed
    content is never committed to the project by accident; set `git_exclude: false` on a
-   collection to keep committing it) and installs a chaining pre-push hook:
+   collection to keep committing it), installs a chaining pre-push hook, writes the Kiro
+   `SessionStart` hook that pulls at every session start and registers the steersync MCP
+   server in `.kiro/settings/mcp.json`:
 
    ```bash
    cd ~/code/my-service
@@ -82,9 +91,28 @@ files that the GitHub release carries.
 
 3. Edit anything under `.kiro/`. On your next `git push`, or on demand with
    `steersync push`, every collection is proposed to the central repository as one merge
-   request.
+   request. With `GITLAB_TOKEN` exported, the merge request URL is printed and
+   `steersync mr` opens or finds it at any time.
 
-Run `steersync doctor` at any time to see what steersync has resolved.
+Run `steersync doctor` at any time to see what steersync has resolved, and `steersync lint`
+to validate the configuration against Kiro's rules and best practices.
+
+## Starting Kiro in any repository
+
+The goal is that anyone who clones a project and starts Kiro gets the whole configuration
+without asking for it. `steersync init` makes that true for a repository:
+
+| Piece | What it does | Written by |
+|---|---|---|
+| `.kiro/hooks/steersync.json` | A V3 `SessionStart` hook running `steersync pull --quiet --best-effort`, so the session starts from the latest merged configuration. Bounded git time; never fails the session. | `steersync init` (or `steersync kiro-hook --write`) |
+| `.kiro/settings/mcp.json` | The steersync MCP server, so "pull the kiro config", "push my steering", "raise an MR for the kiro config" or "validate the agents" work in chat. | `steersync init` (merged into an existing file, other servers kept) |
+| `.git/hooks/pre-push` | Proposes `.kiro/` on every push of the project. | `steersync init --hook` |
+
+Kiro then loads what it finds: always on steering in every session, `fileMatch`, `manual`
+and `auto` steering on CLI V3, skills on demand, prompts as slash commands, hooks and
+settings. `steersync lint` warns (`autoload-hook-missing`, `autoload-mcp-missing`) when a
+repository lacks either piece. On CLI 2.x, where standalone hooks do not exist, paste
+`steersync kiro-hook --engine v2` into the custom agent's `hooks` block.
 
 ## Central repository layout
 
@@ -119,7 +147,8 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 | `steersync push [--dry-run] [--scope global] [--no-lint] [-m MSG] [-c NAME] [--json]` | Propose local collections centrally in one branch. `--from-hook` is used by git hooks and never blocks the push unless strict. |
 | `steersync status [-c NAME] [--json]` | Show adds, updates, deletes and local edits per collection in both directions. |
 | `steersync lint [PATHS] [-c NAME] [--profile P] [--json]` | Validate every collection with its profile, or explicit paths. Exit code 4 on errors. |
-| `steersync init [--write-config] [--hook] [--no-exclude]` | Prepare a repository. |
+| `steersync mr [--branch NAME] [--title T] [-c NAME] [--json]` | Open, or find, the GitLab merge request for the pushed proposal branch. Needs the token in `GITLAB_TOKEN` (configurable). |
+| `steersync init [--write-config] [--hook] [--no-exclude] [--no-kiro] [--mcp-command PATH]` | Prepare a repository: excludes, git hook, Kiro session hook and MCP server entry. |
 | `steersync install-hook [--force]` | Install or update the chaining pre-push hook. |
 | `steersync kiro-hook [--engine v2\|v3] [--write]` | Render a Kiro hook that runs `steersync pull --quiet` at session start. |
 | `steersync mcp-config [--remote URL]` | Render an `mcp.json` fragment. |
@@ -145,6 +174,8 @@ for the packaged defaults.
 | `STEERSYNC_GIT_BINARY` | `git.binary` |
 | `STEERSYNC_LOG_LEVEL`, `STEERSYNC_LOG_FORMAT` | `logging.*` |
 | `STEERSYNC_STRICT` | `hook.strict` |
+| `STEERSYNC_GITLAB_API_URL`, `STEERSYNC_GITLAB_PROJECT` | `gitlab.api_url`, `gitlab.project` |
+| `GITLAB_TOKEN` (name set by `gitlab.token_env`) | Token with the `api` scope used only for merge requests |
 | `KIRO_HOME` | Location of `~/.kiro`, as honoured by kiro-cli |
 
 Unknown keys, invalid patterns, unsafe paths and malformed push options are rejected at load
@@ -190,6 +221,8 @@ share a directory on either side.
 | A failed push always resets the cache clone to a clean default branch. | automatic |
 | From a pre-push hook each git call is capped and retried at most once, and no failure, including an unexpected bug, blocks the push unless strict mode is on. | `hook.timeout_seconds`, `hook.strict` |
 | Central and local content larger than the limits is refused. | `sync.max_files`, `sync.max_total_bytes` |
+| When the central repository cannot be reached and a cache clone exists, `pull` and `status` apply the cached copy of the default branch and say so (`offline` in JSON output). Permanent errors such as authentication failures still fail, and `push` never uses the cache. | `sync.offline_fallback` |
+| `pull --best-effort` (the Kiro session hook) runs with the hook time budget, so a slow server never stalls a session start. | `hook.timeout_seconds` |
 
 ## How pull decides what to write
 
@@ -235,52 +268,84 @@ repos:
 The lint hook receives the changed files under `.kiro/` and lints each with the profile of
 the collection it belongs to.
 
-## GitLab merge requests
+## Proposal branches and GitLab merge requests
 
-The default push options create a merge request against the default branch, remove the source
-branch on merge and set a title. Branch names follow `steering/{project}/{user}-{hash}`, where
-the hash covers every file, so two people proposing identical content share one branch and a
-second identical push is reported as `already-proposed`. Servers that do not advertise push
-options (GitHub, plain bare repositories) make git fail, so steersync retries once without them
-and says so. Push options may use `{default_branch}`, `{project}`, `{user}` and `{hash}`.
+Pulls always come from the central repository's default branch (`remote.default_branch`,
+`main` unless configured). Pushes go to a proposal branch named after the project repository
+you are working in:
 
-## Lint rules
+```text
+kiro-config/{project}/{user}-{hash}
+kiro-config/acme/platform/entra-app-registration/dgregor-3f9a1c2e
+```
 
-Each collection runs one lint profile. The `steering` profile applies every rule below.
-`markdown` (specs, prompts, references) applies the encoding, size, secret and markdown rules
-without Kiro front matter checks. `skill` adds `skill-front-matter-required`,
-`skill-requires-metadata` and `skill-name-mismatch` for `SKILL.md`. `json` adds `json-syntax`,
-`hooks` adds `hook-schema`, `hook-trigger` and `hook-action`, `agent` adds `agent-schema`,
-`agent-name` and `agent-deprecated-key`, and `generic` only enforces the size limit and secret
-scanning, allowing binary assets. New profiles are one function in `steersync.lint.PROFILES`.
+`{project}` is the slug of the project's origin URL, `{user}` comes from the sources listed
+in `branch.user_from` (the operating system user name first, reduced to letters, digits and
+dashes, then the local part of the git `user.email`, then the git `user.name`) and `{hash}`
+covers every synced file, so two people proposing identical content share one branch and a
+second identical push is reported as `already-proposed`. The template is configurable; it
+must keep `{project}` and `{hash}`.
 
-| Rule | Severity | Check |
-|---|---|---|
-| `front-matter-position` | error | Front matter must start on line 1; Kiro ignores it after a blank line. |
-| `front-matter-yaml` | error | Front matter must be valid YAML. |
-| `inclusion-value` | error | `inclusion` is `always`, `fileMatch`, `manual` or `auto`. |
-| `filematch-pattern-required`, `filematch-pattern-type` | error | `fileMatch` needs a string or list of strings. |
-| `auto-requires-metadata` | error | `auto` needs `name` and `description`. |
-| `unknown-key` | warning | Keys Kiro does not know are ignored; `x-steersync` is allowed. |
-| `encoding-utf8`, `max-size` | error | UTF-8 only; default limit 64 KiB because always included bytes cost context. |
-| `require-h1` | warning | A level one heading is expected. |
-| `file-reference-missing`, `file-reference-escape` | warning, error | `#[[file:path]]`, `#[[file:path:line]]`, `#[[file:path:start-end]]` and `#[[folder:path]]` targets must exist inside the workspace. |
-| `forbidden-*` | error | AWS keys, private keys, GitHub, GitLab and Slack tokens, generic credentials. Patterns are configurable. |
-| `markdown-MD*` | configurable | pymarkdown rules with the front matter extension enabled. |
+Before pushing, steersync lists the other proposal branches of the same project still on
+the remote and warns about them, so unmerged work is reviewed before more is added
+(`branch.warn_existing`). `steersync status` prints the same list.
+
+The merge request is opened in two ways:
+
+1. **Push options.** The default `remote.push_options` ask GitLab to create a merge request
+   against the default branch, remove the source branch on merge and set a title. Servers
+   that do not advertise push options (GitHub, plain bare repositories) make git fail, so
+   steersync retries once without them and says so.
+2. **GitLab API.** When the token variable is set (`GITLAB_TOKEN`, name configurable with
+   `gitlab.token_env`), `push` confirms or creates the merge request through the REST API and
+   prints its URL, and `steersync mr` (or the `raise_merge_request` MCP tool) does the same on
+   demand. The API base URL and project path are derived from `remote.url` and can be set
+   with `gitlab.api_url` and `gitlab.project`; `gitlab.target_branch` defaults to
+   `remote.default_branch`. The token is read from the environment only, never from a file,
+   and never logged.
+
+## Validation
+
+Each collection runs one lint profile: `steering`, `agent`, `hooks`, `skill`, `settings`,
+`prompt`, `markdown`, `json` or `generic`. **Errors** are things Kiro cannot read (front
+matter after a blank line, an unknown inclusion mode, invalid JSON, a `SKILL.md` without
+`name` and `description`) or secrets; they stop a push. **Warnings** are best practices from
+the Kiro documentation, reported objectively and never blocking: a steering file with a
+numeric prefix, an `auto` description that is not written as a trigger, a `globs` key where
+Kiro reads `fileMatchPattern`, an agent with `tools: ["*"]` or a `file://.kiro/steering/**`
+resource that loads everything at startup, inline agent hooks on CLI 3.0, a hook with a
+15 minute timeout, a skill name that is not kebab case, an `mcp.json` with a home directory
+path, more than 48 KiB of always on steering, missing `product.md`, `tech.md` and
+`structure.md`. Every rule, its severity and the documentation page it comes from are listed
+in [docs/validation.md](docs/validation.md); thresholds live under `lint.practice_limits`
+and `lint.practices: false` turns the warnings off.
 
 ## Kiro integration
 
-**Session hook (V3).** `steersync kiro-hook --write` creates `.kiro/hooks/steersync.json` with a
-`SessionStart` trigger that runs `steersync pull --quiet --best-effort`. For CLI 2.x agents paste the output of
-`steersync kiro-hook --engine v2` into the agent's `hooks` block. Field reports say Kiro hooks fire
-only in headless runs or with a custom agent active, so treat them as a convenience and keep the
-git hook as the dependable trigger.
+**Session hook (V3).** `steersync init` (or `steersync kiro-hook --write`) creates
+`.kiro/hooks/steersync.json` with a `SessionStart` trigger that runs
+`steersync pull --quiet --best-effort`. For CLI 2.x agents paste the output of
+`steersync kiro-hook --engine v2` into the agent's `hooks` block. Field reports say Kiro hooks
+fire only in headless runs or with a custom agent active, so treat them as a convenience and
+keep the git hook as the dependable trigger.
 
-**MCP server.** Add the fragment from `steersync mcp-config` to `.kiro/settings/mcp.json`. The
-server exposes `pull_steering`, `push_steering`, `diff_steering` and `lint_steering`. Kiro does
-not pass the shell's `PATH`, `SSH_AUTH_SOCK` or proxy variables to MCP servers, so the rendered
-fragment forwards them explicitly through `env`; use an absolute `--command` if `uvx` is not on
-Kiro's path.
+**MCP server.** `steersync init` registers the server in `.kiro/settings/mcp.json`
+(`steersync mcp-config` prints the fragment). The server tells the agent which tool answers
+which request, so plain sentences work:
+
+| Say | Tool |
+|---|---|
+| "pull / sync / refresh the kiro config", "update the steering and skills" | `pull_kiro_config` |
+| "push / propose / share my kiro config", "sync my steering up" | `push_kiro_config` |
+| "raise / open an MR for the kiro config", "merge request link" | `raise_merge_request` |
+| "what changed", "status", "any open proposals for this repo" | `diff_kiro_config` |
+| "validate / lint / check the kiro config, agents, hooks, skills" | `validate_kiro_config` |
+| "what is synced and where" | `list_kiro_collections` |
+
+Every tool accepts a `collections` list. Kiro does not pass the shell's `PATH`,
+`SSH_AUTH_SOCK`, proxy variables or `GITLAB_TOKEN` to MCP servers, so the rendered entry
+forwards them explicitly through `env`; use `steersync init --mcp-command /abs/path/uvx`
+if `uvx` is not on Kiro's path.
 
 **Custom agents.** On Kiro CLI V3 custom agents inherit steering, skills and `AGENTS.md` by
 default, so list only the always on steering files in `resources` and reference skills with

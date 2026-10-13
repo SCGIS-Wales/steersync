@@ -62,7 +62,7 @@ path = "src/steersync/__init__.py"
 packages = ["src/steersync"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/steersync", "tests", "README.md", "CHANGELOG.md", "LICENSE", "steersync.example.yaml"]
+include = ["src/steersync", "tests", "scripts", "README.md", "CHANGELOG.md", "LICENSE", "steersync.example.yaml"]
 
 [tool.ruff]
 target-version = "py314"
@@ -89,6 +89,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S108", "ANN", "PLR2004", "ARG001", "ARG005", "S106", "S105", "E501", "PLC0415"]
+"scripts/**" = ["T201"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["steersync"]
@@ -101,7 +102,7 @@ python_version = "3.14"
 strict = true
 warn_unreachable = true
 show_error_codes = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 
 [[tool.mypy.overrides]]
 module = ["frontmatter", "frontmatter.*", "pymarkdown.*", "mcp.*"]

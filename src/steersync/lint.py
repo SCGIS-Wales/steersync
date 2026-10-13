@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Literal, NamedTuple
 
+from steersync import practices
 from steersync.config import LintConfig, LintProfile
 from steersync.steering import (
     FILE_REFERENCE_RE,
@@ -28,6 +29,16 @@ from steersync.steering import (
 )
 
 Severity = Literal["error", "warning"]
+
+
+class LintContext(NamedTuple):
+    """What a profile may look at besides the document itself."""
+
+    workspace_root: Path | None = None
+    # On disk directory of the collection, when the snapshot came from one.
+    directory: Path | None = None
+
+
 _H1_RE = re.compile(r"^#\s+\S", re.MULTILINE)
 SKILL_FILE = "SKILL.md"
 HOOK_TRIGGERS: frozenset[str] = frozenset(
@@ -314,23 +325,26 @@ def _parse_json(doc: SteeringDocument) -> tuple[object, list[LintFinding]]:
 
 
 def _profile_steering(
-    doc: SteeringDocument, config: LintConfig, workspace_root: Path | None
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
 ) -> list[LintFinding]:
     findings = _text_findings(doc)
     if findings:
         return findings
     findings.extend(_front_matter_findings(doc, config))
-    findings.extend(_body_findings(doc, config, workspace_root))
+    findings.extend(_body_findings(doc, config, ctx.workspace_root))
     findings.extend(_markdown_findings(doc, config))
+    if config.practices and doc.front_matter is not None and not doc.front_matter.error:
+        meta = doc.front_matter.metadata if doc.front_matter.present else {}
+        findings.extend(_warnings(practices.steering_document_findings(doc, meta, _limits(config))))
     return findings
 
 
 def _profile_markdown(
-    doc: SteeringDocument, config: LintConfig, workspace_root: Path | None
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
 ) -> list[LintFinding]:
     """Plain markdown such as specs: text, secrets and style, no Kiro front matter rules."""
     if PurePosixPath(doc.relative_path).suffix.lower() != ".md":
-        return _profile_generic(doc, config, workspace_root)
+        return _profile_generic(doc, config, ctx)
     findings = _text_findings(doc)
     if findings:
         return findings
@@ -382,31 +396,61 @@ def _skill_metadata_findings(doc: SteeringDocument) -> list[LintFinding]:
 
 
 def _profile_skill(
-    doc: SteeringDocument, config: LintConfig, workspace_root: Path | None
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
 ) -> list[LintFinding]:
     """Agent Skills: SKILL.md metadata, markdown style, secrets in scripts and references."""
     if PurePosixPath(doc.relative_path).name != SKILL_FILE:
-        return _profile_markdown(doc, config, workspace_root)
+        return _profile_markdown(doc, config, ctx)
     findings = _text_findings(doc)
     if findings:
         return findings
     findings.extend(_skill_metadata_findings(doc))
     findings.extend(_secret_findings(doc, config))
     findings.extend(_markdown_findings(doc, config))
+    fm = doc.front_matter
+    if config.practices and fm is not None and fm.present and not fm.error:
+        findings.extend(
+            _warnings(practices.skill_findings(doc, fm.metadata, fm.body, _limits(config)))
+        )
     return findings
 
 
-def _profile_json(
-    doc: SteeringDocument, config: LintConfig, workspace_root: Path | None
-) -> list[LintFinding]:
+def _profile_json(doc: SteeringDocument, config: LintConfig, ctx: LintContext) -> list[LintFinding]:
     if PurePosixPath(doc.relative_path).suffix.lower() != ".json":
-        return _profile_generic(doc, config, workspace_root)
+        return _profile_generic(doc, config, ctx)
     findings = _text_findings(doc)
     if findings:
         return findings
     _, syntax = _parse_json(doc)
     findings.extend(syntax)
     findings.extend(_secret_findings(doc, config))
+    return findings
+
+
+def _profile_settings(
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
+) -> list[LintFinding]:
+    """Kiro settings files: valid JSON plus the mcp.json and lsp.json shapes."""
+    if PurePosixPath(doc.relative_path).suffix.lower() != ".json":
+        return _profile_generic(doc, config, ctx)
+    findings = _text_findings(doc)
+    if findings:
+        return findings
+    data, syntax = _parse_json(doc)
+    findings.extend(syntax)
+    if not syntax and config.practices:
+        findings.extend(_warnings(practices.settings_findings(doc, data)))
+    findings.extend(_secret_findings(doc, config))
+    return findings
+
+
+def _profile_prompt(
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
+) -> list[LintFinding]:
+    """Saved prompts: markdown files whose name becomes the slash command."""
+    findings = _profile_markdown(doc, config, ctx)
+    if config.practices and PurePosixPath(doc.relative_path).suffix.lower() == ".md":
+        findings.extend(_warnings(practices.prompt_findings(doc, _limits(config))))
     return findings
 
 
@@ -461,36 +505,41 @@ def _hook_shape_findings(doc: SteeringDocument, data: object) -> list[LintFindin
 
 
 def _profile_hooks(
-    doc: SteeringDocument, config: LintConfig, workspace_root: Path | None
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
 ) -> list[LintFinding]:
-    if PurePosixPath(doc.relative_path).suffix.lower() != ".json":
-        return _profile_generic(doc, config, workspace_root)
+    name = PurePosixPath(doc.relative_path).name
+    if not name.endswith((".json", ".kiro.hook")):
+        return _profile_generic(doc, config, ctx)
     findings = _text_findings(doc)
     if findings:
         return findings
     data, syntax = _parse_json(doc)
     findings.extend(syntax)
-    if not syntax:
+    if not syntax and not name.endswith(".kiro.hook"):
         findings.extend(_hook_shape_findings(doc, data))
+    if config.practices:
+        findings.extend(_warnings(practices.hook_findings(doc, data, _limits(config))))
     findings.extend(_secret_findings(doc, config))
     return findings
 
 
 def _profile_agent(
-    doc: SteeringDocument, config: LintConfig, workspace_root: Path | None
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
 ) -> list[LintFinding]:
     """Custom agents: JSON definitions need a name; prompt files are plain markdown."""
     suffix = PurePosixPath(doc.relative_path).suffix.lower()
     if suffix == ".md":
-        return _profile_markdown(doc, config, workspace_root)
+        return _profile_markdown_agent(doc, config, ctx)
     if suffix != ".json":
-        return _profile_generic(doc, config, workspace_root)
+        return _profile_generic(doc, config, ctx)
     findings = _text_findings(doc)
     if findings:
         return findings
     data, syntax = _parse_json(doc)
     findings.extend(syntax)
     if not syntax:
+        if isinstance(data, dict) and config.practices:
+            findings.extend(_warnings(practices.agent_findings(doc, data, ctx.directory)))
         if not isinstance(data, dict):
             findings.append(
                 LintFinding(
@@ -518,15 +567,63 @@ def _profile_agent(
     return findings
 
 
+def _profile_markdown_agent(
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
+) -> list[LintFinding]:
+    """A Markdown agent carries its configuration in front matter; prompt files do not."""
+    findings = _profile_markdown(doc, config, ctx)
+    fm = doc.front_matter
+    if (
+        config.practices
+        and fm is not None
+        and fm.present
+        and not fm.error
+        and PurePosixPath(doc.relative_path).parent == PurePosixPath()
+    ):
+        findings.extend(_warnings(practices.agent_findings(doc, fm.metadata, ctx.directory)))
+    return findings
+
+
 def _profile_generic(
-    doc: SteeringDocument, config: LintConfig, workspace_root: Path | None
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
 ) -> list[LintFinding]:
     """Any file: binary content is allowed, decodable text is scanned for secrets."""
-    del workspace_root
+    del ctx
     return _secret_findings(doc, config) if _is_text(doc) else []
 
 
-Profile = Callable[[SteeringDocument, LintConfig, Path | None], list[LintFinding]]
+def _warnings(found: Iterable[practices.Finding]) -> list[LintFinding]:
+    return [LintFinding(f.path, f.rule, "warning", f.message, f.line) for f in found]
+
+
+def _limits(config: LintConfig) -> practices.PracticeLimits:
+    return practices.PracticeLimits(**config.practice_limits.model_dump())
+
+
+def collection_findings(
+    profile: LintProfile, snapshot: Mapping[str, bytes], config: LintConfig
+) -> list[LintFinding]:
+    """Practices that look at a whole collection rather than one file."""
+    if not config.practices:
+        return []
+    if profile == "steering":
+        return _warnings(practices.steering_collection_findings(snapshot, _limits(config)))
+    if profile == "skill":
+        return _warnings(practices.skill_collection_findings(snapshot))
+    return []
+
+
+def lint_workspace(
+    root: Path, config: LintConfig, *, hooks_dir: str, settings_dir: str
+) -> LintReport:
+    """Report whether a Kiro session in ``root`` loads and refreshes the configuration."""
+    if not config.practices:
+        return LintReport((), 0)
+    found = practices.workspace_findings(root, hooks_dir=hooks_dir, settings_dir=settings_dir)
+    return LintReport(tuple(_warnings(found)), 0)
+
+
+Profile = Callable[[SteeringDocument, LintConfig, LintContext], list[LintFinding]]
 
 PROFILES: dict[str, Profile] = {
     "steering": _profile_steering,
@@ -534,6 +631,8 @@ PROFILES: dict[str, Profile] = {
     "skill": _profile_skill,
     "agent": _profile_agent,
     "hooks": _profile_hooks,
+    "settings": _profile_settings,
+    "prompt": _profile_prompt,
     "json": _profile_json,
     "generic": _profile_generic,
 }
@@ -546,10 +645,11 @@ def lint_document(
     *,
     profile: LintProfile = "steering",
     max_file_bytes: int | None = None,
+    directory: Path | None = None,
 ) -> list[LintFinding]:
     """Lint one document with the given profile and return its findings."""
     findings = _size_findings(doc, max_file_bytes or config.max_file_bytes)
-    findings.extend(PROFILES[profile](doc, config, workspace_root))
+    findings.extend(PROFILES[profile](doc, config, LintContext(workspace_root, directory)))
     return list(dict.fromkeys(findings))
 
 
@@ -560,8 +660,14 @@ def lint_snapshot(
     *,
     profile: LintProfile = "steering",
     max_file_bytes: int | None = None,
+    directory: Path | None = None,
+    collection_level: bool = True,
 ) -> LintReport:
-    """Lint an in memory snapshot."""
+    """Lint an in memory snapshot, including the practices that span the collection.
+
+    ``collection_level`` is off for ad hoc directories that are not a collection, so a
+    folder of examples is not told it lacks the steering foundation files.
+    """
     findings: list[LintFinding] = []
     for relative in sorted(snapshot):
         findings.extend(
@@ -571,8 +677,11 @@ def lint_snapshot(
                 workspace_root,
                 profile=profile,
                 max_file_bytes=max_file_bytes,
+                directory=directory,
             )
         )
+    if collection_level:
+        findings.extend(collection_findings(profile, snapshot, config))
     return LintReport(tuple(findings), len(snapshot))
 
 
@@ -585,38 +694,59 @@ def lint_paths(
     spec: FileSpec | None = None,
     max_file_bytes: int | None = None,
 ) -> LintReport:
-    """Lint files or directories on disk. Directories are expanded with ``spec``."""
-    files: list[Path] = []
+    """Lint files or directories on disk. Directories are expanded with ``spec``.
+
+    A directory is linted as a collection, so the practices that span a collection
+    (foundation files, the always on budget, misplaced skills) are reported too,
+    with paths relative to the workspace root when one is given.
+    """
+    findings: list[LintFinding] = []
+    checked = 0
     for path in paths:
         if path.is_dir():
-            files.extend(discover_files(path, spec) if spec else discover_files(path))
-        elif path.is_file():
-            files.append(path)
-    findings: list[LintFinding] = []
-    for file in files:
-        label = (
-            file.relative_to(workspace_root).as_posix()
-            if workspace_root and file.is_relative_to(workspace_root)
-            else str(file)
-        )
-        findings.extend(
-            lint_document(
-                document_from_bytes(label, file.read_bytes()),
+            files = discover_files(path, spec) if spec else discover_files(path)
+            snapshot = {f.relative_to(path).as_posix(): f.read_bytes() for f in files}
+            report = lint_snapshot(
+                snapshot,
                 config,
                 workspace_root,
                 profile=profile,
                 max_file_bytes=max_file_bytes,
+                directory=path,
+                collection_level=spec is not None,
             )
-        )
-    return LintReport(tuple(findings), len(files))
+            findings.extend(prefix_report(report, _label(path, workspace_root)).findings)
+            checked += report.checked
+        elif path.is_file():
+            findings.extend(
+                lint_document(
+                    document_from_bytes(_label(path, workspace_root), path.read_bytes()),
+                    config,
+                    workspace_root,
+                    profile=profile,
+                    max_file_bytes=max_file_bytes,
+                    directory=path.parent,
+                )
+            )
+            checked += 1
+    return LintReport(tuple(findings), checked)
+
+
+def _label(path: Path, workspace_root: Path | None) -> str:
+    if workspace_root and path.is_relative_to(workspace_root):
+        return path.relative_to(workspace_root).as_posix()
+    return str(path)
 
 
 def prefix_report(report: LintReport, prefix: str) -> LintReport:
     """Return ``report`` with every finding path prefixed, for combined reports."""
-    if not prefix:
+    if not prefix or prefix == ".":
         return report
+    base = prefix.rstrip("/")
     return LintReport(
-        tuple(f._replace(path=f"{prefix.rstrip('/')}/{f.path}") for f in report.findings),
+        tuple(
+            f._replace(path=base if f.path == "." else f"{base}/{f.path}") for f in report.findings
+        ),
         report.checked,
     )
 

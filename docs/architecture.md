@@ -15,11 +15,14 @@ configuration only.
 cli.py          click commands; maps results and errors to output and exit codes
 locking.py      cross process exclusive lock around each cache clone
 mcp_server.py   optional MCP tools calling the same functions as the CLI
-sync.py         pull / push / status orchestration over every selected collection
+sync.py         pull / push / status / merge_request orchestration over every collection
   ├── gitops.py     hardened subprocess wrapper around git; URL and ref sanitising
+  ├── gitlab.py     merge requests through the GitLab REST API (standard library only)
   ├── steering.py   FileSpec discovery, front matter, snapshots, change plans, atomic writes,
   │                 executable bits, versioned lock file
-  ├── lint.py       lint profiles (steering, markdown, skill, agent, hooks, json, generic)
+  ├── lint.py       lint profiles (steering, markdown, skill, agent, hooks, settings, prompt,
+  │                 json, generic) and the workspace auto load checks
+  ├── practices.py  best practice warnings cited from the Kiro documentation
   ├── paths.py      Kiro home, per collection directories, lock paths, cache, containment
   └── config.py     layered YAML + environment configuration validated by pydantic
 hooks.py        pre-push hook installer, Kiro hook and mcp.json renderers
@@ -60,6 +63,17 @@ errors.py       exception types carrying exit codes
    hooks never execute during a sync. If the server rejects push options the push is retried
    once without them, and that rejection is never mistaken for a network fault.
 5. Reset the cache clone to the default branch.
+
+## Resilience
+
+- `_refresh_cache` falls back to the cached default branch for `pull` and `status` when the
+  central repository is unreachable for a transient reason and `sync.offline_fallback` is
+  on; `push` always needs a fresh base and never uses the fallback.
+- Proposal branches of the project are listed with `git ls-remote` before a push so unmerged
+  work is reported; a failure to list them is a warning, never an error.
+- The GitLab API is optional: a missing token, a 4xx or a network failure turns into a note
+  on the push result, never a failed push, because push options already asked GitLab to
+  open the merge request.
 
 ## Lock file
 

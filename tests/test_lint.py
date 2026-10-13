@@ -43,8 +43,15 @@ def test_front_matter_rules(config: Config) -> None:
     )
     found = lint_text(config, "---\ninclusion: auto\nname: ''\n---\n# T\n")
     assert "auto-requires-metadata" in found
+    assert "steering-auto-description" in lint_text(
+        config, "---\ninclusion: auto\nname: api\ndescription: REST rules\n---\n# T\n"
+    )
     assert (
-        lint_text(config, "---\ninclusion: auto\nname: api\ndescription: REST rules\n---\n# T\n")
+        lint_text(
+            config,
+            "---\ninclusion: auto\nname: api\ndescription: Use when adding or reviewing REST "
+            "endpoints\n---\n# T\n",
+        )
         == set()
     )
     assert "unknown-key" in lint_text(config, "---\ninclusion: manual\nowner: me\n---\n# T\n")
@@ -99,7 +106,8 @@ def test_markdown_rules_and_severity(env: dict[str, str], tmp_path: Path) -> Non
     off_file = tmp_path / "off.yaml"
     off_file.write_text("lint:\n  pymarkdown:\n    enabled: false\n")
     off = load_config(env=env, explicit=off_file)
-    assert lint_snapshot({"doc.md": text.encode()}, off.lint).findings == ()
+    quiet = lint_snapshot({"doc.md": text.encode()}, off.lint)
+    assert {f.rule for f in quiet.findings} == {"steering-foundation-missing"}
 
 
 def test_markdown_scan_failure_is_reported(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,4 +241,4 @@ def test_size_limit_override_and_report_helpers(config: Config) -> None:
     assert prefix_report(report, "") is report
     merged = merge_reports([report, prefixed, LintReport((), 2)])
     assert merged.checked == 4
-    assert len(merged.findings) == 2
+    assert len(merged.findings) == 2 * len(report.findings)

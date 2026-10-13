@@ -33,19 +33,33 @@ uv run bandit -c pyproject.toml -r src -ll
 
 ## Releasing
 
-Releases are driven by the version number; nobody needs to push tags.
+Releases happen automatically when a pull request merges to `main`; nobody bumps versions
+or pushes tags by hand.
 
-1. In a pull request, bump `__version__` in `src/steersync/__init__.py` and move the
-   Unreleased notes in `CHANGELOG.md` under the new version.
-2. Merge it. The `CI` workflow run on `main` sees a version with no GitHub release and,
-   after the usual lint, test, security and build jobs, publishes the wheel and sdist to
-   PyPI, writes `SHA256SUMS`, attests provenance, creates the annotated `vX.Y.Z` tag and
-   publishes the GitHub release with the same files attached. Pushes to `main` that do not
-   change the version run the same workflow and skip the release jobs.
-3. To retry a failed release, run the `CI` workflow manually on `main`. A version that is
-   already released on GitHub is skipped, files already on PyPI are skipped, and a version
-   without a changelog section is refused. Pushing a matching `vX.Y.Z` tag by hand also works.
-4. PyPI publishing uses [trusted publishing](https://docs.pypi.org/trusted-publishers/): the
+1. Write your notes under `## [Unreleased]` in `CHANGELOG.md` as part of the pull request.
+2. Say how big the change is, first match wins:
+   - a label `release:major`, `release:minor`, `release:patch` or `release:skip`;
+   - a Conventional Commits prefix in the pull request title: `feat!:` or `BREAKING CHANGE`
+     is major, `feat:` minor, `fix:`, `perf:`, `refactor:`, `deps:`, `revert:` patch,
+     `docs:`, `chore:`, `ci:`, `test:`, `style:`, `build:` no release;
+   - otherwise the Unreleased section decides: `### Added` or `### Removed` present is minor,
+     any other content patch, an empty section no release.
+3. Merge. The `CI` workflow on `main` finds the merged pull request, computes the version
+   (`scripts/prepare_release.py`), moves the Unreleased notes under `## [X.Y.Z] - date`
+   (using the pull request title as the note when the section was empty), bumps
+   `__version__`, the README install snippet and the pre-commit example, and commits that
+   to `main` as `github-actions[bot]`. The same run then builds from that commit, publishes
+   to PyPI, writes `SHA256SUMS`, attests provenance, creates the annotated tag and the
+   GitHub release with the changelog section as notes.
+4. A version bumped by hand in the pull request is released as it is, with its changelog
+   section. To retry a release whose later steps failed, run the `CI` workflow manually on
+   `main`: an unreleased version in the file is released, files already on PyPI are skipped.
+   Pushing a matching `vX.Y.Z` tag by hand also works.
+5. If `main` is protected against pushes by the GitHub Actions bot, add a repository secret
+   `RELEASE_TOKEN` (a token allowed to bypass the protection); the workflow uses it for the
+   release commit and falls back to the job token otherwise. A rejected push fails the run
+   with that message and nothing is published.
+6. PyPI publishing uses [trusted publishing](https://docs.pypi.org/trusted-publishers/): the
    publisher on PyPI is registered for the repository `SCGIS-Wales/steersync` and the
    workflow `ci.yml`, with no environment restriction. No API token or secret is stored
    anywhere. The publishing job must stay in the top level workflow named on PyPI: PyPI

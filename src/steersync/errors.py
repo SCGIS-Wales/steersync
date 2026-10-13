@@ -50,3 +50,9 @@ class LockTimeoutError(SteersyncError):
     """Another steersync process held the cache lock for too long."""
 
     exit_code = 8
+
+
+class GitLabError(SteersyncError):
+    """A GitLab API call failed or the token for it is missing."""
+
+    exit_code = 9

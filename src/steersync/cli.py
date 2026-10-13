@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import click
 
-from steersync import __version__, gitops, hooks, sync
+from steersync import __version__, gitlab, gitops, hooks, sync
 from steersync.config import (
     LINT_PROFILES,
     Config,
@@ -22,7 +22,8 @@ from steersync.config import (
     validate_remote_url,
 )
 from steersync.errors import SteersyncError
-from steersync.lint import LintReport, lint_paths, merge_reports
+from steersync.hooks import DEFAULT_TOKEN_ENV
+from steersync.lint import LintReport, lint_paths, lint_workspace, merge_reports
 from steersync.logging_utils import configure_logging
 from steersync.paths import (
     global_collection_dir,
@@ -182,6 +183,8 @@ def pull(
         _soft_failure(exc, soft=best_effort, label="steering pull skipped")
         return
     quiet = bool(ctx.find_root().params.get("quiet"))
+    if best_effort:
+        config = _hook_budget(config)
     try:
         result = sync.pull(
             config,
@@ -207,7 +210,13 @@ def pull(
             }
         click.echo(
             json.dumps(
-                {"commit": result.commit, "dry_run": result.dry_run, "scopes": scopes}, indent=2
+                {
+                    "commit": result.commit,
+                    "dry_run": result.dry_run,
+                    "offline": result.offline,
+                    "scopes": scopes,
+                },
+                indent=2,
             )
         )
         return
@@ -218,7 +227,12 @@ def pull(
         for line in _plan_lines(label, item.plan):
             _echo(line, quiet=quiet)
     verb = "would apply" if dry_run else "applied"
-    _echo(f"{verb} {result.change_count} change(s) from {result.commit[:12]}", quiet=quiet)
+    source = (
+        f"{result.commit[:12]} (cached copy, central repository unreachable)"
+        if result.offline
+        else result.commit[:12]
+    )
+    _echo(f"{verb} {result.change_count} change(s) from {source}", quiet=quiet)
     if result.conflicts:
         _echo(
             f"{len(result.conflicts)} locally modified file(s) kept; "
@@ -318,6 +332,21 @@ def push(
         f"{result.status}: {result.message}",
         quiet=quiet and result.status in {"up-to-date", "nothing-to-push"},
     )
+    if result.merge_request:
+        _echo(f"merge request: {result.merge_request} ({result.merge_request_note})", quiet=quiet)
+    _echo_existing(result.existing_branches, result.project)
+
+
+def _echo_existing(branches: tuple[str, ...], project: str | None) -> None:
+    if not branches:
+        return
+    click.echo(
+        f"warning: {len(branches)} other proposal branch(es) for {project} not merged yet; "
+        "review or merge them before adding more:",
+        err=True,
+    )
+    for name in branches:
+        click.echo(f"  {name}", err=True)
 
 
 def _soft_failure(exc: Exception, *, soft: bool, label: str) -> None:
@@ -387,6 +416,7 @@ def status(
                     "workspace": _plans_json(result.workspace),
                     "global": _plans_json(result.global_),
                     "lint": json.loads(result.lint.to_json()) if result.lint else None,
+                    "proposals": list(result.proposals),
                 },
                 indent=2,
             )
@@ -406,6 +436,8 @@ def status(
                 click.echo(line)
     if result.lint is not None:
         _print_lint(result.lint, as_json=False, quiet=False)
+    if result.proposals:
+        click.echo(f"open proposal branch(es) for {result.project}: {', '.join(result.proposals)}")
 
 
 @main.command()
@@ -454,10 +486,24 @@ def lint(
                     max_file_bytes=collection.max_file_bytes,
                 )
             )
+        if not collections:
+            reports.append(_workspace_report(config, root))
         report = merge_reports(reports)
     _print_lint(report, as_json=as_json, quiet=quiet)
     if not report.ok:
         sys.exit(4)
+
+
+def _workspace_report(config: Config, root: Path) -> LintReport:
+    """Warn when a Kiro session here would not refresh and expose the configuration."""
+    hooks_dir = _collection_path(config, "hooks") or ".kiro/hooks"
+    settings_dir = _collection_path(config, "settings") or ".kiro/settings"
+    return lint_workspace(root, config.lint, hooks_dir=hooks_dir, settings_dir=settings_dir)
+
+
+def _collection_path(config: Config, name: str) -> str | None:
+    collection = config.collections.get(name)
+    return collection.workspace_path if collection is not None else None
 
 
 def _lint_explicit_paths(
@@ -498,12 +544,20 @@ def _collection_for_path(config: Config, root: Path | None, path: Path) -> str |
     if root is None:
         return None
     resolved = path.resolve()
+    root_resolved = root.resolve()
     best: tuple[int, str] | None = None
     for name, collection in config.enabled_collections().items():
         target = workspace_collection_dir(collection, root)
         if target is None:
             continue
         base = target.resolve()
+        if base == root_resolved:
+            # A collection rooted at the workspace (AGENTS.md) owns only the files its
+            # patterns select, never every path under the repository.
+            spec = FileSpec(collection.include, collection.exclude, collection.max_depth)
+            if resolved.is_file() and spec.matcher()(resolved.relative_to(base).as_posix()):
+                best = best or (0, name)
+            continue
         if resolved == base or base in resolved.parents:
             depth = len(base.parts)
             if best is None or depth > best[0]:
@@ -546,9 +600,29 @@ def install_hook(ctx: click.Context, force: bool) -> None:
     help="Add the synced collection directories to .git/info/exclude.",
 )
 @click.option("--hook/--no-hook", default=False, help="Also install the pre-push hook.")
+@click.option(
+    "--kiro/--no-kiro",
+    default=True,
+    help="Write the Kiro SessionStart hook and register the MCP server so a session "
+    "loads the configuration without being asked.",
+)
+@click.option(
+    "--mcp-command",
+    default="uvx",
+    show_default=True,
+    help="Executable Kiro uses to start the MCP server (use an absolute path if uvx is "
+    "not on Kiro's PATH).",
+)
 @click.pass_context
-def init(ctx: click.Context, write_config: bool, exclude: bool, hook: bool) -> None:
-    """Prepare this repository for steersync."""
+def init(
+    ctx: click.Context,
+    write_config: bool,
+    exclude: bool,
+    hook: bool,
+    kiro: bool,
+    mcp_command: str,
+) -> None:
+    """Prepare this repository: excludes, git hook, Kiro session hook and MCP server."""
     config, root = _bootstrap(ctx)
     if root is None:
         _fail(SteersyncError("not inside a git repository"))
@@ -577,6 +651,18 @@ def init(ctx: click.Context, write_config: bool, exclude: bool, hook: bool) -> N
     if hook:
         result = hooks.install_pre_push_hook(config, root, force=False)
         click.echo(f"{result.action}: {result.path}")
+    if kiro:
+        hooks_dir = root / (_collection_path(config, "hooks") or ".kiro/hooks")
+        hook_action = hooks.write_kiro_hook(hooks_dir)
+        click.echo(f"{hook_action}: {hooks_dir / hooks.KIRO_HOOK_FILE} (Kiro SessionStart hook)")
+        mcp_path = root / (_collection_path(config, "settings") or ".kiro/settings") / "mcp.json"
+        entry = hooks.mcp_server_entry(command=mcp_command, token_env=config.gitlab.token_env)
+        try:
+            mcp_action = hooks.merge_mcp_config(mcp_path, entry)
+        except ValueError as exc:
+            _fail(SteersyncError(str(exc)))
+            return
+        click.echo(f"{mcp_action}: {mcp_path} (steersync MCP server)")
     steering_dir = workspace_steering_dir(config, root)
     steering_dir.mkdir(parents=True, exist_ok=True)
     click.echo(f"ready: {steering_dir}")
@@ -616,9 +702,65 @@ def kiro_hook(ctx: click.Context, engine: str, write: bool) -> None:
     "--command", default="uvx", show_default=True, help="Executable used to launch the server."
 )
 @click.option("--remote", help="Central repository URL to embed instead of ${STEERSYNC_REMOTE}.")
-def mcp_config(command: str, remote: str | None) -> None:
+@click.pass_context
+def mcp_config(ctx: click.Context, command: str, remote: str | None) -> None:
     """Print an mcp.json fragment registering the steersync MCP server."""
-    click.echo(hooks.render_mcp_config(command=command, remote=remote), nl=False)
+    try:
+        config, _ = _bootstrap(ctx, propagate=True)
+        token_env = config.gitlab.token_env
+    except SteersyncError:
+        token_env = DEFAULT_TOKEN_ENV
+    click.echo(
+        hooks.render_mcp_config(command=command, remote=remote, token_env=token_env), nl=False
+    )
+
+
+@main.command("mr")
+@click.option("--branch", help="Proposal branch to open the merge request for (default: derived).")
+@click.option("--title", help="Merge request title.")
+@click.option("--remote-url", help="Project remote URL used to derive the project slug.")
+@click.option(
+    "--scope", type=click.Choice(["workspace", "global"]), default="workspace", show_default=True
+)
+@collection_option
+@click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
+@click.pass_context
+def merge_request(
+    ctx: click.Context,
+    branch: str | None,
+    title: str | None,
+    remote_url: str | None,
+    scope: str,
+    collections: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """Open (or find) the GitLab merge request for the pushed proposal branch."""
+    config, root = _bootstrap(ctx)
+    if root is None:
+        _fail(SteersyncError("not inside a git repository"))
+        return
+    try:
+        result = sync.merge_request(
+            config,
+            workspace_root=root,
+            remote_url=remote_url,
+            scope="global" if scope == "global" else "workspace",
+            branch=branch,
+            title=title,
+            collections=collections or None,
+        )
+    except SteersyncError as exc:
+        _fail(exc)
+        return
+    if as_json:
+        click.echo(json.dumps(result._asdict(), indent=2))
+        return
+    verb = "created" if result.created else "already open"
+    click.echo(f"merge request {verb}: {result.url} ({result.branch})")
+    if result.others:
+        click.echo("other open merge requests for this project:", err=True)
+        for item in result.others:
+            click.echo(f"  {item}", err=True)
 
 
 @main.command()
@@ -725,6 +867,8 @@ def doctor(ctx: click.Context) -> None:
         return
     click.echo(f"config: {config.source_file or 'packaged defaults'}")
     click.echo(f"remote: {gitops.redact_url(config.remote.url) or '(unset)'}")
+    token_state = "set" if gitlab.token_available(config, env) else "not set"
+    click.echo(f"gitlab token: {config.gitlab.token_env} {token_state}")
     click.echo(f"collections: {', '.join(config.enabled_collections()) or '(none)'}")
     for name, collection in config.enabled_collections().items():
         global_dir = global_collection_dir(collection, env)
