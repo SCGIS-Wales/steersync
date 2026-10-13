@@ -20,7 +20,7 @@ remote:
     - merge_request.create
     - merge_request.target={default_branch}
     - merge_request.remove_source_branch
-    - "merge_request.title=steering: update {project} from {user}"
+    - "merge_request.title=kiro-config: update {project} from {user}"
 
 git:
   binary: git
@@ -33,9 +33,34 @@ git:
   retry_max_backoff_seconds: 30.0
 
 branch:
-  # Placeholders: {project}, {user}, {hash}
-  template: "steering/{project}/{user}-{hash}"
+  # Proposal branch on the central repository. Placeholders: {project} (slug of the
+  # project repository), {user}, {hash} (digest of every synced file). The prefix up
+  # to {user} is used to find other open proposals for the same project.
+  template: "kiro-config/{project}/{user}-{hash}"
   hash_length: 8
+  # Where {user} comes from, first match wins: os (the operating system user name,
+  # letters and digits only), email (local part of git user.email), name (git user.name).
+  user_from: [os, email, name]
+  # Warn when another proposal branch for the same project is still on the remote.
+  warn_existing: true
+
+# Merge requests through the GitLab API. Everything is optional: push options already
+# open a merge request on GitLab; the API is used to report its URL, to open one when
+# push options were not accepted, and to list open proposals for the project.
+gitlab:
+  # Environment variable holding a token with the api scope. Never put the token here.
+  token_env: GITLAB_TOKEN
+  # Derived from remote.url when empty, e.g. https://gitlab.example.com/api/v4
+  api_url: ""
+  # Derived from remote.url when empty, e.g. platform/kiro-config
+  project: ""
+  # Defaults to remote.default_branch
+  target_branch: ""
+  auto_merge_request: true
+  remove_source_branch: true
+  squash: false
+  labels: [kiro-config]
+  timeout_seconds: 30
 
 paths:
   workspace_lock: .kiro/steersync.lock.json
@@ -85,25 +110,44 @@ collections:
     include: ["**/*.json", "**/*.md"]
     lint: agent
   hooks:
-    description: Standalone Kiro hooks (V3 and IDE 1.0)
+    description: Standalone Kiro hooks (V3 and IDE 1.0; legacy .kiro.hook files are flagged)
     workspace_path: .kiro/hooks
     global_path: hooks
     central_dir: hooks
-    include: ["**/*.json"]
+    include: ["**/*.json", "**/*.kiro.hook"]
     lint: hooks
   settings:
-    description: Workspace settings such as the language server configuration
+    description: Workspace settings (MCP servers, language servers)
     workspace_path: .kiro/settings
     global_path: null
     central_dir: settings
     include: ["lsp.json", "mcp.json"]
-    lint: json
+    lint: settings
+  prompts:
+    description: Saved prompts (slash commands, @prompt-name)
+    workspace_path: .kiro/prompts
+    global_path: prompts
+    central_dir: prompts
+    include: ["**/*.md"]
+    lint: prompt
+  agents-md:
+    description: AGENTS.md at the repository root (read by Kiro and other agents)
+    workspace_path: .
+    global_path: null
+    central_dir: agents-md
+    include: ["AGENTS.md"]
+    max_depth: 1
+    lint: markdown
+    git_exclude: false
 
 sync:
   # Delete locally managed files that disappeared from the central repository.
   prune: true
   # Fail a pull when the remote content has lint errors.
   strict_pull: false
+  # When the central repository is unreachable and a cache clone exists, pull from
+  # the cached default branch and warn instead of failing.
+  offline_fallback: true
   # Wait this long for another steersync process using the same cache clone.
   lock_timeout_seconds: 120
   # Safety limits for content read from the central repository.
@@ -112,6 +156,18 @@ sync:
 
 lint:
   max_file_bytes: 65536
+  # Best practice warnings taken from the Kiro documentation (never errors). The
+  # thresholds below back the size based ones; see docs/validation.md.
+  practices: true
+  practice_limits:
+    always_file_bytes: 16384
+    always_total_bytes: 49152
+    auto_description_min_chars: 20
+    skill_name_max_chars: 64
+    skill_description_max_chars: 1024
+    skill_body_max_lines: 500
+    hook_timeout_max_seconds: 300
+    prompt_name_max_chars: 50
   require_h1: true
   allowed_extra_keys:
     - x-steersync

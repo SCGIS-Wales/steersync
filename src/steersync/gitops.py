@@ -6,6 +6,7 @@ disabled so hooks and MCP servers fail fast instead of hanging.
 
 from __future__ import annotations
 
+import getpass
 import logging
 import os
 import random
@@ -255,14 +256,45 @@ def project_slug(url: str) -> str:
     return "/".join(kept)
 
 
+_USER_ID_RE = re.compile(r"[^a-z0-9-]+")
+
+
+def _user_candidate(
+    source: str, config: Config, repo: Path | None, env: Mapping[str, str]
+) -> str | None:
+    if source == "os":
+        return env.get("USER") or env.get("LOGNAME") or env.get("USERNAME") or _login_name()
+    if source == "email":
+        email = config_value(config, repo, "user.email", env=env)
+        return email.split("@", 1)[0] if email else None
+    if source == "name":
+        return config_value(config, repo, "user.name", env=env)
+    return None
+
+
+def _login_name() -> str | None:
+    try:
+        return getpass.getuser()
+    except OSError, KeyError, ImportError:  # pragma: no cover - platform dependent
+        return None
+
+
 def current_user_id(config: Config, repo: Path | None, env: Mapping[str, str]) -> str:
-    """Return a short identifier for the current user suitable for branch names."""
-    email = config_value(config, repo, "user.email", env=env)
-    candidate = (
-        email.split("@", 1)[0] if email else env.get("USER") or env.get("USERNAME") or "user"
-    )
-    slug = slugify_component(candidate)
-    return slug or "user"
+    """Return a short identifier for the current user suitable for branch names.
+
+    Sources are tried in the order of ``branch.user_from``: the operating system
+    user name, the local part of the git ``user.email``, the git ``user.name``.
+    The result is lowercase letters, digits and dashes only.
+    """
+    for source in config.branch.user_from:
+        candidate = _user_candidate(source, config, repo, env)
+        if not candidate:
+            continue
+        slug = _USER_ID_RE.sub("-", candidate.strip().lower()).strip("-")
+        slug = re.sub(r"-{2,}", "-", slug)[:40].strip("-")
+        if slug:
+            return slug
+    return "user"
 
 
 def sanitise_ref(name: str) -> str:
@@ -320,6 +352,24 @@ def remote_branch_exists(
         return False
     msg = f"ls-remote failed ({result.returncode}): {redact_url(result.stderr.strip())}"
     raise GitError(msg)
+
+
+def list_remote_branches(
+    config: Config, url: str, pattern: str, env: Mapping[str, str] | None = None
+) -> list[str]:
+    """Return the remote branch names matching a glob such as ``kiro-config/acme/api/*``."""
+    result = run_git(
+        config,
+        ["ls-remote", "--heads", "--", url, f"refs/heads/{pattern}"],
+        env=env,
+        retries=config.git.retries,
+    )
+    names: list[str] = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1].startswith("refs/heads/"):
+            names.append(fields[1].removeprefix("refs/heads/"))
+    return sorted(names)
 
 
 def remote_head_oid(
@@ -423,6 +473,13 @@ def _reset_to_remote(config: Config, *, cache_dir: Path, env: Mapping[str, str] 
         env=env,
     )
     run_git(config, ["clean", "-fdqx"], cwd=cache_dir, env=env)
+
+
+def reset_cache_clone(
+    config: Config, *, cache_dir: Path, env: Mapping[str, str] | None = None
+) -> None:
+    """Put an existing cache clone back on its cached default branch without fetching."""
+    _reset_to_remote(config, cache_dir=cache_dir, env=env)
 
 
 def _remove_cache_dir(cache_dir: Path) -> None:

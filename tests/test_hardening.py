@@ -482,10 +482,10 @@ def test_mcp_tools_report_configuration_errors(
 ) -> None:
     monkeypatch.setenv("STEERSYNC_CONFIG", str(tmp_path / "missing.yaml"))
     for tool in (
-        mcp_server.pull_steering,
-        mcp_server.push_steering,
-        mcp_server.diff_steering,
-        mcp_server.lint_steering,
+        mcp_server.pull_kiro_config,
+        mcp_server.push_kiro_config,
+        mcp_server.diff_kiro_config,
+        mcp_server.validate_kiro_config,
     ):
         outcome = tool()
         assert outcome["ok"] is False

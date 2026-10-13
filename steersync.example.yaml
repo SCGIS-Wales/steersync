@@ -13,7 +13,7 @@ remote:
     - merge_request.create
     - merge_request.target={default_branch}
     - merge_request.remove_source_branch
-    - "merge_request.title=steering: update {project} from {user}"
+    - "merge_request.title=kiro-config: update {project} from {user}"
     - merge_request.label=steering
 
 git:
@@ -24,8 +24,18 @@ git:
   retry_max_backoff_seconds: 30.0
 
 branch:
-  template: "steering/{project}/{user}-{hash}"
+  template: "kiro-config/{project}/{user}-{hash}"
   hash_length: 8
+  user_from: [os, email, name]  # operating system user first, then git email, then git name
+  warn_existing: true           # list other unmerged proposals for the project before pushing
+
+gitlab:
+  token_env: GITLAB_TOKEN       # the token itself is never written to a file
+  api_url: ""                   # derived from remote.url: https://gitlab.example.com/api/v4
+  project: ""                   # derived from remote.url: platform/kiro-steering
+  target_branch: ""             # defaults to remote.default_branch
+  auto_merge_request: true
+  labels: [kiro-config]
 
 # Collections are merged over the packaged defaults (steering, specs, skills, agents,
 # hooks, settings); list only what differs. See `steersync config default` for every key.
@@ -43,6 +53,7 @@ collections:
 sync:
   prune: true
   strict_pull: false
+  offline_fallback: true
   lock_timeout_seconds: 120
   max_files: 1000
   max_total_bytes: 10485760
@@ -50,6 +61,9 @@ sync:
 lint:
   max_file_bytes: 65536
   require_h1: true
+  practices: true               # best practice warnings from the Kiro documentation
+  practice_limits:
+    always_total_bytes: 49152
   pymarkdown:
     enabled: true
     severity: warning

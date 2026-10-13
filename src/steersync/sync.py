@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Literal, NamedTuple, ParamSpec, TypeVar, cast
 from urllib.parse import urlsplit
 
-from steersync import gitops, paths
+from steersync import gitlab, gitops, paths
 from steersync.config import CollectionConfig, Config, remote_host, validate_remote_url
-from steersync.errors import ConfigError, LintError, SyncConflictError
+from steersync.errors import ConfigError, GitError, GitLabError, LintError, SyncConflictError
 from steersync.lint import LintReport, lint_snapshot, merge_reports, prefix_report
 from steersync.locking import exclusive_lock
 from steersync.steering import (
@@ -64,6 +64,8 @@ class PullResult(NamedTuple):
     commit: str
     results: tuple[CollectionResult, ...]
     dry_run: bool
+    # True when the central repository was unreachable and the cached copy was used.
+    offline: bool = False
 
     @property
     def conflicts(self) -> tuple[str, ...]:
@@ -87,6 +89,12 @@ class PushResult(NamedTuple):
     plan: ChangePlan | None
     lint: LintReport | None
     message: str
+    # Other proposal branches for the same project still on the remote.
+    existing_branches: tuple[str, ...] = ()
+    # URL of the merge request for the pushed branch when the GitLab API confirmed or
+    # created it, and a short note on how it was obtained.
+    merge_request: str | None = None
+    merge_request_note: str = ""
 
 
 class StatusResult(NamedTuple):
@@ -97,6 +105,17 @@ class StatusResult(NamedTuple):
     workspace: dict[str, ChangePlan] | None
     global_: dict[str, ChangePlan]
     lint: LintReport | None
+    # Proposal branches for this project still on the central remote.
+    proposals: tuple[str, ...] = ()
+
+
+class MergeRequestResult(NamedTuple):
+    project: str
+    branch: str
+    url: str
+    created: bool
+    # Other open merge requests from proposal branches of the same project.
+    others: tuple[str, ...]
 
 
 class _ScopeTarget(NamedTuple):
@@ -136,11 +155,33 @@ def _cache_git_env(config: Config, env: Mapping[str, str]) -> dict[str, str]:
     return gitops.git_environment(env, hooks_dir=no_hooks)
 
 
-def _refresh_cache(config: Config, env: Mapping[str, str], url: str) -> tuple[Path, str]:
+def _refresh_cache(
+    config: Config, env: Mapping[str, str], url: str, *, allow_offline: bool = False
+) -> tuple[Path, str, bool]:
+    """Refresh the cache clone and return its path, head commit and an offline flag.
+
+    With ``allow_offline`` a transient failure to reach the central repository falls
+    back to the cached default branch when ``sync.offline_fallback`` is on, so a
+    session start or a pull on a train still applies the last known configuration.
+    """
     cache_dir = paths.cache_repo_dir(config, env, url)
     git_env = _cache_git_env(config, env)
-    gitops.ensure_cache_clone(config, url=url, cache_dir=cache_dir, env=git_env)
-    return cache_dir, gitops.head_commit(config, cache_dir, env=git_env)
+    try:
+        gitops.ensure_cache_clone(config, url=url, cache_dir=cache_dir, env=git_env)
+    except GitError as exc:
+        usable = (cache_dir / ".git").is_dir()
+        if not (allow_offline and config.sync.offline_fallback and usable):
+            raise
+        if not gitops.is_transient(str(exc)):
+            raise
+        log.warning(
+            "central repository unreachable (%s); applying the cached copy of %s instead",
+            exc,
+            config.remote.default_branch,
+        )
+        gitops.reset_cache_clone(config, cache_dir=cache_dir, env=git_env)
+        return cache_dir, gitops.head_commit(config, cache_dir, env=git_env), True
+    return cache_dir, gitops.head_commit(config, cache_dir, env=git_env), False
 
 
 def _spec(collection: CollectionConfig) -> FileSpec:
@@ -235,7 +276,7 @@ def pull(
     environment = _env(env)
     url = _central_url(config)
     selected = config.select_collections(collections)
-    cache_dir, commit = _refresh_cache(config, environment, url)
+    cache_dir, commit, offline = _refresh_cache(config, environment, url, allow_offline=True)
     strict_pull = config.sync.strict_pull if strict is None else strict
     targets: list[_ScopeTarget] = []
 
@@ -279,7 +320,7 @@ def pull(
                 workspace_root=workspace_root if target.scope == "workspace" else None,
             )
         )
-    return PullResult(url, commit, tuple(results), dry_run)
+    return PullResult(url, commit, tuple(results), dry_run, offline)
 
 
 def _pull_scope(
@@ -348,10 +389,16 @@ def _apply_collection(
         )
     for finding in report.findings:
         log.log(
-            logging.ERROR if finding.severity == "error" else logging.WARNING,
+            logging.ERROR if finding.severity == "error" else logging.DEBUG,
             "%s: %s",
             label,
             finding.render(),
+        )
+    if report.warnings:
+        log.warning(
+            "%s: %d warning(s) in the central content; run 'steersync lint' for details",
+            label,
+            len(report.warnings),
         )
     del workspace_root
     local = snapshot_directory(target_dir, spec)
@@ -403,8 +450,7 @@ def _prefixed(collection: CollectionConfig, snapshot: Mapping[str, bytes]) -> Sn
     return {f"{prefix}/{rel}" if prefix else rel: data for rel, data in snapshot.items()}
 
 
-@_with_cache_lock
-def push(
+def _push_unlocked(
     config: Config,
     *,
     workspace_root: Path,
@@ -489,7 +535,7 @@ def push(
                 "fix them or pass --no-lint"
             )
 
-    cache_dir, base_commit = _refresh_cache(config, environment, url)
+    cache_dir, base_commit, _ = _refresh_cache(config, environment, url)
     central_base = (
         _project_dir(config, cache_dir, project)
         if scope == "workspace"
@@ -521,6 +567,7 @@ def push(
     branch = gitops.build_branch_name(config, project=project, user=user, content_hash=digest)
     if not gitops.check_ref_format(config, branch, env=git_env):
         raise ConfigError(f"generated branch name is not a valid git ref: {branch}")
+    existing = _other_proposals(config, url, project, branch, git_env)
     if dry_run:
         return PushResult(
             "dry-run",
@@ -532,8 +579,10 @@ def push(
             plan,
             report,
             f"would push {plan.change_count} change(s)",
+            existing,
         )
     if gitops.remote_branch_exists(config, url, branch, env=git_env):
+        mr_url, mr_note = _merge_request_for(config, environment, url, branch, project, plan)
         return PushResult(
             "already-proposed",
             project,
@@ -544,6 +593,9 @@ def push(
             plan,
             report,
             "an identical proposal branch already exists",
+            existing,
+            mr_url,
+            mr_note,
         )
 
     cache_env = _cache_git_env(config, environment)
@@ -604,6 +656,7 @@ def push(
             f"origin/{config.remote.default_branch}",
             env=cache_env,
         )
+    mr_url, mr_note = _merge_request_for(config, environment, url, branch, project, plan)
     return PushResult(
         "pushed",
         project,
@@ -615,11 +668,136 @@ def push(
         report,
         f"pushed {plan.change_count} change(s) to {branch}"
         + ("" if options_delivered or not options else " (push options not accepted by remote)"),
+        existing,
+        mr_url,
+        mr_note,
     )
 
 
+push = _with_cache_lock(_push_unlocked)
+"""Propose the selected local collections as one branch (and merge request) centrally."""
+
+
+def _other_proposals(
+    config: Config, url: str, project: str, branch: str, git_env: Mapping[str, str]
+) -> tuple[str, ...]:
+    """Return the other proposal branches for ``project`` still on the remote."""
+    if not config.branch.warn_existing:
+        return ()
+    pattern = config.branch.project_glob(project)
+    try:
+        found = gitops.list_remote_branches(config, url, pattern, env=git_env)
+    except GitError as exc:
+        log.warning("could not list existing proposals for %s: %s", project, exc)
+        return ()
+    others = tuple(name for name in found if name != branch)
+    if others:
+        log.warning(
+            "%d other proposal branch(es) for %s not merged yet: %s",
+            len(others),
+            project,
+            ", ".join(others),
+        )
+    return others
+
+
+def _merge_request_for(
+    config: Config,
+    env: Mapping[str, str],
+    url: str,
+    branch: str,
+    project: str,
+    plan: ChangePlan,
+) -> tuple[str | None, str]:
+    """Confirm or open the merge request for ``branch`` through the API when a token exists."""
+    if not config.gitlab.auto_merge_request or not gitlab.token_available(config, env):
+        return None, "no GitLab token; the merge request is opened by push options if supported"
+    try:
+        client = gitlab.resolve_client(config, env, url)
+        mr, created = gitlab.ensure_merge_request(
+            client,
+            config,
+            source_branch=branch,
+            title=_merge_request_title(project),
+            description=_commit_message(project, gitops.current_user_id(config, None, env), plan),
+        )
+    except (GitLabError, ConfigError) as exc:
+        log.warning("merge request not confirmed: %s", exc)
+        return None, f"merge request not confirmed: {exc}"
+    return mr.url, "merge request created" if created else "merge request already open"
+
+
+def _merge_request_title(project: str) -> str:
+    return f"kiro-config: update {project}"
+
+
+@_with_cache_lock
+def merge_request(
+    config: Config,
+    *,
+    workspace_root: Path,
+    env: Mapping[str, str] | None = None,
+    remote_url: str | None = None,
+    scope: Scope = "workspace",
+    branch: str | None = None,
+    title: str | None = None,
+    collections: Sequence[str] | None = None,
+) -> MergeRequestResult:
+    """Open (or find) the merge request for the current proposal branch through the GitLab API.
+
+    Without ``branch`` the proposal branch is derived from the local content exactly as
+    ``push`` derives it; it must already exist on the central remote.
+    """
+    environment = _env(env)
+    url = _central_url(config)
+    git_env = gitops.git_environment(environment)
+    client = gitlab.resolve_client(config, environment, url)
+    if scope == "workspace":
+        project = resolve_project(
+            config, workspace_root=workspace_root, env=environment, remote_url=remote_url
+        )
+        if project is None:
+            raise ConfigError(
+                "cannot determine the project: no origin remote and no --remote-url given"
+            )
+    else:
+        project = "global"
+    if branch is None:
+        preview = _push_unlocked(
+            config,
+            workspace_root=workspace_root,
+            env=environment,
+            remote_url=remote_url,
+            scope=scope,
+            dry_run=True,
+            run_lint=False,
+            collections=collections,
+        )
+        if preview.branch is None:
+            raise GitLabError(
+                f"nothing to propose for {project}: {preview.message}; "
+                "edit the collections or pass --branch"
+            )
+        branch = preview.branch
+    if not gitops.remote_branch_exists(config, url, branch, env=git_env):
+        raise GitLabError(f"branch {branch} is not on the central remote yet; run steersync push")
+    others = _other_proposals(config, url, project, branch, git_env)
+    mr, created = gitlab.ensure_merge_request(
+        client,
+        config,
+        source_branch=branch,
+        title=title or _merge_request_title(project),
+        description=f"Proposal branch `{branch}` pushed by steersync.",
+    )
+    open_others = tuple(
+        f"{item.source_branch}: {item.url}"
+        for item in gitlab.open_merge_requests(client, source_branches=others)
+    )
+    return MergeRequestResult(project, branch, mr.url, created, open_others)
+
+
 def _commit_message(project: str, user: str, plan: ChangePlan) -> str:
-    lines = [f"steering: update {project} from {user}", ""]
+    lines = [f"kiro-config: update {project} from {user}", ""]
     lines.extend(f"add: {p}" for p in plan.add)
     lines.extend(f"update: {p}" for p in plan.update)
     lines.extend(f"delete: {p}" for p in plan.delete)
@@ -669,7 +847,7 @@ def status(
     environment = _env(env)
     url = _central_url(config)
     selected = config.select_collections(collections)
-    cache_dir, commit = _refresh_cache(config, environment, url)
+    cache_dir, commit, _ = _refresh_cache(config, environment, url, allow_offline=True)
     global_base = paths.ensure_within(cache_dir, Path(config.remote.global_dir))
     global_lock = lock_collections(read_lock(paths.global_lock_path(config, environment)))
     global_plans: dict[str, ChangePlan] = {}
@@ -718,7 +896,20 @@ def status(
                     )
             if run_lint:
                 report = merge_reports(reports)
-    return StatusResult(project, url, commit, workspace_plans, global_plans, report)
+    proposals: tuple[str, ...] = ()
+    if project is not None and config.branch.warn_existing:
+        try:
+            proposals = tuple(
+                gitops.list_remote_branches(
+                    config,
+                    url,
+                    config.branch.project_glob(project),
+                    env=gitops.git_environment(environment),
+                )
+            )
+        except GitError as exc:
+            log.warning("could not list proposals for %s: %s", project, exc)
+    return StatusResult(project, url, commit, workspace_plans, global_plans, report, proposals)
 
 
 def raise_on_conflicts(result: PullResult) -> None:

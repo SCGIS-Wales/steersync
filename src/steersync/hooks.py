@@ -110,29 +110,98 @@ def render_kiro_hook(
     return json.dumps(payload, indent=2) + "\n"
 
 
-def render_mcp_config(
-    *, command: str = "uvx", args: tuple[str, ...] = ("steersync", "mcp"), remote: str | None = None
-) -> str:
-    """Render the ``mcp.json`` fragment registering the steersync MCP server."""
+MCP_SERVER_NAME = "steersync"
+KIRO_HOOK_FILE = "steersync.json"
+# Name of the environment variable (not a secret) that carries the GitLab token.
+DEFAULT_TOKEN_ENV = "GITLAB_TOKEN"  # noqa: S105
+
+
+def mcp_server_entry(
+    *,
+    command: str = "uvx",
+    args: tuple[str, ...] = ("steersync", "mcp"),
+    remote: str | None = None,
+    token_env: str = DEFAULT_TOKEN_ENV,
+) -> dict[str, object]:
+    """Return the ``mcpServers.steersync`` entry for Kiro's ``mcp.json``.
+
+    Kiro does not pass the shell environment to MCP servers, so the variables git
+    and the GitLab API need are forwarded explicitly with ``${VAR}`` placeholders.
+    """
     env: dict[str, str] = {
         "STEERSYNC_REMOTE": remote or "${STEERSYNC_REMOTE}",
         "SSH_AUTH_SOCK": "${SSH_AUTH_SOCK}",
         "HTTPS_PROXY": "${HTTPS_PROXY}",
         "GIT_TERMINAL_PROMPT": "0",
+        token_env: f"${{{token_env}}}",
     }
-    payload = {
-        "mcpServers": {
-            "steersync": {
-                "command": command,
-                "args": list(args),
-                "env": env,
-                "timeout": 60000,
-                "requestTimeout": 180000,
-                "disabled": False,
-            }
-        }
+    return {
+        "command": command,
+        "args": list(args),
+        "env": env,
+        "timeout": 60000,
+        "requestTimeout": 180000,
+        "disabled": False,
     }
-    return json.dumps(payload, indent=2) + "\n"
+
+
+def render_mcp_config(
+    *,
+    command: str = "uvx",
+    args: tuple[str, ...] = ("steersync", "mcp"),
+    remote: str | None = None,
+    token_env: str = DEFAULT_TOKEN_ENV,
+) -> str:
+    """Render the ``mcp.json`` fragment registering the steersync MCP server."""
+    entry = mcp_server_entry(command=command, args=args, remote=remote, token_env=token_env)
+    return json.dumps({"mcpServers": {MCP_SERVER_NAME: entry}}, indent=2) + "\n"
+
+
+def merge_mcp_config(
+    path: Path, entry: Mapping[str, object], *, force: bool = False
+) -> Literal["written", "updated", "unchanged", "kept"]:
+    """Add the steersync server to an ``mcp.json``, keeping every other server.
+
+    An existing steersync entry is left alone unless ``force`` is set, so a team
+    that pinned an absolute command path keeps it across ``steersync init`` runs.
+    """
+    data: dict[str, object] = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            msg = f"{path} is not valid JSON; fix it before adding the steersync server: {exc}"
+            raise ValueError(msg) from exc
+        if isinstance(loaded, dict):
+            data = loaded
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+        data["mcpServers"] = servers
+    existing = servers.get(MCP_SERVER_NAME)
+    if existing == dict(entry):
+        return "unchanged"
+    if existing is not None and not force:
+        return "kept"
+    action: Literal["written", "updated"] = "updated" if existing is not None else "written"
+    servers[MCP_SERVER_NAME] = dict(entry)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return action
+
+
+def write_kiro_hook(
+    hooks_dir: Path, *, command: str = "steersync pull --quiet --best-effort", timeout: int = 30
+) -> Literal["written", "updated", "unchanged"]:
+    """Write the V3 SessionStart hook file that refreshes the configuration."""
+    target = hooks_dir / KIRO_HOOK_FILE
+    rendered = render_kiro_hook("v3", command=command, timeout=timeout)
+    if target.is_file() and target.read_text("utf-8") == rendered:
+        return "unchanged"
+    action: Literal["written", "updated"] = "updated" if target.exists() else "written"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    target.write_text(rendered, encoding="utf-8")
+    return action
 
 
 def render_pre_commit_config(rev: str = "v0.2.0") -> str:

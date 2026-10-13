@@ -138,12 +138,21 @@ def test_pull_push_status_round_trip(
     push_json = runner.invoke(main, ["push", "--json"])
     data = json.loads(push_json.output)
     assert data["status"] == "already-proposed"
-    assert data["branch"].startswith("steering/")
+    assert data["branch"].startswith("kiro-config/")
     assert runner.invoke(main, ["-q", "push", "--dry-run"]).exit_code == 0
     pull_json = runner.invoke(main, ["pull", "--json", "--no-global"])
-    pulled = json.loads(pull_json.output)["scopes"]["workspace"]
+    pulled = json.loads(pull_json.stdout)["scopes"]["workspace"]
     assert pulled["steering"]["plan"]["local_only"] == ["api.md"]
-    assert set(pulled) == {"steering", "specs", "skills", "agents", "hooks", "settings"}
+    assert set(pulled) == {
+        "steering",
+        "specs",
+        "skills",
+        "agents",
+        "hooks",
+        "settings",
+        "prompts",
+        "agents-md",
+    }
     assert runner.invoke(main, ["--quiet", "pull", "--dry-run"]).exit_code == 0
 
 
@@ -210,8 +219,8 @@ def test_push_from_hook_uses_pre_commit_remote(
         main, ["push", "--from-hook"], input="refs/heads/main 1 refs/heads/main 2\n"
     )
     assert result.exit_code == 0, result.output
-    branches = git("branch", "--list", "steering/hooked/repo/*", cwd=central, env=env)
-    assert "steering/hooked/repo/" in branches
+    branches = git("branch", "--list", "kiro-config/hooked/repo/*", cwd=central, env=env)
+    assert "kiro-config/hooked/repo/" in branches
 
 
 def test_push_bad_config_from_hook(runner: CliRunner, in_project: Path, tmp_path: Path) -> None:

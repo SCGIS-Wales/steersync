@@ -108,10 +108,12 @@ def test_pull_applies_every_collection(
         "agents",
         "hooks",
         "settings",
+        "prompts",
+        "agents-md",
     }
     assert "venafi-tpp-websdk/scripts/renew.sh" in lock["collections"]["skills"]["files"]
     global_lock = read_lock(global_lock_path(config, env))
-    assert set(global_lock["collections"]) == {"steering", "skills", "agents", "hooks"}
+    assert set(global_lock["collections"]) == {"steering", "skills", "agents", "hooks", "prompts"}
     assert sync.pull(config, workspace_root=project, env=env).change_count == 0
 
 
@@ -247,10 +249,19 @@ def test_status_reports_every_collection(
     (project / ".kiro" / "hooks" / "fmt.json").write_text(HOOK_DOC)
     result = sync.status(config, workspace_root=project, env=env)
     assert result.workspace is not None
-    assert set(result.workspace) == {"steering", "specs", "skills", "agents", "hooks", "settings"}
+    assert set(result.workspace) == {
+        "steering",
+        "specs",
+        "skills",
+        "agents",
+        "hooks",
+        "settings",
+        "prompts",
+        "agents-md",
+    }
     assert result.workspace["hooks"].add == ("fmt.json",)
     assert result.workspace["hooks"].delete == ("tests-on-stop.json",)
-    assert set(result.global_) == {"steering", "skills", "agents", "hooks"}
+    assert set(result.global_) == {"steering", "skills", "agents", "hooks", "prompts"}
     assert result.global_["skills"].add == ("shared-skill/SKILL.md",)
     assert result.lint is not None
     assert result.lint.checked == 1
@@ -313,6 +324,7 @@ def test_custom_collection_and_disabled_defaults(
         "  agents:\n    enabled: false\n"
         "  hooks:\n    enabled: false\n"
         "  settings:\n    enabled: false\n"
+        "  prompts:\n    enabled: false\n"
         "  agents-md:\n"
         "    description: Root AGENTS.md\n"
         "    workspace_path: .\n"
@@ -435,7 +447,7 @@ def test_cli_collection_options(
     assert pushed["plan"]["add"] == ["hooks/fmt.json"]
 
     doctor = runner.invoke(main, ["doctor"])
-    assert "collections: steering, specs, skills, agents, hooks, settings" in doctor.output
+    assert "collections: steering, specs, skills, agents, hooks, settings, prompts" in doctor.output
     assert "workspace skills:" in doctor.output
     assert "global hooks:" in doctor.output
 
@@ -488,19 +500,19 @@ def test_mcp_tools_accept_collections(
     monkeypatch.chdir(project)
     monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
     central_commit(seed_collections, "seed collections")
-    pulled = mcp_server.pull_steering(collections=["skills"])
+    pulled = mcp_server.pull_kiro_config(collections=["skills"])
     assert pulled["ok"], pulled
     assert list(pulled["scopes"]["workspace"]) == ["skills"]
     assert list(pulled["scopes"]["global"]) == ["skills"]
-    diff = mcp_server.diff_steering(collections=["specs"])
+    diff = mcp_server.diff_kiro_config(collections=["specs"])
     assert diff["ok"]
     assert list(diff["workspace"]) == ["specs"]
     assert diff["global"] == {}
-    lint = mcp_server.lint_steering(collections=["skills"])
+    lint = mcp_server.validate_kiro_config(collections=["skills"])
     assert lint["ok"]
     assert lint["checked"] == 3
-    assert mcp_server.lint_steering(collections=["nope"])["ok"] is False
-    pushed = mcp_server.push_steering(dry_run=True, collections=["skills"])
+    assert mcp_server.validate_kiro_config(collections=["nope"])["ok"] is False
+    pushed = mcp_server.push_kiro_config(dry_run=True, collections=["skills"])
     assert pushed["ok"]
     assert pushed["status"] == "up-to-date"
     assert pushed["collections"] == ["skills"]

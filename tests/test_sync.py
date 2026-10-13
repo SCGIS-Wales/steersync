@@ -30,6 +30,7 @@ def test_pull_applies_global_and_workspace(
         "skills",
         "agents",
         "hooks",
+        "prompts",
     }
     assert (global_steering_dir(config, env) / "rules.md").read_text() == GLOBAL_DOC
     assert (project / ".kiro" / "steering" / "python.md").read_text() == PROJECT_DOC
@@ -176,12 +177,14 @@ def test_push_creates_branch_then_dedupes(
     assert pushed.status == "pushed"
     assert pushed.branch == dry.branch
     assert pushed.commit
-    assert pushed.branch.startswith(f"steering/{PROJECT_SLUG}/test.user-")
+    assert pushed.branch.startswith(f"kiro-config/{PROJECT_SLUG}/tester-")
+    assert pushed.existing_branches == ()
+    assert pushed.merge_request is None
     assert gitops.remote_branch_exists(config, str(central), pushed.branch, env=git_env)
     assert "push options not accepted" in pushed.message
     show = git("show", "--stat", "--format=%an <%ae>%n%s", pushed.branch, cwd=central, env=env)
     assert "Test User <test.user@example.com>" in show
-    assert f"steering: update {PROJECT_SLUG} from test.user" in show
+    assert f"kiro-config: update {PROJECT_SLUG} from tester" in show
     assert f"projects/{PROJECT_SLUG}/steering/api.md" in show
     assert "python.md" not in git(
         "ls-tree",
@@ -193,7 +196,16 @@ def test_push_creates_branch_then_dedupes(
         cwd=central,
         env=env,
     )
-    assert pushed.collections == ("steering", "specs", "skills", "agents", "hooks", "settings")
+    assert pushed.collections == (
+        "steering",
+        "specs",
+        "skills",
+        "agents",
+        "hooks",
+        "settings",
+        "prompts",
+        "agents-md",
+    )
     assert pushed.plan is not None
     assert pushed.plan.add == ("steering/api.md",)
 
@@ -240,7 +252,7 @@ def test_push_global_scope(
     assert result.status == "pushed"
     assert result.project == "global"
     assert result.branch
-    assert result.branch.startswith("steering/global/")
+    assert result.branch.startswith("kiro-config/global/")
     assert "global/steering/rules.md" in git("show", "--stat", result.branch, cwd=central, env=env)
 
 

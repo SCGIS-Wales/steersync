@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 from pathlib import Path
 
 import pytest
@@ -57,17 +58,17 @@ def test_build_branch_name_is_valid_ref(config: Config, env: dict[str, str]) -> 
     name = gitops.build_branch_name(
         config, project="acme/platform/api", user="dejan", content_hash="0123456789abcdef"
     )
-    assert name == "steering/acme/platform/api/dejan-01234567"
+    assert name == "kiro-config/acme/platform/api/dejan-01234567"
     assert gitops.check_ref_format(config, name, env=env)
     assert not gitops.check_ref_format(config, "bad..name", env=env)
 
 
 def test_build_branch_name_rejects_empty(env: dict[str, str], tmp_path: Path) -> None:
     path = tmp_path / "c.yaml"
-    path.write_text("branch:\n  template: '{hash}'\n")
+    path.write_text("branch:\n  template: '{project}{hash}'\n")
     config = load_config(env=env, explicit=path)
     with pytest.raises(GitError):
-        gitops.build_branch_name(config, project="p", user="u", content_hash="........")
+        gitops.build_branch_name(config, project="", user="u", content_hash="........")
 
 
 def test_render_push_options(config: Config) -> None:
@@ -76,7 +77,7 @@ def test_render_push_options(config: Config) -> None:
     )
     assert options[0] == "merge_request.create"
     assert "merge_request.target=main" in options
-    assert "merge_request.title=steering: update acme/api from dejan" in options
+    assert "merge_request.title=kiro-config: update acme/api from dejan" in options
 
 
 def test_parse_pre_push_stdin() -> None:
@@ -137,7 +138,9 @@ def test_run_git_timeout(
         gitops.run_git(config, ["status"], cwd=tmp_path, env=env)
 
 
-def test_repo_helpers(config: Config, env: dict[str, str], project: Path) -> None:
+def test_repo_helpers(
+    config: Config, env: dict[str, str], project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     assert (
         gitops.repo_toplevel(
             config, project / "sub" if (project / "sub").exists() else project, env=env
@@ -148,7 +151,18 @@ def test_repo_helpers(config: Config, env: dict[str, str], project: Path) -> Non
     assert gitops.remote_url(config, project, "nope", env=env) is None
     assert gitops.git_dir(config, project, env=env) == project / ".git"
     assert gitops.hooks_dir(config, project, env=env) == project / ".git" / "hooks"
-    assert gitops.current_user_id(config, project, env) == "test.user"
+    # The operating system user comes first, then the git email, then the git name.
+    assert gitops.current_user_id(config, project, env) == "tester"
+    no_user = {k: v for k, v in env.items() if k not in {"USER", "LOGNAME", "USERNAME"}}
+    assert gitops.current_user_id(config, project, no_user) == gitops.current_user_id(
+        config, project, {**no_user, "USER": getpass.getuser()}
+    )
+
+    def no_login() -> str:
+        raise KeyError("no passwd entry")
+
+    monkeypatch.setattr(getpass, "getuser", no_login)
+    assert gitops.current_user_id(config, project, no_user) == "test-user"
     assert (
         gitops.current_user_id(config, None, {**env, "GIT_CONFIG_GLOBAL": "/dev/null"}) == "tester"
     )

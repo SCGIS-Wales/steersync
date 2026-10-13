@@ -5,6 +5,50 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Two more collections from the Kiro configuration scopes: `prompts` (`.kiro/prompts` and
+  `~/.kiro/prompts`, the saved prompts that become slash commands) and `agents-md` (the
+  `AGENTS.md` at the repository root). Legacy `.kiro.hook` files are picked up by the hooks
+  collection and flagged.
+- Best practice validation. Every collection profile now reports warnings taken from the Kiro
+  documentation (steering file naming and `auto` descriptions, the `globs` key, always on
+  context budget, missing foundation files, agent tool wildcards and startup globs, inline
+  agent hooks on CLI 3.0, hook timeouts and legacy schemas, skill name and description
+  limits, machine specific paths in `mcp.json`, prompt name length) plus the `settings` and
+  `prompt` profiles. Warnings never block; thresholds live under `lint.practice_limits` and
+  `lint.practices: false` turns them off. The rules are listed in `docs/validation.md`.
+- `steersync init` writes the Kiro `SessionStart` hook and registers the steersync MCP server
+  in `.kiro/settings/mcp.json` (other servers kept, an existing entry left alone), so a Kiro
+  session in any repository refreshes and loads the configuration without being asked.
+  `steersync lint` warns when either piece is missing.
+- GitLab merge requests through the REST API: `steersync mr` and the `raise_merge_request`
+  MCP tool open or find the merge request for the proposal branch, `push` confirms or creates
+  it and prints the URL when the token is present. The token comes from `GITLAB_TOKEN` (name
+  configurable with `gitlab.token_env`); `gitlab.api_url`, `gitlab.project` and
+  `gitlab.target_branch` are derived from `remote.url` and `remote.default_branch` unless set.
+- `push` and `status` list other proposal branches of the same project still on the central
+  remote and warn about them (`branch.warn_existing`).
+- Offline fallback: when the central repository is unreachable and a cache clone exists,
+  `pull` and `status` apply the cached default branch and say so (`sync.offline_fallback`).
+  `pull --best-effort` runs with the hook time budget.
+- Automatic releases: merging a pull request to `main` computes the version from a
+  `release:*` label, a Conventional Commits title prefix or the Unreleased changelog section,
+  commits the changelog and version bump, publishes to PyPI and creates the tag and GitHub
+  release in the same run (`scripts/prepare_release.py`).
+
+### Changed
+
+- Proposal branches are named `kiro-config/{project}/{user}-{hash}`; `{user}` now prefers the
+  operating system user name (letters, digits and dashes), then the git email, then the git
+  name (`branch.user_from`). The template must keep `{project}` and `{hash}`.
+- MCP tools are named by intent and described for the agent: `pull_kiro_config`,
+  `push_kiro_config`, `raise_merge_request`, `diff_kiro_config`, `validate_kiro_config` and
+  `list_kiro_collections` replace `pull_steering`, `push_steering`, `diff_steering` and
+  `lint_steering`. The rendered `mcp.json` entry forwards the GitLab token variable.
+- `pull` logs the central content's lint errors and a one line count of warnings instead of
+  every warning.
+
 ## [0.2.0] - 2026-10-12
 
 ### Added
