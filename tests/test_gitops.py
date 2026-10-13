@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 from pathlib import Path
 
 import pytest
@@ -137,7 +138,9 @@ def test_run_git_timeout(
         gitops.run_git(config, ["status"], cwd=tmp_path, env=env)
 
 
-def test_repo_helpers(config: Config, env: dict[str, str], project: Path) -> None:
+def test_repo_helpers(
+    config: Config, env: dict[str, str], project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     assert (
         gitops.repo_toplevel(
             config, project / "sub" if (project / "sub").exists() else project, env=env
@@ -151,7 +154,15 @@ def test_repo_helpers(config: Config, env: dict[str, str], project: Path) -> Non
     # The operating system user comes first, then the git email, then the git name.
     assert gitops.current_user_id(config, project, env) == "tester"
     no_user = {k: v for k, v in env.items() if k not in {"USER", "LOGNAME", "USERNAME"}}
-    assert gitops.current_user_id(config, project, no_user) in {"test-user", "tester"}
+    assert gitops.current_user_id(config, project, no_user) == gitops.current_user_id(
+        config, project, {**no_user, "USER": getpass.getuser()}
+    )
+
+    def no_login() -> str:
+        raise KeyError("no passwd entry")
+
+    monkeypatch.setattr(getpass, "getuser", no_login)
+    assert gitops.current_user_id(config, project, no_user) == "test-user"
     assert (
         gitops.current_user_id(config, None, {**env, "GIT_CONFIG_GLOBAL": "/dev/null"}) == "tester"
     )
