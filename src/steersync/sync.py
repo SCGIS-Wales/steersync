@@ -10,7 +10,7 @@ import functools
 import logging
 import os
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple, ParamSpec, TypeVar, cast
 from urllib.parse import urlsplit
@@ -1088,7 +1088,7 @@ class WorkspaceView(NamedTuple):
 
 
 @contextlib.contextmanager
-def central_lock(config: Config, env: Mapping[str, str], url: str) -> Iterator[None]:
+def central_lock(config: Config, env: Mapping[str, str], url: str) -> Generator[None]:
     """Hold the cache clone of ``url`` for a refresh and every read that follows it."""
     cache_dir = paths.cache_repo_dir(config, env, url)
     paths.cache_root(config, env).mkdir(parents=True, exist_ok=True, mode=0o700)
