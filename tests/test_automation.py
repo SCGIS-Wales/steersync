@@ -468,9 +468,12 @@ def test_prompts_and_agents_md_round_trip(
     excluded = project / ".git" / "info" / "exclude"
     monkeypatch.chdir(project)
     monkeypatch.setenv("STEERSYNC_CONFIG", str(config.source_file))
-    CliRunner().invoke(main, ["init", "--no-kiro"])
+    init = CliRunner().invoke(main, ["init", "--no-kiro"])
     text = excluded.read_text()
     assert "/.kiro/prompts/" in text
+    # settings, sandbox and cli-settings share .kiro/settings: one exclude line.
+    assert text.count("/.kiro/settings/") == 1
+    assert init.stdout.count("/.kiro/settings/") == 1
     assert "/AGENTS.md" not in text
     assert "/./" not in text
     assert git("status", "--porcelain", "--", "AGENTS.md", cwd=project, env=env).startswith("??")

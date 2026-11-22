@@ -71,7 +71,14 @@ def test_render_mcp_config() -> None:
     data = json.loads(hooks.render_mcp_config(remote="git@h:a/b.git"))
     server = data["mcpServers"]["steersync"]
     assert server["command"] == "uvx"
-    assert server["args"] == ["--from", f"steersync[mcp]=={__version__}", "steersync", "mcp"]
+    assert server["args"] == [
+        "--python",
+        ">=3.14",
+        "--from",
+        f"steersync[mcp]=={__version__}",
+        "steersync",
+        "mcp",
+    ]
     assert "push_kiro_config" not in server["autoApprove"]
     assert "validate_kiro_config" in server["autoApprove"]
     assert hooks.mcp_server_entry(command="steersync")["args"] == ["mcp"]

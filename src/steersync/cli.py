@@ -676,11 +676,13 @@ def init(
             target.write_text(default_config_text(), encoding="utf-8")
             click.echo(f"wrote: {target}")
     if exclude:
-        patterns = [
-            f"/{c.workspace_path.strip('/')}/"
-            for c in config.enabled_collections().values()
-            if c.workspace_path is not None and c.git_exclude
-        ]
+        patterns = list(
+            dict.fromkeys(
+                f"/{c.workspace_path.strip('/')}/"
+                for c in config.enabled_collections().values()
+                if c.workspace_path is not None and c.git_exclude
+            )
+        )
         patterns.append(f"/{config.paths.workspace_lock.strip('/')}")
         changed = False
         for pattern in patterns:
