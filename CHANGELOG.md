@@ -5,6 +5,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Installing from a package mirror failed with "No matching distribution found for
+  pydantic<3,>=2.14.4": the dependency floors had been raised to the newest releases. They
+  are now the oldest versions steersync works with: click 8.2, pydantic 2.12,
+  python-frontmatter 1.1, PyYAML 6.0.3 and pymarkdownlnt 0.9.40 (the first releases with
+  Python 3.14 support where that applies). A new CI job runs the whole suite against exactly
+  those versions.
+
 ## [0.5.7] - 2026-11-22
 
 Found by running the README guide against a real GitLab.com project: push options opened

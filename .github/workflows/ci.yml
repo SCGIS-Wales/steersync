@@ -126,6 +126,34 @@ jobs:
             junit.xml
           retention-days: 14
 
+  test-lowest:
+    # The dependency floors in pyproject.toml are a promise to anyone installing from a
+    # package mirror that lags PyPI: run the suite against exactly those versions.
+    name: Tests (lowest dependency versions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the lowest allowed versions
+        run: |
+          uv venv --python "${PYTHON_VERSION}" .venv-lowest
+          uv pip install --python .venv-lowest/bin/python --resolution lowest-direct \
+            -e ".[mcp]" "pytest>=9.2" "pytest-cov>=7.1" "hypothesis>=6.140"
+          uv pip list --python .venv-lowest/bin/python
+      - name: Configure git identity for integration tests
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+      - name: Run tests
+        run: .venv-lowest/bin/python -m pytest -q -p no:cacheprovider
+
   security:
     name: Security scans
     runs-on: ubuntu-latest
@@ -168,12 +196,13 @@ jobs:
     name: Build distribution
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [lint, test, security, prepare]
+    needs: [lint, test, test-lowest, security, prepare]
     # prepare is skipped on pull requests; everything else must have passed.
     if: >-
       !cancelled()
       && needs.lint.result == 'success'
       && needs.test.result == 'success'
+      && needs.test-lowest.result == 'success'
       && needs.security.result == 'success'
       && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
     steps:

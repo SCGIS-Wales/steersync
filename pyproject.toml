@@ -27,12 +27,14 @@ classifiers = [
   "Topic :: Software Development :: Version Control :: Git",
   "Typing :: Typed",
 ]
+# Floors are the oldest versions steersync is tested with (CI job "Tests (lowest
+# dependency versions)"), not the newest releases: company package mirrors often lag PyPI.
 dependencies = [
-  "click>=8.5.1,<9",
-  "pydantic>=2.14.4,<3",
-  "python-frontmatter>=1.3,<2",
-  "PyYAML>=6.0.4,<7",
-  "pymarkdownlnt>=0.9.42,<1",
+  "click>=8.2,<9",
+  "pydantic>=2.12,<3",
+  "python-frontmatter>=1.1,<2",
+  "PyYAML>=6.0.3,<7",
+  "pymarkdownlnt>=0.9.40,<1",
 ]
 
 [project.optional-dependencies]
