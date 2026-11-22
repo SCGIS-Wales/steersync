@@ -5,6 +5,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+Found by running the README guide against a real GitLab.com project: push options opened
+merge requests !1 (seed), !2 (pre-push hook of a teammate) and !3 (global scope).
+
+### Fixed
+
+- git over SSH could hang for minutes when port 22 was blocked or a connection stalled: the
+  default `GIT_SSH_COMMAND` now sets `ConnectTimeout` and keepalives, and a timed out git
+  command takes its ssh child down with it instead of leaving it running.
+- README step 7: `git rm -r --cached` without `--ignore-unmatch` refused the whole command
+  when one listed directory had nothing tracked. `steersync init` now prints the exact
+  command for the directories that hold tracked files.
+- The V3 reminder told machines already on V3 to switch `chat.agentEngine`; it now lists
+  only the steps that apply, naming the agent folders to upgrade.
+
+### Added
+
+- README troubleshooting, including SSH over port 443 (`altssh.gitlab.com`) for networks
+  that block port 22.
+
 ## [0.5.6] - 2026-11-22
 
 ### Added

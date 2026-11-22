@@ -117,7 +117,7 @@ def test_run_git_retries_transient_errors(
             (0, ""),
         ]
     )
-    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(gitops, "_execute", fake)
     result = gitops.run_git(config, ["fetch"], retries=2)
     assert result.returncode == 0
     assert len(fake.calls) == 3
@@ -129,7 +129,7 @@ def test_run_git_does_not_retry_permanent_errors(
     config: Config, monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
 ) -> None:
     fake = _FakeRun([(128, "fatal: Authentication failed for 'https://h/a.git'")])
-    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(gitops, "_execute", fake)
     with pytest.raises(GitError, match="Authentication failed"):
         gitops.run_git(config, ["fetch"], retries=3)
     assert len(fake.calls) == 1
@@ -140,7 +140,7 @@ def test_run_git_gives_up_after_retries(
     config: Config, monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
 ) -> None:
     fake = _FakeRun([subprocess.TimeoutExpired(cmd="git", timeout=5)] * 3)
-    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(gitops, "_execute", fake)
     with pytest.raises(GitError, match="timed out"):
         gitops.run_git(config, ["push"], retries=2)
     assert len(fake.calls) == 3
@@ -148,7 +148,7 @@ def test_run_git_gives_up_after_retries(
 
 def test_run_git_passes_input_when_given(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeRun([(0, "")])
-    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(gitops, "_execute", fake)
     gitops.run_git(config, ["hash-object", "--stdin"], stdin="data")
     assert fake.calls[0]["input"] == "data"
     assert fake.calls[0]["stdin"] is None
@@ -514,3 +514,41 @@ def test_read_only_cache_files_are_removed(tmp_path: Path) -> None:
     obj.chmod(stat_module.S_IREAD)
     gitops._remove_cache_dir(cache)
     assert not cache.exists()
+
+
+@posix_only
+def test_timeout_kills_the_whole_process_group(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """git's ssh child must not outlive a timed out git (it held the connection open)."""
+    import os
+    import time as time_module
+
+    pid_file = tmp_path / "child.pid"
+    fake_git = tmp_path / "git"
+    fake_git.write_text(f"#!/bin/sh\nsleep 60 &\necho $! > {pid_file}\nwait\n")
+    fake_git.chmod(0o755)
+    slow = config.model_copy(
+        update={"git": config.git.model_copy(update={"binary": str(fake_git)})}
+    )
+    with pytest.raises(GitError, match="timed out"):
+        gitops.run_git(slow, ["fetch"], timeout=1)
+    child = int(pid_file.read_text())
+    for _ in range(50):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time_module.sleep(0.1)
+    else:
+        os.kill(child, 9)
+        pytest.fail("the child of the timed out command is still running")
+
+
+def test_default_ssh_command_fails_fast() -> None:
+    env = gitops.git_environment({"PATH": "/usr/bin"})
+    assert "ConnectTimeout=" in env["GIT_SSH_COMMAND"]
+    assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+    assert gitops.git_environment({"GIT_SSH_COMMAND": "ssh -i key"})["GIT_SSH_COMMAND"] == (
+        "ssh -i key"
+    )

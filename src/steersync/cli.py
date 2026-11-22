@@ -690,6 +690,7 @@ def init(
         click.echo(
             f"{'updated' if changed else 'unchanged'}: .git/info/exclude ({', '.join(patterns)})"
         )
+        _hint_tracked_files(config, root, patterns)
     if hook:
         result = hooks.install_pre_push_hook(config, root, force=False)
         click.echo(f"{result.action}: {result.path}")
@@ -709,6 +710,25 @@ def init(
     steering_dir.mkdir(parents=True, exist_ok=True)
     click.echo(f"ready: {steering_dir}")
     click.echo(f"collections: {', '.join(config.enabled_collections()) or '(none)'}")
+
+
+def _hint_tracked_files(config: Config, root: Path, patterns: list[str]) -> None:
+    """Explain how to stop tracking files that the central repository now manages."""
+    folders = [p.strip("/") for p in patterns if p.endswith("/")]
+    listed = gitops.run_git(config, ["ls-files", "--", *folders], cwd=root, check=False)
+    tracked = [line for line in listed.stdout.splitlines() if line.strip()]
+    if listed.returncode != 0 or not tracked:
+        return
+    with_files = [f for f in folders if any(path.startswith(f"{f}/") for path in tracked)]
+    click.echo(
+        f"note: {len(tracked)} file(s) in synced directories are still tracked by this "
+        "repository. Once the central repository has them (steersync push, then merge), "
+        "you can make it their only source:\n"
+        f"  git rm -r --cached --ignore-unmatch {' '.join(with_files)}\n"
+        '  git commit -m "Kiro configuration comes from the central repository"\n'
+        "or keep committing them and rerun init with --no-exclude.",
+        err=True,
+    )
 
 
 @main.command("kiro-hook")

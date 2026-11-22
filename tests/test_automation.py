@@ -492,3 +492,23 @@ def test_lint_paths_outside_collections_use_steering_profile(
     agents = json.loads(runner.invoke(main, ["lint", "--json", str(project / "AGENTS.md")]).stdout)
     assert agents["checked"] == 1
     assert agents["errors"] == 0
+
+
+def test_init_explains_how_to_untrack_synced_files(
+    project: Path, config_file: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.conftest import git
+
+    steering = project / ".kiro" / "steering"
+    steering.mkdir(parents=True)
+    (steering / "product.md").write_text("# Product\n")
+    git("add", "-A", cwd=project, env=env)
+    git("commit", "-qm", "kiro files", cwd=project, env=env)
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
+    result = CliRunner().invoke(main, ["init", "--no-kiro"])
+    assert result.exit_code == 0
+    assert "git rm -r --cached --ignore-unmatch .kiro/steering\n" in result.stderr
+    assert "1 file(s)" in result.stderr
+    untracked = CliRunner().invoke(main, ["init", "--no-kiro", "--no-exclude"])
+    assert "git rm" not in untracked.stderr

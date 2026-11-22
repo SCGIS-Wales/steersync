@@ -10,6 +10,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import time
@@ -80,6 +81,58 @@ def backoff_delay(config: Config, attempt: int) -> float:
     return capped + random.uniform(0, capped * 0.25)  # noqa: S311  (jitter, not security)
 
 
+# Fail fast when a host is unreachable (a firewalled port 22 otherwise hangs until the git
+# timeout, then again on every retry) and notice a connection that stalls mid transfer.
+DEFAULT_SSH_COMMAND = (
+    "ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+)
+
+
+def _execute(
+    command: Sequence[str],
+    *,
+    cwd: Path | None,
+    env: Mapping[str, str],
+    input: str | None,  # noqa: A002 - mirrors subprocess.run
+    stdin: int | None,
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``command`` like ``subprocess.run``, but end its whole process group on timeout.
+
+    git starts ssh (and credential helpers) as children; killing only git leaves them
+    behind, holding the connection open. On POSIX the command runs in its own session so
+    the group can be killed; on Windows the git process is killed.
+    """
+    posix = os.name == "posix"
+    with subprocess.Popen(  # nosec B603 - argument list, no shell
+        list(command),
+        cwd=cwd,
+        env=dict(env),
+        stdin=subprocess.PIPE if input is not None else stdin,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=posix,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(process, posix=posix)
+            process.communicate()
+            raise
+    return subprocess.CompletedProcess(list(command), process.returncode, stdout, stderr)
+
+
+def _kill_group(process: subprocess.Popen[str], *, posix: bool) -> None:
+    if posix:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError, PermissionError:
+            process.kill()
+    else:  # pragma: no cover - Windows
+        process.kill()
+
+
 def git_environment(base: Mapping[str, str], *, hooks_dir: Path | None = None) -> dict[str, str]:
     """Build the environment for git subprocesses.
 
@@ -88,7 +141,7 @@ def git_environment(base: Mapping[str, str], *, hooks_dir: Path | None = None) -
     """
     env = {k: v for k, v in base.items() if not k.startswith(_SCRUBBED_ENV_PREFIXES)}
     env["GIT_TERMINAL_PROMPT"] = "0"
-    env["GIT_SSH_COMMAND"] = env.get("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+    env["GIT_SSH_COMMAND"] = env.get("GIT_SSH_COMMAND", DEFAULT_SSH_COMMAND)
     env["LC_ALL"] = "C"
     env["STEERSYNC_ACTIVE"] = "1"
     if hooks_dir is not None:
@@ -133,16 +186,13 @@ def run_git(
     attempt = 0
     while True:
         try:
-            completed = subprocess.run(
+            completed = _execute(
                 command,
                 cwd=cwd,
-                env=dict(base_env),
-                capture_output=True,
-                text=True,
+                env=base_env,
                 input=stdin,
                 stdin=None if stdin is not None else subprocess.DEVNULL,
                 timeout=timeout or config.git.timeout_seconds,
-                check=False,
             )
         except FileNotFoundError as exc:
             msg = f"git binary not found: {config.git.binary}"
