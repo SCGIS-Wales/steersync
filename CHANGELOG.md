@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-22
+
 ### Added
 
 - V3 detection reads `acp.agentEngine`, the harness `kiro-cli acp` starts for editor and IDE
