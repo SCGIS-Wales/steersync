@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-22
+
 ### Fixed
 
 - An SSH connection that timed out in ssh's own `ConnectTimeout` ("Connection to ... port
