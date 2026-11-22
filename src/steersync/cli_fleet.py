@@ -17,6 +17,7 @@ from steersync import fleet as fleet_core
 from steersync.cli_common import _bootstrap
 from steersync.config import load_config
 from steersync.errors import SteersyncError
+from steersync.logging_utils import configure_logging
 from steersync.paths import registry_path
 from steersync.retry import RetryEvent
 
@@ -29,6 +30,13 @@ def fleet(ctx: click.Context) -> None:
     Without a subcommand on a terminal this opens the interactive overview; otherwise it
     prints the status table.
     """
+    params = ctx.find_root().params
+    # Warnings and errors only by default: per repository INFO lines would drown the table.
+    configure_logging(
+        params.get("log_level") or "WARNING",
+        params.get("log_format") or "text",
+        quiet=bool(params.get("quiet")),
+    )
     if ctx.invoked_subcommand is None:
         if sys.stdin.isatty() and sys.stdout.isatty():
             from steersync.cli_fleet_actions import interactive  # noqa: PLC0415 - lazy UI

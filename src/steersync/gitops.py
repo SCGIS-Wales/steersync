@@ -33,7 +33,9 @@ _TRANSIENT_RE = re.compile(
     r"could not resolve host|connection (?:timed out|reset|refused|closed)|operation timed out"
     r"|timed out after|early eof|the remote end hung up|rpc failed|unexpected disconnect"
     r"|http(?:/[0-9.]+)? 5\d\d|returned error: 5\d\d|error: 5\d\d|temporary failure"
-    r"|ssh: connect to host|gnutls_handshake|ssl_read|tls connection was non-properly terminated",
+    r"|ssh: connect to host|gnutls_handshake|ssl_read|tls connection was non-properly terminated"
+    # ssh's own ConnectTimeout, and routes that come and go on Wi-Fi or VPN
+    r"|connection to \S+ port \d+ timed out|no route to host|network is unreachable",
     re.IGNORECASE | re.MULTILINE,
 )
 # A server that does not support push options drops the connection, so git also prints
@@ -214,10 +216,30 @@ def run_git(
             continue
         break
     if check and result.returncode != 0:
-        detail = redact_url(result.stderr.strip() or result.stdout.strip())
+        detail = redact_url(without_advice(result.stderr) or result.stdout.strip())
         msg = f"git {name} failed ({result.returncode}): {detail}"
         raise GitError(msg)
     return result
+
+
+# git's generic advice after a failed network call; the cause is on another line.
+_ADVICE = (
+    "fatal: could not read from remote repository",
+    "please make sure you have the correct access rights",
+    "and the repository exists",
+)
+
+
+def without_advice(output: str) -> str:
+    """git's error output without the generic "could not read from remote" advice."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    useful = [line for line in lines if not line.lower().startswith(_ADVICE)]
+    return "\n".join(useful or lines)
+
+
+def failure_reason(stderr: str) -> str:
+    """The line of git's error output that says what went wrong."""
+    return (without_advice(stderr).splitlines() or ["unknown"])[0]
 
 
 def _wait_before_retry(
@@ -229,7 +251,7 @@ def _wait_before_retry(
     on_retry: Callable[[RetryEvent], None] | None,
 ) -> int:
     delay = backoff_delay(git_retry_policy(config, retries), attempt)
-    detail = redact_url(reason.splitlines()[-1] if reason else "unknown")
+    detail = redact_url(failure_reason(reason))
     log.warning(
         "git %s failed transiently (%s); retry %d in %.1fs", name, detail, attempt + 1, delay
     )
@@ -442,7 +464,7 @@ def remote_branch_exists(
         return True
     if result.returncode == 2:
         return False
-    msg = f"ls-remote failed ({result.returncode}): {redact_url(result.stderr.strip())}"
+    msg = f"ls-remote failed ({result.returncode}): {redact_url(without_advice(result.stderr))}"
     raise GitError(msg)
 
 
@@ -685,7 +707,7 @@ def push_branch(
             retries=config.git.retries,
         )
         return retry, False
-    detail = redact_url(result.stderr.strip() or result.stdout.strip())
+    detail = redact_url(without_advice(result.stderr) or result.stdout.strip())
     msg = f"git push failed ({result.returncode}): {detail}"
     raise GitError(msg)
 
