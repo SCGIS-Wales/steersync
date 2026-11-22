@@ -363,9 +363,11 @@ chat, so they use no Kiro credits, and a reminder never fails a sync. Set
 (`steersync mcp-config` prints the fragment). It runs through
 `uvx --from "steersync[mcp]==<version>" steersync mcp`, so nothing needs installing, and it
 auto approves only the read only tools. The server is built on the MCP Python SDK v2
-(`MCPServer`, specification 2026-07-28): tools return structured JSON and carry titles and
-read only, destructive and idempotent hints. A forced pull needs `confirm: true` because it
-overwrites local edits. The server tells the agent which tool answers
+(`MCPServer`, specification 2026-07-28): every tool returns a typed report with an output
+schema, failures are error results the agent can read, pull and push report progress, and
+tools carry titles and read only, destructive and idempotent hints. A forced pull overwrites
+local edits, so the server asks the user first (elicitation) when the client supports it and
+otherwise needs `confirm: true`. The server tells the agent which tool answers
 which request, so plain sentences work:
 
 | Say | Tool |
@@ -376,6 +378,7 @@ which request, so plain sentences work:
 | "what changed", "status", "any open proposals for this repo" | `diff_kiro_config` |
 | "validate / lint / check the kiro config, agents, hooks, skills" | `validate_kiro_config` |
 | "what is synced and where" | `list_kiro_collections` |
+| "is steersync set up", "why does the sync fail" | `doctor_kiro_config` |
 | "am I on Kiro V3", "do my agents need upgrading" | `kiro_v3_status` |
 
 Every tool accepts a `collections` list. Kiro does not pass the shell's `PATH`,

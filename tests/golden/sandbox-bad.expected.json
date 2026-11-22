@@ -1,0 +1,17 @@
+{
+  "checked": 1,
+  "findings": [
+    {
+      "path": "sandbox.json",
+      "rule": "sandbox-network-access",
+      "severity": "error",
+      "line": null
+    },
+    {
+      "path": "sandbox.json",
+      "rule": "sandbox-shape",
+      "severity": "error",
+      "line": null
+    }
+  ]
+}

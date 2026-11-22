@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "gitlab": {
+      "command": "uvx",
+      "args": [
+        "gitlab-mcp"
+      ],
+      "env": {
+        "GITLAB_TOKEN": "${GITLAB_TOKEN}"
+      },
+      "autoApprove": [
+        "list_issues"
+      ]
+    },
+    "leaky": {
+      "url": "https://mcp.example.com",
+      "headers": {
+        "Authorization": "Bearer abc"
+      },
+      "oauth": {
+        "mode": "magic"
+      }
+    }
+  }
+}

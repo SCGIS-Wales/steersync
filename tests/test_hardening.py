@@ -12,13 +12,19 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from steersync import cli, gitops, mcp_server, paths, sync
+from steersync import cli, gitops, mcp_tools, paths, sync
 from steersync.config import Config, load_config
-from steersync.errors import GitError, LimitExceededError, LockTimeoutError, UnsafePathError
+from steersync.errors import (
+    GitError,
+    LimitExceededError,
+    LockTimeoutError,
+    SteersyncError,
+    UnsafePathError,
+)
 from steersync.locking import exclusive_lock
 from steersync.paths import global_steering_dir, workspace_lock_path
 from steersync.steering import snapshot_directory, write_lock
-from tests.conftest import CentralCommit, central_global, central_project, git
+from tests.conftest import CentralCommit, central_global, central_project, git, posix_only
 
 PUSH_OPTIONS_REJECTED = (
     "fatal: the receiving end does not support push options\n"
@@ -229,6 +235,7 @@ def test_transient_refresh_failure_keeps_cache(
     assert (cache / ".git").is_dir()
 
 
+@posix_only
 def test_cache_operations_do_not_run_git_hooks(
     config: Config, env: dict[str, str], project: Path, central: Path, tmp_path: Path
 ) -> None:
@@ -268,6 +275,7 @@ def test_failed_push_leaves_cache_on_default_branch(
 # Content safety
 
 
+@posix_only
 def test_central_symlinks_are_never_followed(
     config: Config,
     env: dict[str, str],
@@ -291,6 +299,7 @@ def test_central_symlinks_are_never_followed(
     assert all("evil.md" not in r.plan.add for r in result.results)
 
 
+@posix_only
 def test_central_directory_symlink_is_rejected(
     config: Config,
     env: dict[str, str],
@@ -332,6 +341,7 @@ def test_limits_on_central_and_local_content(
         sync.push(config, workspace_root=project, env=env, run_lint=False)
 
 
+@posix_only
 def test_written_files_are_world_readable(
     config: Config, env: dict[str, str], project: Path, central: Path
 ) -> None:
@@ -362,6 +372,7 @@ def test_password_in_remote_url_is_warned(
     assert "credential helper" in caplog.text
 
 
+@posix_only
 def test_snapshot_skips_symlinks_only_when_asked(tmp_path: Path) -> None:
     target = tmp_path / "real.md"
     target.write_text("# Real\n")
@@ -480,11 +491,26 @@ def test_mcp_tools_report_configuration_errors(
 ) -> None:
     monkeypatch.setenv("STEERSYNC_CONFIG", str(tmp_path / "missing.yaml"))
     for tool in (
-        mcp_server.pull_kiro_config,
-        mcp_server.push_kiro_config,
-        mcp_server.diff_kiro_config,
-        mcp_server.validate_kiro_config,
+        mcp_tools.pull,
+        mcp_tools.push,
+        mcp_tools.diff,
+        mcp_tools.validate,
+        mcp_tools.doctor,
+        mcp_tools.list_collections,
     ):
-        outcome = tool()
-        assert outcome["ok"] is False
-        assert "missing" in outcome["error"]
+        with pytest.raises(SteersyncError, match="missing"):
+            tool()
+    assert mcp_tools.v3_status().cli_path is None
+
+
+def test_read_only_cache_files_are_removed(tmp_path: Path) -> None:
+    """Git writes objects read only; Windows refuses to delete those without help."""
+    import stat as stat_module
+
+    cache = tmp_path / "cache" / "repo"
+    (cache / ".git" / "objects" / "ab").mkdir(parents=True)
+    obj = cache / ".git" / "objects" / "ab" / "cdef"
+    obj.write_bytes(b"x")
+    obj.chmod(stat_module.S_IREAD)
+    gitops._remove_cache_dir(cache)
+    assert not cache.exists()

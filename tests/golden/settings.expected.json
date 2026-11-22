@@ -1,0 +1,17 @@
+{
+  "checked": 2,
+  "findings": [
+    {
+      "path": "mcp.json",
+      "rule": "mcp-literal-secret",
+      "severity": "error",
+      "line": null
+    },
+    {
+      "path": "mcp.json",
+      "rule": "mcp-oauth",
+      "severity": "error",
+      "line": null
+    }
+  ]
+}

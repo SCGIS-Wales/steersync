@@ -1,0 +1,17 @@
+{
+  "checked": 2,
+  "findings": [
+    {
+      "path": "services/legacy/.kiroignore",
+      "rule": "kiroignore-syntax",
+      "severity": "warning",
+      "line": null
+    },
+    {
+      "path": "services/legacy/.kiroignore",
+      "rule": "kiroignore-syntax",
+      "severity": "error",
+      "line": null
+    }
+  ]
+}

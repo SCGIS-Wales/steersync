@@ -1,33 +1,51 @@
-"""Optional MCP stdio server exposing steersync operations as tools.
+"""MCP stdio server exposing steersync operations as tools.
 
 Requires the ``mcp`` extra: ``uvx --from "steersync[mcp]" steersync mcp`` (or the
 ``steersync-mcp`` alias). Built on the official SDK v2 ``MCPServer`` (MCP specification
-2026-07-28): tools return structured JSON, carry titles and read only, destructive and
-idempotent hints, and log to stderr because protocol logging is deprecated. Every tool calls the
-same functions the CLI uses, so behaviour and safety checks are identical. The
-server description and each tool description are written for the agent that
-reads them: they say which tool answers which request ("pull the Kiro config",
-"push my steering", "raise an MR for the kiro config", "validate the agents")
-so a session in any repository can act on a plain sentence.
+2026-07-28). The logic lives in :mod:`steersync.mcp_tools`; this module adapts it:
 
-Every tool takes an optional ``collections`` list (steering, specs, skills,
-agents, hooks, settings, sandbox, workflows, prompts, agents-md, kiroignore or any
-configured name); the default is every enabled collection.
+* every tool returns a typed pydantic report, published as its output schema and
+  returned as structured content;
+* failures come back as tool results with ``isError`` set (``ToolError``), carrying the
+  message the agent should show the user;
+* pull and push report progress while they run;
+* a forced pull, which overwrites local edits, asks the user through elicitation when
+  the client supports it (multi round trip requests on 2026-07-28), and otherwise
+  requires ``confirm: true``;
+* tools carry titles and read only, destructive and idempotent hints, and logs go to
+  stderr because protocol logging is deprecated in 2026-07-28.
+
+The server description and each tool description are written for the agent that
+reads them, so a session in any repository can act on a plain sentence.
 """
 
+import functools
+import logging
 import os
 import sys
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any, NamedTuple
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Any, NamedTuple
 
-from steersync import __version__, gitops, kiro_version, sync
-from steersync.config import Config, load_config
+import anyio
+import anyio.from_thread
+import anyio.to_thread
+from mcp.server import MCPServer
+from mcp.server.mcpserver import (
+    AcceptedElicitation,
+    Context,
+    Elicit,
+    ElicitationResult,
+    Resolve,
+)
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
+from pydantic import BaseModel, Field
+
+from steersync import __version__, mcp_tools
 from steersync.errors import SteersyncError
-from steersync.lint import lint_paths, lint_workspace, merge_reports
 from steersync.logging_utils import configure_logging
-from steersync.paths import workspace_collection_dir
-from steersync.steering import FileSpec
+
+log = logging.getLogger(__name__)
 
 SERVER_INSTRUCTIONS = """\
 steersync keeps the Kiro configuration of this workspace (.kiro/: steering, specs, \
@@ -53,89 +71,132 @@ proposals". Read only.
 skills" against Kiro's rules and best practices. Errors block a push; warnings are \
 advice from the Kiro documentation.
 - list_kiro_collections: which kinds of content are synced and where they live.
+- doctor_kiro_config: "is steersync set up / why does sync fail": git, configuration, \
+remote, token, directories and the Kiro CLI harness. Read only.
 - kiro_v3_status: "am I on Kiro CLI V3 / do my agents need upgrading". Read only; never \
 starts a chat, so it costs no Kiro credits.
-Reports are JSON; "ok": false carries an "error" the user should see verbatim.
+Results are structured JSON. A failed call is returned as an error result whose text the \
+user should see verbatim.
 """
 
-
-def _load(cwd: str | None) -> tuple[Config, Path | None]:
-    start = Path(cwd).expanduser() if cwd else Path.cwd()
-    bootstrap = load_config(workspace_root=None)
-    root = gitops.repo_toplevel(bootstrap, start, env=gitops.git_environment(os.environ))
-    return load_config(workspace_root=root), root
-
-
-def _plan_dict(plan: Any) -> dict[str, Any]:  # noqa: ANN401
-    if plan is None:
-        return {}
-    return {
-        "add": list(plan.add),
-        "update": list(plan.update),
-        "delete": list(plan.delete),
-        "conflict": list(plan.conflict),
-        "unchanged": len(plan.unchanged),
-        "local_only": list(plan.local_only),
-    }
+Cwd = Annotated[
+    str | None,
+    Field(description="Project directory (default: the directory the server runs in)"),
+]
+Collections = Annotated[
+    list[str] | None,
+    Field(
+        description="Limit to these collections (steering, specs, skills, agents, hooks, "
+        "settings, sandbox, workflows, prompts, agents-md, kiroignore); default: all enabled"
+    ),
+]
 
 
-def _plans_dict(plans: dict[str, Any] | None) -> dict[str, Any]:
-    if plans is None:
-        return {}
-    return {name: _plan_dict(plan) for name, plan in plans.items()}
+class ForceConfirmation(BaseModel):
+    """What the user is asked before a forced pull overwrites local edits."""
+
+    overwrite: bool = Field(
+        description="Overwrite the locally modified Kiro files with the central versions"
+    )
 
 
-def pull_kiro_config(
-    cwd: str | None = None,
-    force: bool = False,
-    dry_run: bool = False,
-    collections: list[str] | None = None,
-    confirm: bool = False,
-) -> dict[str, Any]:
+def _can_elicit(ctx: Context) -> bool:
+    capabilities = ctx.client_capabilities
+    elicitation = capabilities.elicitation if capabilities is not None else None
+    return elicitation is not None and (elicitation.form is not None or elicitation.url is None)
+
+
+def confirm_force(
+    force: bool, dry_run: bool, confirm: bool, ctx: Context
+) -> Elicit[ForceConfirmation] | bool:
+    """Resolver: ask before a forced pull when the client can be asked."""
+    if not force or dry_run or confirm:
+        return True
+    if _can_elicit(ctx):
+        return Elicit(
+            "A forced pull overwrites Kiro files you edited locally with the central "
+            "versions. Overwrite them?",
+            ForceConfirmation,
+        )
+    return False
+
+
+def _approved(outcome: ElicitationResult[ForceConfirmation]) -> bool:
+    if not isinstance(outcome, AcceptedElicitation):
+        return False
+    data: object = outcome.data
+    return data is True or (isinstance(data, ForceConfirmation) and data.overwrite)
+
+
+def _progress_bridge(ctx: Context) -> mcp_tools.Progress:
+    """Forward progress from the worker thread to the client (a no op without a token)."""
+
+    def report(done: int, total: int, message: str) -> None:
+        try:
+            anyio.from_thread.run(ctx.report_progress, done, total or None, message)
+        except Exception:
+            log.debug("progress notification failed", exc_info=True)
+
+    return report
+
+
+async def _run[T](work: Callable[[], T]) -> T:
+    """Run blocking steersync work off the event loop; failures become tool errors."""
+    try:
+        return await anyio.to_thread.run_sync(work)
+    except (SteersyncError, OSError) as exc:
+        raise ToolError(str(exc)) from exc
+
+
+async def pull_kiro_config(
+    ctx: Context,
+    approval: Annotated[ElicitationResult[ForceConfirmation], Resolve(confirm_force)],
+    cwd: Cwd = None,
+    force: Annotated[
+        bool, Field(description="Overwrite locally modified files (asks the user first)")
+    ] = False,
+    dry_run: Annotated[bool, Field(description="Show the plan without writing")] = False,
+    collections: Collections = None,
+    confirm: Annotated[
+        bool,
+        Field(
+            description="The user already agreed to overwrite local edits; needed for force "
+            "when the client cannot show a confirmation prompt"
+        ),
+    ] = False,
+) -> mcp_tools.PullReport:
     """Pull the Kiro configuration from the central repository into this workspace and ~/.kiro.
 
     Use for "pull / sync / refresh / update the kiro config (steering, specs, skills,
     agents, hooks, settings, prompts)". Files edited locally are kept and listed under
-    "conflict" unless force is true; force overwrites local edits, so it also needs
-    confirm true after the user agreed. dry_run shows the plan without writing. If the
-    central repository is unreachable the last cached copy is applied and "offline"
-    is true.
+    "conflict" unless force is true; a forced pull asks the user first. dry_run shows
+    the plan without writing. If the central repository is unreachable the last cached
+    copy is applied and "offline" is true.
     """
-    if force and not dry_run and not confirm:
-        return {
-            "ok": False,
-            "error": "force overwrites locally modified files; ask the user, then call again "
-            "with confirm=true (or use dry_run=true to preview)",
-        }
-    try:
-        config, root = _load(cwd)
-        result = sync.pull(
-            config, workspace_root=root, force=force, dry_run=dry_run, collections=collections
+    del confirm  # read by the confirm_force resolver
+    if not _approved(approval):
+        raise ToolError(
+            "a forced pull overwrites locally modified files and the user did not agree; "
+            "ask the user, then call again with confirm=true, or use dry_run=true to preview"
         )
-    except (SteersyncError, OSError) as exc:
-        return {"ok": False, "error": str(exc)}
-    scopes: dict[str, dict[str, Any]] = {}
-    for item in result.results:
-        scopes.setdefault(item.scope, {})[item.collection] = {
-            "target": str(item.target_dir),
-            "plan": _plan_dict(item.plan),
-            "written": list(item.written),
-        }
-    return {
-        "ok": True,
-        "commit": result.commit,
-        "dry_run": result.dry_run,
-        "offline": result.offline,
-        "scopes": scopes,
-    }
+    work = functools.partial(
+        mcp_tools.pull,
+        cwd,
+        force=force,
+        dry_run=dry_run,
+        collections=collections,
+        progress=_progress_bridge(ctx),
+    )
+    return await _run(work)
 
 
-def push_kiro_config(
-    cwd: str | None = None,
-    dry_run: bool = False,
-    message: str | None = None,
-    collections: list[str] | None = None,
-) -> dict[str, Any]:
+async def push_kiro_config(
+    ctx: Context,
+    cwd: Cwd = None,
+    dry_run: Annotated[bool, Field(description="Compute the proposal without pushing")] = False,
+    message: Annotated[str | None, Field(description="Commit message for the proposal")] = None,
+    collections: Collections = None,
+) -> mcp_tools.PushReport:
     """Propose this workspace's Kiro configuration to the central repository.
 
     Use for "push / propose / share / sync up my kiro config, steering, skills, agents".
@@ -145,36 +206,25 @@ def push_kiro_config(
     "existing_branches": other unmerged proposals for the same project that the user
     should review before adding more.
     """
-    try:
-        config, root = _load(cwd)
-        if root is None:
-            return {"ok": False, "error": "not inside a git repository"}
-        result = sync.push(
-            config, workspace_root=root, dry_run=dry_run, message=message, collections=collections
-        )
-    except (SteersyncError, OSError) as exc:
-        return {"ok": False, "error": str(exc)}
-    return {
-        "ok": True,
-        "status": result.status,
-        "project": result.project,
-        "collections": list(result.collections),
-        "branch": result.branch,
-        "commit": result.commit,
-        "message": result.message,
-        "merge_request": result.merge_request,
-        "merge_request_note": result.merge_request_note,
-        "existing_branches": list(result.existing_branches),
-        "plan": _plan_dict(result.plan),
-    }
+    work = functools.partial(
+        mcp_tools.push,
+        cwd,
+        dry_run=dry_run,
+        message=message,
+        collections=collections,
+        progress=_progress_bridge(ctx),
+    )
+    return await _run(work)
 
 
-def raise_merge_request(
-    cwd: str | None = None,
-    branch: str | None = None,
-    title: str | None = None,
-    collections: list[str] | None = None,
-) -> dict[str, Any]:
+async def raise_merge_request(
+    cwd: Cwd = None,
+    branch: Annotated[
+        str | None, Field(description="Proposal branch (default: derived from local content)")
+    ] = None,
+    title: Annotated[str | None, Field(description="Merge request title")] = None,
+    collections: Collections = None,
+) -> mcp_tools.MergeRequestReport:
     """Open, or return, the GitLab merge request for the pushed Kiro configuration branch.
 
     Use for "raise / open / create an MR for the kiro config" or "give me the merge
@@ -183,144 +233,64 @@ def raise_merge_request(
     local content; it must already be on the central remote (push_kiro_config first).
     "others" lists other open merge requests for this project.
     """
-    try:
-        config, root = _load(cwd)
-        if root is None:
-            return {"ok": False, "error": "not inside a git repository"}
-        result = sync.merge_request(
-            config, workspace_root=root, branch=branch, title=title, collections=collections
-        )
-    except (SteersyncError, OSError) as exc:
-        return {"ok": False, "error": str(exc)}
-    return {"ok": True, **result._asdict(), "others": list(result.others)}
+    work = functools.partial(
+        mcp_tools.merge_request, cwd, branch=branch, title=title, collections=collections
+    )
+    return await _run(work)
 
 
-def diff_kiro_config(
-    cwd: str | None = None, collections: list[str] | None = None
-) -> dict[str, Any]:
+async def diff_kiro_config(
+    cwd: Cwd = None, collections: Collections = None
+) -> mcp_tools.DiffReport:
     """Compare the local Kiro configuration with the central repository, read only.
 
     Use for "status / what changed / is my kiro config in sync / any open proposals".
     "workspace" and "global" hold per collection plans; "proposals" lists this
     project's proposal branches still on the central remote.
     """
-    try:
-        config, root = _load(cwd)
-        result = sync.status(config, workspace_root=root, collections=collections)
-    except (SteersyncError, OSError) as exc:
-        return {"ok": False, "error": str(exc)}
-    return {
-        "ok": True,
-        "project": result.project,
-        "remote_commit": result.remote_commit,
-        "workspace": _plans_dict(result.workspace),
-        "global": _plans_dict(result.global_),
-        "proposals": list(result.proposals),
-    }
+    return await _run(functools.partial(mcp_tools.diff, cwd, collections=collections))
 
 
-def validate_kiro_config(
-    cwd: str | None = None, collections: list[str] | None = None
-) -> dict[str, Any]:
+async def validate_kiro_config(
+    cwd: Cwd = None, collections: Collections = None
+) -> mcp_tools.ValidateReport:
     """Validate the workspace Kiro configuration against Kiro's rules and best practices.
 
     Use for "validate / lint / check the kiro config, steering, agents, hooks, skills,
-    prompts, settings". Each collection is checked with its own profile (front matter,
-    JSON shapes, SKILL.md metadata, secrets) plus best practice warnings taken from the
-    Kiro documentation. Errors would block a push; warnings are advice. With no
-    collections the auto load checks (SessionStart hook, MCP entry) are included.
+    prompts, settings, workflows". Each collection is checked with its own profile plus
+    best practice warnings taken from the Kiro documentation. "ok" is false when an
+    error would block a push; warnings are advice. With no collections the auto load
+    checks (SessionStart hook, MCP entry) are included.
     """
-    try:
-        config, root = _load(cwd)
-        if root is None:
-            return {"ok": False, "error": "not inside a git repository"}
-        reports = []
-        for collection in config.select_collections(collections).values():
-            target = workspace_collection_dir(collection, root)
-            if target is None:
-                continue
-            reports.append(
-                lint_paths(
-                    [target],
-                    config.lint,
-                    root,
-                    profile=collection.lint,
-                    spec=FileSpec(collection.include, collection.exclude, collection.max_depth),
-                    max_file_bytes=collection.max_file_bytes,
-                )
-            )
-        if not collections:
-            hooks_dir = _workspace_path(config, "hooks", ".kiro/hooks")
-            settings_dir = _workspace_path(config, "settings", ".kiro/settings")
-            reports.append(
-                lint_workspace(root, config.lint, hooks_dir=hooks_dir, settings_dir=settings_dir)
-            )
-        report = merge_reports(reports)
-    except (SteersyncError, OSError) as exc:
-        return {"ok": False, "error": str(exc)}
-    return {
-        "ok": report.ok,
-        "checked": report.checked,
-        "errors": len(report.errors),
-        "warnings": len(report.warnings),
-        "findings": [f._asdict() for f in report.findings],
-    }
+    return await _run(functools.partial(mcp_tools.validate, cwd, collections=collections))
 
 
-def list_kiro_collections(cwd: str | None = None) -> dict[str, Any]:
+async def list_kiro_collections(cwd: Cwd = None) -> mcp_tools.CollectionsReport:
     """List the kinds of Kiro content steersync syncs and the directories involved."""
-    try:
-        config, root = _load(cwd)
-    except (SteersyncError, OSError) as exc:
-        return {"ok": False, "error": str(exc)}
-    return {
-        "ok": True,
-        "workspace": str(root) if root else None,
-        "collections": [
-            {
-                "name": name,
-                "enabled": c.enabled,
-                "description": c.description,
-                "workspace_path": c.workspace_path,
-                "global_path": c.global_path,
-                "central_dir": c.central_dir,
-                "include": list(c.include),
-                "lint": c.lint,
-            }
-            for name, c in config.collections.items()
-        ],
-    }
+    return await _run(functools.partial(mcp_tools.list_collections, cwd))
 
 
-def kiro_v3_status(cwd: str | None = None) -> dict[str, Any]:
+async def doctor_kiro_config(cwd: Cwd = None) -> mcp_tools.DoctorReport:
+    """Check git, configuration, the central remote, the GitLab token and directories.
+
+    Use for "is steersync set up", "why does the kiro config sync fail", "where does
+    steersync write". Includes the Kiro CLI harness status. Read only.
+    """
+    return await _run(functools.partial(mcp_tools.doctor, cwd))
+
+
+async def kiro_v3_status(cwd: Cwd = None) -> mcp_tools.HarnessReport:
     """Report whether kiro-cli runs the V3 agent harness and which agents are not V3 ready.
 
-    Use for "am I on Kiro V3", "do my agents need upgrading", "why does my agent not
-    load". Runs only `kiro-cli --version` and `kiro-cli settings`; never starts a chat.
+    Use for "am I on Kiro V3", "do my agents need upgrading", "why does Kiro rewrite my
+    agent". Runs only `kiro-cli --version` and `kiro-cli settings`; never starts a chat.
     "message" holds the reminder to show the user when "needs_reminder" is true.
     """
-    try:
-        config, root = _load(cwd)
-    except SteersyncError, OSError:
-        config, root = None, None
-    agent_dirs: list[Path] = []
-    if config is not None and root is not None:
-        agents = config.collections.get("agents")
-        if agents is not None and agents.workspace_path is not None:
-            agent_dirs.append(root / agents.workspace_path)
-    status = kiro_version.detect_harness(os.environ, agent_dirs=agent_dirs)
-    return {"ok": True, **status.to_dict()}
-
-
-def _workspace_path(config: Config, name: str, default: str) -> str:
-    collection = config.collections.get(name)
-    if collection is None or collection.workspace_path is None:
-        return default
-    return collection.workspace_path
+    return await _run(functools.partial(mcp_tools.v3_status, cwd))
 
 
 class ToolSpec(NamedTuple):
-    func: Callable[..., dict[str, Any]]
+    func: Callable[..., Awaitable[Any]]
     title: str
     read_only: bool
     destructive: bool = False
@@ -329,6 +299,7 @@ class ToolSpec(NamedTuple):
 
 
 TOOL_SPECS: dict[str, ToolSpec] = {
+    # Pull never deletes local edits unless forced, and a forced pull asks first.
     "pull_kiro_config": ToolSpec(
         pull_kiro_config, "Pull Kiro configuration", read_only=False, idempotent=True
     ),
@@ -343,27 +314,16 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "list_kiro_collections": ToolSpec(
         list_kiro_collections, "List synced collections", read_only=True, open_world=False
     ),
+    "doctor_kiro_config": ToolSpec(doctor_kiro_config, "Check steersync setup", read_only=True),
     "kiro_v3_status": ToolSpec(
         kiro_v3_status, "Kiro CLI V3 status", read_only=True, open_world=False
     ),
 }
-TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
-    name: spec.func for name, spec in TOOL_SPECS.items()
-}
 READ_ONLY_TOOLS: tuple[str, ...] = tuple(n for n, s in TOOL_SPECS.items() if s.read_only)
-MISSING_EXTRA = (
-    "the MCP server needs the optional mcp dependency; run it with "
-    "'uvx --from \"steersync[mcp]\" steersync mcp' or install 'steersync[mcp]'"
-)
 
 
-def build_server() -> Any:  # noqa: ANN401
-    """Create the MCP server. Imported lazily so the core has no MCP dependency."""
-    try:
-        from mcp.server import MCPServer  # noqa: PLC0415
-        from mcp.types import ToolAnnotations  # noqa: PLC0415
-    except ImportError as exc:  # pragma: no cover - exercised only without the extra
-        raise SteersyncError(MISSING_EXTRA) from exc
+def build_server() -> MCPServer:
+    """Create the MCP server with every tool registered."""
     server = MCPServer(
         "steersync", title="steersync", version=__version__, instructions=SERVER_INSTRUCTIONS
     )
@@ -375,7 +335,9 @@ def build_server() -> Any:  # noqa: ANN401
             idempotent_hint=spec.idempotent or spec.read_only,
             open_world_hint=spec.open_world,
         )
-        server.tool(name=name, title=spec.title, annotations=annotations)(spec.func)
+        server.tool(name=name, title=spec.title, annotations=annotations, structured_output=True)(
+            spec.func
+        )
     return server
 
 

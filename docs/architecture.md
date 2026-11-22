@@ -14,7 +14,9 @@ configuration only.
 ```text
 cli.py          click commands; maps results and errors to output and exit codes
 locking.py      cross process exclusive lock around each cache clone
-mcp_server.py   optional MCP tools calling the same functions as the CLI
+mcp_tools.py    the operations behind the MCP tools, returning typed pydantic reports
+mcp_server.py   MCP adapter (needs the mcp extra): structured output, error results,
+                progress, elicitation for a forced pull, tool annotations
 sync.py         pull / push / status / merge_request orchestration over every collection
   ├── gitops.py     hardened subprocess wrapper around git; URL and ref sanitising
   ├── gitlab.py     merge requests through the GitLab REST API (standard library only)

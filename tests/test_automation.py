@@ -6,10 +6,10 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from steersync import gitlab, gitops, mcp_server, sync
+from steersync import gitlab, gitops, mcp_tools, sync
 from steersync.cli import main
 from steersync.config import Config, load_config
-from steersync.errors import GitError, GitLabError
+from steersync.errors import GitError, GitLabError, SteersyncError
 from steersync.hooks import merge_mcp_config, write_kiro_hook
 from steersync.paths import kiro_home
 from tests.conftest import PROJECT_SLUG, CentralCommit, central_global, central_project, git
@@ -316,15 +316,15 @@ def test_merge_request_command_and_tool(
     text = runner.invoke(main, ["mr", "--branch", pushed.branch])
     assert "merge request already open" in text.output
     assert "other open merge requests" in text.output
-    tool = mcp_server.raise_merge_request()
-    assert tool["ok"]
-    assert tool["branch"] == second.branch
-    assert len(tool["others"]) == 1
+    tool = mcp_tools.merge_request()
+    assert tool.branch == second.branch
+    assert len(tool.others) == 1
     monkeypatch.delenv("GITLAB_TOKEN")
     failed = runner.invoke(main, ["mr"])
     assert failed.exit_code == 9
     assert "GITLAB_TOKEN" in failed.output
-    assert mcp_server.raise_merge_request()["ok"] is False
+    with pytest.raises(SteersyncError, match="GITLAB_TOKEN"):
+        mcp_tools.merge_request()
 
 
 def test_merge_request_needs_something_to_propose(

@@ -53,6 +53,11 @@ HOOK_ACTION_TYPES: frozenset[str] = frozenset({"command", "agent"})
 _NO_MATCHER_TRIGGERS: frozenset[str] = frozenset({"Stop", "SessionStart", "SessionEnd"})
 
 
+def _one_of(value: object, options: frozenset[str] | tuple[str, ...]) -> bool:
+    """Membership for untrusted JSON values, which may be unhashable lists or objects."""
+    return isinstance(value, str) and value in options
+
+
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -97,7 +102,7 @@ def hook_entry_issues(hook: Mapping[str, Any], label: str, *, standalone: bool) 
     if action is not None and not isinstance(action, Mapping):
         issues.append(Issue("hook-action", "error", f"{label}: action must be an object"))
     elif isinstance(action, Mapping):
-        if action_type not in HOOK_ACTION_TYPES:
+        if not _one_of(action_type, HOOK_ACTION_TYPES):
             issues.append(
                 Issue("hook-action", "error", f'{label}: action.type must be "command" or "agent"')
             )
@@ -329,7 +334,7 @@ def _permission_issues(permissions: object) -> list[Issue]:
                 )
             )
         effect = rule.get("effect")
-        if effect not in PERMISSION_EFFECTS:
+        if not _one_of(effect, PERMISSION_EFFECTS):
             issues.append(
                 Issue(
                     "agent-permissions",
@@ -386,7 +391,7 @@ def _resource_issues(resources: object) -> list[Issue]:
                         )
                     )
                 index_type = resource.get("indexType")
-                if index_type is not None and index_type not in KNOWLEDGE_INDEX_TYPES:
+                if index_type is not None and not _one_of(index_type, KNOWLEDGE_INDEX_TYPES):
                     issues.append(
                         Issue(
                             "agent-knowledge-base",
@@ -465,7 +470,7 @@ def _oauth_issues(oauth: object, label: str) -> list[Issue]:
         return [Issue("mcp-oauth", "error", f"{label}.oauth must be an object")]
     issues: list[Issue] = []
     mode = oauth.get("mode")
-    if mode is not None and mode not in OAUTH_MODES:
+    if mode is not None and not _one_of(mode, OAUTH_MODES):
         issues.append(
             Issue("mcp-oauth", "error", f"{label}.oauth.mode is browser, enterprise or auto")
         )
@@ -512,7 +517,7 @@ def sandbox_issues(data: object) -> list[Issue]:
         if key in data and not isinstance(data[key], bool)
     ]
     access = data.get("networkAccess")
-    if access is not None and access not in SANDBOX_NETWORK_ACCESS:
+    if access is not None and not _one_of(access, SANDBOX_NETWORK_ACCESS):
         issues.append(
             Issue(
                 "sandbox-network-access",
@@ -669,7 +674,7 @@ def _walk_nodes(nodes: Sequence[object], where: str, depth: int, state: _WalkSta
 def _check_node(node: Mapping[str, Any], label: str, depth: int, state: _WalkState) -> None:
     issues = state.issues
     node_type = node.get("type")
-    if node_type not in WORKFLOW_NODE_TYPES:
+    if not _one_of(node_type, WORKFLOW_NODE_TYPES):
         issues.append(
             Issue(
                 "workflow-schema",
@@ -710,7 +715,7 @@ def _check_node(node: Mapping[str, Any], label: str, depth: int, state: _WalkSta
                 _repeat_issues(node, label, issues)
         case "parallel":
             _children(node, "branches", label, depth, state)
-            if node.get("joinPolicy") not in WORKFLOW_JOIN_POLICIES:
+            if not _one_of(node.get("joinPolicy"), WORKFLOW_JOIN_POLICIES):
                 issues.append(
                     Issue(
                         "workflow-schema",
@@ -740,7 +745,7 @@ def _repeat_issues(node: Mapping[str, Any], label: str, issues: list[Issue]) -> 
                 f"{label}: maxIterations is a whole number from 1 to {WORKFLOW_MAX_ITERATIONS}",
             )
         )
-    if node.get("onMaxIterations") not in WORKFLOW_ON_MAX:
+    if not _one_of(node.get("onMaxIterations"), WORKFLOW_ON_MAX):
         issues.append(
             Issue(
                 "workflow-repeat", "error", f"{label}: onMaxIterations is abort, continue or pause"

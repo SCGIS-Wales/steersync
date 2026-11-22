@@ -242,3 +242,11 @@ def test_size_limit_override_and_report_helpers(config: Config) -> None:
     merged = merge_reports([report, prefixed, LintReport((), 2)])
     assert merged.checked == 4
     assert len(merged.findings) == 2 * len(report.findings)
+
+
+def test_crlf_documents_lint_like_lf(config: Config) -> None:
+    lf = "---\ninclusion: always\n---\n# Title\n\nBody text.\n"
+    crlf = lf.replace("\n", "\r\n")
+    assert profile_rules(config, "a.md", "steering", crlf) == profile_rules(
+        config, "a.md", "steering", lf
+    )

@@ -9,7 +9,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from importlib import resources
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -31,6 +31,7 @@ ENV_GITLAB_PROJECT = "STEERSYNC_GITLAB_PROJECT"
 
 CONFIG_FILE_NAMES: tuple[str, ...] = ("steersync.yaml", "steersync.yml")
 
+_WINDOWS_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 _SCP_LIKE = re.compile(r"^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.\-\[\]]+:(?![/\\]{2})[^\s]+$")
 _HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
@@ -137,8 +138,7 @@ class RemoteConfig(_Strict):
     @field_validator("global_dir", "projects_dir")
     @classmethod
     def _relative_dir(cls, value: str) -> str:
-        parts = Path(value).parts
-        if Path(value).is_absolute() or ".." in parts or not parts:
+        if _escapes(value) or not PurePosixPath(value).parts:
             msg = "must be a relative directory inside the repository"
             raise ValueError(msg)
         return value.strip("/")
@@ -229,9 +229,25 @@ class BranchConfig(_Strict):
         return head.format(project=project) + "*"
 
 
+def _escapes(value: str) -> bool:
+    """True for a path that is absolute or climbs out, by POSIX or Windows rules.
+
+    Checked under both rules on every platform, so ``/abs`` is refused on Windows and
+    ``C:\\abs`` on Linux: a configuration file is shared between machines.
+    """
+    posix, windows = PurePosixPath(value), PureWindowsPath(value)
+    return (
+        posix.is_absolute()
+        or bool(windows.drive)
+        or windows.root != ""
+        or ".." in posix.parts
+        or ".." in windows.parts
+    )
+
+
 def _relative_path(value: str) -> str:
     """Validate a path that must stay inside its base directory."""
-    if Path(value).is_absolute() or ".." in Path(value).parts or not value.strip():
+    if _escapes(value) or not value.strip():
         msg = "must be a relative path without parent references"
         raise ValueError(msg)
     return value.strip().strip("/")
@@ -640,7 +656,7 @@ def _remote_host(url: str, *, allow_local: bool) -> str | None:
             msg = f"remote URL has no host: {url}"
             raise ConfigError(msg)
         return parts.hostname
-    if parts.scheme == "file" or url.startswith("/"):
+    if parts.scheme == "file" or url.startswith("/") or _WINDOWS_PATH.match(url):
         if not allow_local:
             msg = "local remotes are disabled; set remote.allow_local to true to permit them"
             raise ConfigError(msg)

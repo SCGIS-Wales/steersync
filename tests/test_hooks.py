@@ -7,8 +7,10 @@ import pytest
 
 from steersync import __version__, hooks
 from steersync.config import Config
+from tests.conftest import posix_only
 
 
+@posix_only
 def test_install_hook_fresh(config: Config, project: Path, env: dict[str, str]) -> None:
     result = hooks.install_pre_push_hook(config, project, env=env)
     assert result.action == "installed"
@@ -82,6 +84,7 @@ def test_render_mcp_config() -> None:
     assert "steersync-push" in hooks.render_pre_commit_config()
 
 
+@posix_only
 def test_hook_runs_under_sh(
     config: Config, project: Path, env: dict[str, str], tmp_path: Path
 ) -> None:

@@ -24,6 +24,7 @@ from steersync.errors import SteersyncError
 from steersync.hooks import DEFAULT_TOKEN_ENV
 from steersync.lint import LintReport, lint_paths, lint_workspace, merge_reports
 from steersync.logging_utils import configure_logging
+from steersync.mcp_tools import MISSING_MCP_EXTRA
 from steersync.paths import (
     cache_root,
     global_collection_dir,
@@ -805,8 +806,11 @@ def merge_request(
 @main.command()
 def mcp() -> None:
     """Run the MCP stdio server (requires the `mcp` extra)."""
-    from steersync.mcp_server import serve  # noqa: PLC0415  (optional dependency)
-
+    try:
+        from steersync.mcp_server import serve  # noqa: PLC0415  (optional dependency)
+    except ImportError:
+        _fail(SteersyncError(MISSING_MCP_EXTRA))
+        return
     try:
         serve()
     except SteersyncError as exc:
@@ -875,8 +879,8 @@ def migrate_hooks(ctx: click.Context, write: bool) -> None:
         migrate.apply_migrations(plans) if write else [(plan, "would write") for plan in plans]
     )
     for plan, outcome in outcomes:
-        source = plan.source.relative_to(root)
-        target = plan.target.relative_to(root)
+        source = plan.source.relative_to(root).as_posix()
+        target = plan.target.relative_to(root).as_posix()
         if plan.hooks and outcome != "skipped":
             click.echo(f"{outcome}: {target} ({len(plan.hooks)} hook(s) from {source})")
             if plan.from_agent:

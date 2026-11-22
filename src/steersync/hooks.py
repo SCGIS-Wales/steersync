@@ -119,6 +119,7 @@ AUTO_APPROVE_TOOLS: tuple[str, ...] = (
     "diff_kiro_config",
     "validate_kiro_config",
     "list_kiro_collections",
+    "doctor_kiro_config",
     "kiro_v3_status",
 )
 

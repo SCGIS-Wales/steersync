@@ -1,0 +1,29 @@
+{
+  "checked": 3,
+  "findings": [
+    {
+      "path": "broken.workflow.yml",
+      "rule": "yaml-syntax",
+      "severity": "error",
+      "line": 2
+    },
+    {
+      "path": "review-loop.workflow.yaml",
+      "rule": "workflow-duplicate-id",
+      "severity": "error",
+      "line": null
+    },
+    {
+      "path": "review-loop.workflow.yaml",
+      "rule": "workflow-repeat",
+      "severity": "error",
+      "line": null
+    },
+    {
+      "path": "review-loop.workflow.yaml",
+      "rule": "workflow-repeat",
+      "severity": "error",
+      "line": null
+    }
+  ]
+}

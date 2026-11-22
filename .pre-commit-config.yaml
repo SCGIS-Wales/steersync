@@ -5,6 +5,8 @@ repos:
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: check-yaml
+        # Golden lint fixtures include deliberately invalid YAML.
+        exclude: ^tests/golden/
       - id: check-toml
       - id: end-of-file-fixer
       - id: trailing-whitespace

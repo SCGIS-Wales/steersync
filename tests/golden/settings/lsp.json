@@ -1,0 +1,11 @@
+{
+  "languages": {
+    "python": {
+      "name": "pyright",
+      "command": "pyright-langserver",
+      "args": [
+        "--stdio"
+      ]
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "checked": 3,
+  "findings": [
+    {
+      "path": "bad.json",
+      "rule": "hook-action",
+      "severity": "error",
+      "line": null
+    },
+    {
+      "path": "bad.json",
+      "rule": "hook-confirm",
+      "severity": "error",
+      "line": null
+    },
+    {
+      "path": "bad.json",
+      "rule": "hook-schema",
+      "severity": "error",
+      "line": null
+    },
+    {
+      "path": "bad.json",
+      "rule": "hook-timeout-value",
+      "severity": "error",
+      "line": null
+    },
+    {
+      "path": "bad.json",
+      "rule": "hook-trigger-alias",
+      "severity": "warning",
+      "line": null
+    },
+    {
+      "path": "fmt.kiro.hook",
+      "rule": "hook-legacy-format",
+      "severity": "warning",
+      "line": null
+    }
+  ]
+}

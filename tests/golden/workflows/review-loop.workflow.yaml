@@ -1,0 +1,14 @@
+name: Review loop
+steps:
+  - type: repeat
+    id: loop
+    maxIterations: 0
+    steps:
+      - type: step
+        id: review
+        agent: reviewer
+        prompt: Review
+      - type: step
+        id: review
+        agent: reviewer
+        prompt: Again

@@ -1,0 +1,11 @@
+{
+  "checked": 3,
+  "findings": [
+    {
+      "path": "broken/SKILL.md",
+      "rule": "skill-front-matter-required",
+      "severity": "error",
+      "line": 1
+    }
+  ]
+}

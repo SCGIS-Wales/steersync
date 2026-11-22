@@ -46,6 +46,15 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+# Progress callback: (completed steps, total steps, message). Used by the MCP server to
+# send progress notifications during long syncs; the CLI passes nothing.
+Progress = Callable[[int, int, str], None]
+
+
+def _no_progress(done: int, total: int, message: str) -> None:
+    del done, total, message
+
+
 class CollectionResult(NamedTuple):
     """Outcome of applying one collection in one scope."""
 
@@ -269,11 +278,14 @@ def pull(
     dry_run: bool = False,
     strict: bool | None = None,
     collections: Sequence[str] | None = None,
+    progress: Progress | None = None,
 ) -> PullResult:
     """Fetch the central repository and apply every selected collection locally."""
+    step = progress or _no_progress
     environment = _env(env)
     url = _central_url(config)
     selected = config.select_collections(collections)
+    step(0, 1, "refreshing the central repository")
     cache_dir, commit, offline = _refresh_cache(config, environment, url, allow_offline=True)
     strict_pull = config.sync.strict_pull if strict is None else strict
     targets: list[_ScopeTarget] = []
@@ -304,7 +316,9 @@ def pull(
             )
 
     results: list[CollectionResult] = []
-    for target in targets:
+    total = 1 + len(targets)
+    for index, target in enumerate(targets, start=1):
+        step(index, total, f"applying the {target.scope} collections")
         results.extend(
             _pull_scope(
                 target,
@@ -318,6 +332,7 @@ def pull(
                 workspace_root=workspace_root if target.scope == "workspace" else None,
             )
         )
+    step(total, total, f"applied {sum(r.plan.change_count for r in results)} change(s)")
     return PullResult(url, commit, tuple(results), dry_run, offline)
 
 
@@ -459,8 +474,10 @@ def _push_unlocked(
     run_lint: bool = True,
     message: str | None = None,
     collections: Sequence[str] | None = None,
+    progress: Progress | None = None,
 ) -> PushResult:
     """Propose the selected local collections as one branch (and merge request) centrally."""
+    step = progress or _no_progress
     environment = _env(env)
     url = _central_url(config)
     git_env = gitops.git_environment(environment)
@@ -519,6 +536,7 @@ def _push_unlocked(
 
     report: LintReport | None = None
     if run_lint:
+        step(0, 4, "linting the local collections")
         lint_root = workspace_root if scope == "workspace" else None
         report = merge_reports(
             prefix_report(
@@ -533,6 +551,7 @@ def _push_unlocked(
                 "fix them or pass --no-lint"
             )
 
+    step(1, 4, "refreshing the central repository")
     cache_dir, base_commit, _ = _refresh_cache(config, environment, url)
     central_base = (
         _project_dir(config, cache_dir, project)
@@ -621,6 +640,7 @@ def _push_unlocked(
                 executable=executable_paths(item.local_dir, item.snapshot),
             )
             commit_paths.append(central_dir.relative_to(cache_dir).as_posix())
+        step(2, 4, "committing the proposal")
         commit = gitops.commit_paths(
             config,
             cache_dir,
@@ -642,6 +662,7 @@ def _push_unlocked(
                 report,
                 "no changes after staging",
             )
+        step(3, 4, f"pushing {branch}")
         _, options_delivered = gitops.push_branch(
             config, cache_dir, url=url, branch=branch, push_options=options, env=cache_env
         )
@@ -655,6 +676,7 @@ def _push_unlocked(
             env=cache_env,
         )
     mr_url, mr_note = _merge_request_for(config, environment, url, branch, project, plan)
+    step(4, 4, f"pushed {branch}")
     return PushResult(
         "pushed",
         project,

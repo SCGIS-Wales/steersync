@@ -249,3 +249,26 @@ def test_legacy_path_keys_map_to_steering_collection(
     assert config.collections["steering"].global_path == "rules"
     assert config.collections["specs"].workspace_path == ".kiro/specs"
     assert any("deprecated" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "url", [r"C:\repos\central.git", "D:/repos/central.git", r"\\srv\share\c.git"]
+)
+def test_windows_local_paths_are_local_remotes(url: str) -> None:
+    assert remote_host(url) is None
+    with pytest.raises(ConfigError, match="local remotes are disabled"):
+        validate_remote_url(url)
+    assert validate_remote_url(url, allow_local=True) == url
+
+
+@pytest.mark.parametrize("value", ["/abs", r"C:\abs", "C:abs", r"\abs", "a/../../b", r"a\..\..\b"])
+def test_paths_are_relative_under_posix_and_windows_rules(env: dict[str, str], value: str) -> None:
+    from pydantic import ValidationError
+
+    from steersync.config import CollectionConfig, RemoteConfig
+
+    with pytest.raises(ValidationError):
+        CollectionConfig(workspace_path=value)
+    with pytest.raises(ValidationError):
+        RemoteConfig(global_dir=value)
+    assert CollectionConfig(workspace_path=".kiro/steering").workspace_path == ".kiro/steering"

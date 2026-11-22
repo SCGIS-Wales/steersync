@@ -52,6 +52,7 @@ Changelog = "https://github.com/SCGIS-Wales/steersync/blob/main/CHANGELOG.md"
 dev = [
   "pytest>=9.2,<10",
   "pytest-cov>=7.1,<8",
+  "hypothesis>=6.140,<7",
   "ruff>=0.17.6,<1",
   "mypy>=2.4,<3",
   "types-PyYAML>=6.0.12",
@@ -105,9 +106,15 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.14"
 strict = true
+plugins = ["pydantic.mypy"]
 warn_unreachable = true
 show_error_codes = true
 files = ["src", "tests", "scripts"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
 
 [[tool.mypy.overrides]]
 module = ["frontmatter", "frontmatter.*", "pymarkdown.*", "mcp.*"]
