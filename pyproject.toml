@@ -73,6 +73,10 @@ dev = [
   { include-group = "security" },
 ]
 
+[tool.uv]
+# 0.13 resolves Python 3.14 and 3.15 and understands PEP 735 include-group.
+required-version = ">=0.13"
+
 [tool.hatch.version]
 path = "src/steersync/__init__.py"
 

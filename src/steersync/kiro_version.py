@@ -52,6 +52,8 @@ class HarnessStatus:
     # acp.agentEngine: the harness `kiro-cli acp` (IDE and editor integrations) starts;
     # chat.agentEngine does not apply to it.
     acp_engine: str | None = None
+    # chat.enableWorkflows: workflow recipes (.kiro/workflows) load only when it is on.
+    workflows_enabled: bool | None = None
     v2_agents: tuple[str, ...] = ()
     reasons: tuple[str, ...] = field(default=())
 
@@ -198,6 +200,8 @@ def detect_harness(
     auto_upgrade = upgrade_value if isinstance(upgrade_value, bool) else None
     acp_value, _ = _setting(binary, "acp.agentEngine", run, file_settings)
     acp_engine = acp_value.lower() if isinstance(acp_value, str) else None
+    workflows_value, _ = _setting(binary, "chat.enableWorkflows", run, file_settings)
+    workflows_enabled = workflows_value if isinstance(workflows_value, bool) else None
     dirs = [*agent_dirs, kiro_home(environment) / "agents"]
     status = HarnessStatus(
         cli_path=binary,
@@ -206,6 +210,7 @@ def detect_harness(
         engine_source=source,
         auto_upgrade=auto_upgrade,
         acp_engine=acp_engine,
+        workflows_enabled=workflows_enabled,
         v2_agents=find_v2_agents(dict.fromkeys(dirs)),
     )
     reasons = [*_cli_reasons(status)]

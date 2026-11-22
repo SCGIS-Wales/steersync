@@ -62,7 +62,11 @@ def test_render_kiro_hooks() -> None:
     v3 = json.loads(hooks.render_kiro_hook("v3"))
     assert v3["version"] == "v1"
     assert v3["hooks"][0]["trigger"] == "SessionStart"
-    assert v3["hooks"][0]["action"]["command"] == "steersync pull --quiet --best-effort"
+    command = v3["hooks"][0]["action"]["command"]
+    assert command == hooks.SESSION_PULL_COMMAND
+    assert f'--from "steersync=={__version__}"' in command
+    assert '--python ">=3.14"' in command
+    assert command.endswith("steersync pull --quiet --best-effort")
     v2 = json.loads(hooks.render_kiro_hook("v2", command="steersync pull", timeout=5))
     assert v2["hooks"]["agentSpawn"][0] == {"command": "steersync pull", "timeout_ms": 5000}
 
@@ -131,8 +135,9 @@ def test_session_start_hook_command_parses(
     monkeypatch.chdir(project)
     monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
     command = json.loads(hooks.render_kiro_hook("v3"))["hooks"][0]["action"]["command"]
-    program, *args = shlex.split(command)
-    assert program == "steersync"
+    words = shlex.split(command)
+    assert words[0] == "uvx"
+    args = words[words.index("steersync") + 1 :]
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     assert result.stdout == ""

@@ -183,7 +183,7 @@ def pull(
 ) -> None:
     """Fetch every collection (steering, specs, skills, ...) from the central repository."""
     if pull_quiet:
-        # The Kiro SessionStart hook runs `steersync pull --quiet --best-effort`.
+        # The Kiro SessionStart hook runs `steersync pull --quiet --best-effort` (via uvx).
         ctx.find_root().params["quiet"] = True
     try:
         config, root = _bootstrap(ctx, propagate=True)
@@ -853,6 +853,11 @@ def _harness_lines(status: kiro_version.HarnessStatus) -> list[str]:
         lines.append(f"acp engine: {status.acp_engine}")
     if status.auto_upgrade is not None:
         lines.append(f"automatic agent upgrade: {'on' if status.auto_upgrade else 'off'}")
+    if status.cli_path is not None and status.workflows_enabled is not True:
+        lines.append(
+            "workflows: off (chat.enableWorkflows); synced recipes load after "
+            "`kiro-cli settings chat.enableWorkflows true`"
+        )
     lines.extend(f"V2 format agent: {path}" for path in status.v2_agents)
     lines.append("V3 harness: yes" if status.on_v3 else "V3 harness: no")
     return lines

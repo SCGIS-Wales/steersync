@@ -39,7 +39,9 @@ layout; each one is configurable and new ones are added with a single YAML block
 | `agents-md` | the repository | none | `agents-md/` | `**/AGENTS.md` (root and nested) | `markdown` (kept in the project repository too) |
 | `kiroignore` | the repository | `settings` (`kiroignore`) | `kiroignore/` | `**/.kiroignore` | `kiroignore`: gitignore syntax, advice on `.env*` and `*.pem` |
 
-Execute bits on skill scripts survive the round trip. Hidden directories are never synced,
+Workflow recipes are an opt in Kiro feature: they load only after
+`kiro-cli settings chat.enableWorkflows true`, which `steersync doctor` reports. Execute bits
+on skill scripts survive the round trip. Hidden directories are never synced,
 and a hidden file only when a pattern names it (`**/.kiroignore`). Files a collection's
 patterns do not select are never touched on either side, which is why `settings`, `sandbox`
 and `cli-settings` can share `.kiro/settings`. The repository wide collections skip
@@ -120,7 +122,7 @@ without asking for it. `steersync init` makes that true for a repository:
 
 | Piece | What it does | Written by |
 |---|---|---|
-| `.kiro/hooks/steersync.json` | A V3 `SessionStart` hook running `steersync pull --quiet --best-effort`, so the session starts from the latest merged configuration. Bounded git time; never fails the session. | `steersync init` (or `steersync kiro-hook --write`) |
+| `.kiro/hooks/steersync.json` | A V3 `SessionStart` hook running `steersync pull --quiet --best-effort` (through `uvx`, pinned to the installed version), so the session starts from the latest merged configuration. Bounded git time; never fails the session. | `steersync init` (or `steersync kiro-hook --write`) |
 | `.kiro/settings/mcp.json` | The steersync MCP server, so "pull the kiro config", "push my steering", "raise an MR for the kiro config" or "validate the agents" work in chat. | `steersync init` (merged into an existing file, other servers kept) |
 | `.git/hooks/pre-push` | Proposes `.kiro/` on every push of the project. | `steersync init --hook` |
 
@@ -345,7 +347,10 @@ and `lint.practices: false` turns the warnings off.
 
 **Session hook (V3).** `steersync init` (or `steersync kiro-hook --write`) creates
 `.kiro/hooks/steersync.json` with a `SessionStart` trigger that runs
-`steersync pull --quiet --best-effort`. For CLI 2.x agents paste the output of
+`steersync pull --quiet --best-effort` through
+`uvx --quiet --python ">=3.14" --from "steersync==<version>"`, so it never depends on which
+`steersync` comes first on Kiro's `PATH`. Run `steersync init` again after upgrading to move
+the pin. For CLI 2.x agents paste the output of
 `steersync kiro-hook --engine v2` into the agent's `hooks` block. Field reports say Kiro hooks
 fire only in headless runs or with a custom agent active, so treat them as a convenience and
 keep the git hook as the dependable trigger.
