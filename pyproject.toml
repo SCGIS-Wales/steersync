@@ -49,16 +49,28 @@ Issues = "https://github.com/SCGIS-Wales/steersync/issues"
 Changelog = "https://github.com/SCGIS-Wales/steersync/blob/main/CHANGELOG.md"
 
 [dependency-groups]
-dev = [
+# PEP 735 groups. `uv sync` installs dev, which pulls in the others; CI installs only the
+# group each job needs.
+test = [
   "pytest>=9.2,<10",
   "pytest-cov>=7.1,<8",
   "hypothesis>=6.140,<7",
+  "mcp>=2.3,<3",
+]
+lint = [
+  { include-group = "test" },  # mypy type checks the tests too
   "ruff>=0.17.6,<1",
   "mypy>=2.4,<3",
   "types-PyYAML>=6.0.12",
+]
+security = [
   "bandit[toml]>=1.9,<2",
   "pip-audit>=2.10,<3",
-  "mcp>=2.3,<3",
+]
+dev = [
+  { include-group = "lint" },
+  { include-group = "test" },
+  { include-group = "security" },
 ]
 
 [tool.hatch.version]

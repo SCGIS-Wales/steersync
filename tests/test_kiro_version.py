@@ -67,11 +67,15 @@ def test_v2_engine_old_cli_and_v2_agents(tmp_path: Path) -> None:
             "--version": (0, "kiro-cli 2.37.0"),
             "settings -f json chat.agentEngine": (0, '"v2"'),
             "settings -f json chat.enableAutoAgentUpgrade": (0, "false"),
+            "settings -f json acp.agentEngine": (0, '"v2"'),
         }
     )
     status = detect_harness(
         {"HOME": str(tmp_path)}, agent_dirs=[agents], run=run, which=which_found
     )
+    assert status.acp_engine == "v2"
+    assert any("acp.agentEngine" in reason for reason in status.reasons)
+    assert "kiro-cli settings acp.agentEngine v3" in kiro_version.reminder_text(status)
     assert not status.on_v3
     assert status.needs_reminder
     assert [Path(p).name for p in status.v2_agents] == ["md.md", "old.json"]

@@ -150,6 +150,7 @@ class HarnessReport(_Report):
     engine: str | None = Field(description="chat.agentEngine (v3, v2, v1) or null when unset")
     engine_source: Literal["kiro-cli", "settings-file", "default", "unknown"]
     auto_upgrade: bool | None
+    acp_engine: str | None = Field(description="acp.agentEngine for `kiro-cli acp`, or null")
     v2_agents: list[str] = Field(description="Agent files Kiro would rewrite on load")
     reasons: list[str]
     on_v3: bool

@@ -1568,6 +1568,25 @@ dev = [
     { name = "ruff" },
     { name = "types-pyyaml" },
 ]
+lint = [
+    { name = "hypothesis" },
+    { name = "mcp" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "types-pyyaml" },
+]
+security = [
+    { name = "bandit" },
+    { name = "pip-audit" },
+]
+test = [
+    { name = "hypothesis" },
+    { name = "mcp" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1591,6 +1610,25 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.1,<8" },
     { name = "ruff", specifier = ">=0.17.6,<1" },
     { name = "types-pyyaml", specifier = ">=6.0.12" },
+]
+lint = [
+    { name = "hypothesis", specifier = ">=6.140,<7" },
+    { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "mypy", specifier = ">=2.4,<3" },
+    { name = "pytest", specifier = ">=9.2,<10" },
+    { name = "pytest-cov", specifier = ">=7.1,<8" },
+    { name = "ruff", specifier = ">=0.17.6,<1" },
+    { name = "types-pyyaml", specifier = ">=6.0.12" },
+]
+security = [
+    { name = "bandit", extras = ["toml"], specifier = ">=1.9,<2" },
+    { name = "pip-audit", specifier = ">=2.10,<3" },
+]
+test = [
+    { name = "hypothesis", specifier = ">=6.140,<7" },
+    { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "pytest", specifier = ">=9.2,<10" },
+    { name = "pytest-cov", specifier = ">=7.1,<8" },
 ]
 
 [[package]]
