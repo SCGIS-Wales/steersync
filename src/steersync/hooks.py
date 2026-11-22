@@ -112,8 +112,18 @@ MCP_SERVER_NAME = "steersync"
 KIRO_HOOK_FILE = "steersync.json"
 # Name of the environment variable (not a secret) that carries the GitLab token.
 DEFAULT_TOKEN_ENV = "GITLAB_TOKEN"  # noqa: S105
+# steersync needs Python 3.14. uvx resolves a tool with its default interpreter, which may
+# be older (the server then exits before Kiro connects), so the constraint is explicit.
+MIN_PYTHON = ">=3.14"
 # uvx needs the mcp extra; pinning the version keeps every machine on the same server.
-DEFAULT_MCP_ARGS: tuple[str, ...] = ("--from", f"steersync[mcp]=={__version__}", "steersync", "mcp")
+DEFAULT_MCP_ARGS: tuple[str, ...] = (
+    "--python",
+    MIN_PYTHON,
+    "--from",
+    f"steersync[mcp]=={__version__}",
+    "steersync",
+    "mcp",
+)
 # Read only tools Kiro may run without asking (mutating tools always ask).
 AUTO_APPROVE_TOOLS: tuple[str, ...] = (
     "diff_kiro_config",

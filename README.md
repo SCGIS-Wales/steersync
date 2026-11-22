@@ -66,8 +66,8 @@ sdist and a `SHA256SUMS` file, with signed build provenance.
 VERSION=0.5.1
 uv tool install "https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
 # or run it without installing
-uvx steersync --help
-uvx --from "steersync[mcp]" steersync-mcp
+uvx --python ">=3.14" steersync --help
+uvx --python ">=3.14" --from "steersync[mcp]" steersync-mcp
 # with the MCP server
 uv tool install "steersync[mcp] @ https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
 # verify where the wheel came from
@@ -362,7 +362,9 @@ chat, so they use no Kiro credits, and a reminder never fails a sync. Set
 
 **MCP server.** `steersync init` registers the server in `.kiro/settings/mcp.json`
 (`steersync mcp-config` prints the fragment). It runs through
-`uvx --from "steersync[mcp]==<version>" steersync mcp`, so nothing needs installing, and it
+`uvx --python ">=3.14" --from "steersync[mcp]==<version>" steersync mcp`, so nothing needs
+installing (the Python constraint matters: uvx otherwise uses its default interpreter, and the
+server exits before Kiro connects when that is older than 3.14), and it
 auto approves only the read only tools. The server is built on the MCP Python SDK v2
 (`MCPServer`, specification 2026-07-28): every tool returns a typed report with an output
 schema, failures are error results the agent can read, pull and push report progress, and

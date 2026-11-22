@@ -5,6 +5,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The MCP server entry written by `steersync init` did not start in Kiro on machines whose
+  default uv Python is older than 3.14: uvx resolved `steersync[mcp]` with that interpreter,
+  failed, and Kiro reported "Connection closed". The entry now passes `--python ">=3.14"`.
+  Found by an end to end test with Kiro CLI 3.5.
+- `steersync init` wrote `/.kiro/settings/` to `.git/info/exclude` twice.
+
 ## [0.5.1] - 2026-11-22
 
 ### Added
