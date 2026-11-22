@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-11-22
+
 ### Fixed
 
 - Installing from a package mirror failed with "No matching distribution found for
