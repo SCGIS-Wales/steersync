@@ -215,15 +215,27 @@ def enforce_limits(snapshot: Mapping[str, bytes], *, max_files: int, max_total_b
         raise LimitExceededError(msg)
 
 
+def comparable(data: bytes) -> bytes:
+    """Content as compared and hashed: text with CRLF line endings normalised to LF.
+
+    A checkout with ``core.autocrlf`` or a Windows editor must not look like a change.
+    Binary content (any NUL byte) is left exactly as it is; files on disk are never
+    rewritten, only their hash is computed this way.
+    """
+    if b"\0" in data or b"\r\n" not in data:
+        return data
+    return data.replace(b"\r\n", b"\n")
+
+
 def file_digest(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(comparable(data)).hexdigest()
 
 
 def snapshot_digest(snapshot: Mapping[str, bytes]) -> str:
     """Return a stable digest for an entire snapshot (paths and content)."""
     hasher = hashlib.sha256()
     for relative in sorted(snapshot):
-        data = snapshot[relative]
+        data = comparable(snapshot[relative])
         hasher.update(relative.encode("utf-8"))
         hasher.update(b"\0")
         hasher.update(str(len(data)).encode("ascii"))
@@ -414,33 +426,74 @@ def replace_directory_contents(
 
 
 def _empty_lock() -> dict[str, Any]:
-    return {"version": LOCK_VERSION, "collections": {}}
+    return {"schema_version": LOCK_VERSION, "collections": {}}
+
+
+def _valid_lock(data: object) -> bool:
+    """The record has a supported schema version and well formed collections."""
+    if not isinstance(data, dict):
+        return False
+    version = data.get("schema_version", data.get("version"))
+    if version != LOCK_VERSION or isinstance(version, bool):
+        return False
+    collections = data.get("collections")
+    if not isinstance(collections, dict):
+        return False
+    for entry in collections.values():
+        files = entry.get("files") if isinstance(entry, dict) else None
+        if not isinstance(files, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in files.items()
+        ):
+            return False
+    return True
+
+
+def _set_aside(path: Path) -> Path | None:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    target = path.with_name(f"{path.name}.corrupt-{stamp}")
+    try:
+        path.replace(target)
+    except OSError:
+        return None
+    return target
+
+
+def lock_problem(path: Path) -> str | None:
+    """Why the record at ``path`` would be set aside, without touching it (None: fine)."""
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return f"unreadable: {exc}"
+    return None if _valid_lock(data) else "fails validation (wrong types or schema version)"
 
 
 def read_lock(path: Path) -> dict[str, Any]:
-    """Read a lock file; a missing or corrupt lock yields an empty record.
+    """Read the last sync record; a missing or damaged record yields an empty one.
 
-    Version 1 locks (one ``files`` mapping) are read as the steering collection so
-    an upgrade keeps telling local edits from stale copies.
+    A record that cannot be read, is not JSON or fails validation (wrong types, an
+    unknown schema version) is renamed to ``<name>.corrupt-<UTC timestamp>`` for
+    inspection, with one warning, and treated as absent. Without a record every local
+    file that differs from the central copy counts as a local edit and is kept, so a
+    damaged record can never cause an overwrite.
     """
     if not path.is_file():
         return _empty_lock()
     try:
         data = json.loads(path.read_text("utf-8"))
-    except OSError, json.JSONDecodeError:
-        log.warning("ignoring unreadable lock file %s", path)
-        return _empty_lock()
-    if not isinstance(data, dict):
-        log.warning("ignoring malformed lock file %s", path)
-        return _empty_lock()
-    if isinstance(data.get("collections"), dict):
+    except OSError, UnicodeDecodeError, json.JSONDecodeError:
+        data = None
+    if _valid_lock(data):
+        assert isinstance(data, dict)  # noqa: S101 - narrowed by _valid_lock
         return data
-    if isinstance(data.get("files"), dict):
-        upgraded = {k: v for k, v in data.items() if k != "files"}
-        upgraded["version"] = LOCK_VERSION
-        upgraded["collections"] = {DEFAULT_COLLECTION: {"files": data["files"]}}
-        return upgraded
-    log.warning("ignoring malformed lock file %s", path)
+    moved = _set_aside(path)
+    log.warning(
+        "the last sync record %s is damaged; set aside as %s and ignored (locally changed "
+        "files are kept)",
+        path,
+        moved.name if moved else "(could not rename it)",
+    )
     return _empty_lock()
 
 
@@ -470,7 +523,7 @@ def write_lock(
     collections: Mapping[str, Mapping[str, str]],
 ) -> None:
     record = {
-        "version": LOCK_VERSION,
+        "schema_version": LOCK_VERSION,
         "remote": _USERINFO_RE.sub("", remote),
         "commit": commit,
         "synced_at": datetime.now(UTC).isoformat(timespec="seconds"),

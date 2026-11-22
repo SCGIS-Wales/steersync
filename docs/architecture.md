@@ -13,6 +13,16 @@ configuration only.
 
 ```text
 cli.py          click commands; maps results and errors to output and exit codes
+cli_common.py   helpers shared by the command modules (workspace root, output, failures)
+cli_fleet.py    `steersync fleet` group: registry commands, status, doctor
+cli_fleet_actions.py  fleet push, pull, restore and the interactive overview
+fleet.py        three way classification, fleet collection, per repository push and pull
+fleet_ui.py     rich table and questionary prompts (the only module importing them; lazy)
+fleet_doctor.py registry, work tree, sync record, cache clone, lock and backup checks
+registry.py     the remembered repositories ($XDG_STATE_HOME/steersync/workspaces.json)
+discovery.py    finding repositories set up for steersync below a folder
+backups.py      verified backups before a forced overwrite, restore and pruning
+retry.py        one retry policy and loop for git and GitLab, with visible retry events
 locking.py      cross process exclusive lock around each cache clone
 mcp_tools.py    the operations behind the MCP tools, returning typed pydantic reports
 mcp_server.py   MCP adapter (needs the mcp extra): structured output, error results,
@@ -21,7 +31,7 @@ sync.py         pull / push / status / merge_request orchestration over every co
   ├── gitops.py     hardened subprocess wrapper around git; URL and ref sanitising
   ├── gitlab.py     merge requests through the GitLab REST API (standard library only)
   ├── steering.py   FileSpec discovery, front matter, snapshots, change plans, atomic writes,
-  │                 executable bits, versioned lock file
+  │                 executable bits, versioned sync record, line ending normalised hashes
   ├── lint.py       lint profiles (steering, markdown, skill, agent, hooks, settings, prompt,
   │                 workflow, kiroignore, json, generic) and the workspace auto load checks
   ├── kiro_rules.py pure schema rules for hooks, agents, mcp/sandbox/cli settings, workflow
@@ -81,17 +91,50 @@ errors.py       exception types carrying exit codes
   on the push result, never a failed push, because push options already asked GitLab to
   open the merge request.
 
-## Lock file
+## Sync record (lock file)
 
-Version 2 records hashes per collection:
+The workspace record lives at `<git dir>/steersync/lock.json`, inside the git directory and
+so outside the work tree: it never appears in `git status` and needs no exclude. The global
+record is `~/.kiro/steersync.lock.json`. Schema version 2 records hashes per collection:
 
 ```json
-{"version": 2, "remote": "...", "commit": "...", "synced_at": "...",
+{"schema_version": 2, "remote": "...", "commit": "...", "synced_at": "...",
  "collections": {"steering": {"files": {"python.md": "<sha256>"}}, "skills": {"files": {}}}}
 ```
 
-A version 1 file (`"files": {...}`) is read as the steering collection and rewritten as
-version 2 on the next pull.
+Hashes are taken over `steering.comparable(bytes)`: text files (no NUL byte) have CRLF
+normalised to LF first, so a checkout with `core.autocrlf` is never a local edit; a lone CR
+and binary files are hashed as they are. A version 1 file (`"files": {...}`) is read as the
+steering collection, and the older `"version": 2` key is still accepted. A record that is
+not valid JSON or has the wrong shape is renamed to `lock.json.corrupt-<UTC time>` with a
+warning and treated as absent: with no record, `plan_changes` keeps every local file that
+differs from the central copy as a conflict, so a damaged record can never cause an
+overwrite.
+
+## Fleet
+
+`fleet.collect(paths, env)` builds a `FleetReport` for many repositories:
+
+1. Each registered path is prepared: work tree check, configuration, project slug, central
+   URL. Failures become `missing`, `unconfigured` or `error` rows; nothing raises out of one
+   repository.
+2. Repositories are grouped by central URL. Each remote is refreshed once, under the same
+   cache lock as `pull` (`sync.refresh_central`), or reused when younger than
+   `fleet.refresh_max_age_seconds`. An unreachable remote with a cache is marked offline.
+3. Per repository, in a thread pool (`fleet.max_workers`, default `min(8, cpu)`),
+   `sync.compare_workspace` returns a `CollectionView` per collection with
+   the local, central and last sync snapshots; `fleet.three_way` turns them into push and
+   pull counts and conflicts, and `classify` into a state. Open proposal branches come from
+   one `ls-remote` per remote.
+
+Push and pull reuse `sync.push` and `sync.pull` per repository through `fleet.run_batch`,
+which records an `Outcome` for each and stops cleanly on Ctrl-C. A forced pull calls
+`backups.take` (copy, manifest, verify) and `backups.verify_unchanged` before
+`apply_plan`; any failure raises `BackupError` and nothing is written.
+
+The registry is updated atomically under an exclusive lock; a damaged file is set aside and
+rebuilt from the next commands that run. `fleet_ui` is imported only by fleet commands, so
+rich and questionary never slow down `pull` or the hooks.
 
 ## Exit codes
 
@@ -102,10 +145,12 @@ version 2 on the next pull.
 | 2 | Configuration error |
 | 3 | git failure |
 | 4 | Lint errors |
-| 5 | Sync conflict (raised only by callers that opt in) |
+| 5 | Sync conflict, a backup that failed, or a fleet command where a repository failed |
 | 6 | Unsafe path |
 | 7 | Central or local content exceeds `sync.max_files` or `sync.max_total_bytes` |
 | 8 | Timed out waiting for another steersync process using the same cache |
+| 9 | GitLab API error or missing token |
+| 10 | `v3-status --strict`: a Kiro V3 reminder applies |
 | 130 | Interrupted |
 
 ## Resiliency

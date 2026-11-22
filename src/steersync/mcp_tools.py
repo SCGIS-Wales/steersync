@@ -10,11 +10,11 @@ server turns into an ``isError`` tool result the agent can read.
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from steersync import gitlab, gitops, kiro_version, sync
+from steersync import gitlab, gitops, kiro_version, registry, sync
 from steersync.config import Config, load_config
 from steersync.errors import SteersyncError
 from steersync.lint import lint_paths, lint_workspace, merge_reports
@@ -180,7 +180,9 @@ def load(cwd: str | None) -> tuple[Config, Path | None]:
     start = Path(cwd).expanduser() if cwd else Path.cwd()
     bootstrap = load_config(workspace_root=None)
     root = gitops.repo_toplevel(bootstrap, start, env=gitops.git_environment(os.environ))
-    return load_config(workspace_root=root), root
+    config = load_config(workspace_root=root)
+    registry.register(os.environ, root, "command")
+    return config, root
 
 
 def _require_repo(root: Path | None) -> Path:
@@ -394,3 +396,19 @@ def _workspace_path(config: Config, name: str, default: str) -> str:
     if collection is None or collection.workspace_path is None:
         return default
     return collection.workspace_path
+
+
+class FleetStatusReport(_Report):
+    """``steersync fleet status --json``: every registered repository on this machine."""
+
+    remotes: list[dict[str, Any]]
+    repositories: list[dict[str, Any]]
+
+
+def fleet_status(refresh: bool | None = None) -> FleetStatusReport:
+    from steersync import fleet, registry  # noqa: PLC0415 - only for this tool
+    from steersync.paths import registry_path  # noqa: PLC0415
+
+    entries = registry.load(registry_path(os.environ)).paths()
+    document = fleet.collect(entries, os.environ, refresh=refresh).document()
+    return FleetStatusReport.model_validate(document)

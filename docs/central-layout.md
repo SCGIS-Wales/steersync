@@ -43,7 +43,7 @@ my-service/
     │   ├── lsp.json                            committed: /code init drops custom entries
     │   ├── mcp.json
     │   └── groovy-classpath.txt                generated, not synced
-    └── steersync.lock.json                     written by steersync, never committed
+    (the last sync record lives in .git/steersync/lock.json, outside the work tree)
 ```
 
 ## The same tree in the central repository
@@ -112,6 +112,19 @@ steersync push
 steersync push -c hooks -m "hooks: format terraform on save"
 # validate before committing; the pre-commit hook does the same per file
 steersync lint
+```
+
+## Line endings
+
+steersync compares text files with line endings normalised, so a Windows checkout with
+`core.autocrlf` is never reported as a local edit. Files are still written byte for byte as
+they are in the central repository, so keep them LF there. Add a `.gitattributes` at the
+root of the central repository:
+
+```text
+* text=auto eol=lf
+*.png binary
+*.jpg binary
 ```
 
 ## Syncing `AGENTS.md`

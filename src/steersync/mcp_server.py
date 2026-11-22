@@ -75,6 +75,8 @@ advice from the Kiro documentation.
 - list_kiro_collections: which kinds of content are synced and where they live.
 - doctor_kiro_config: "is steersync set up / why does sync fail": git, configuration, \
 remote, token, directories and the Kiro CLI harness. Read only.
+- fleet_status: "which of my repositories have unpushed or unpulled Kiro changes". Read \
+only; covers every repository set up for steersync on this machine.
 - kiro_v3_status: "am I on Kiro CLI V3 / do my agents need upgrading". Read only; never \
 starts a chat, so it costs no Kiro credits.
 Results are structured JSON. A failed call is returned as an error result whose text the \
@@ -281,6 +283,23 @@ async def doctor_kiro_config(cwd: Cwd = None) -> mcp_tools.DoctorReport:
     return await _run(functools.partial(mcp_tools.doctor, cwd))
 
 
+async def fleet_status(
+    refresh: Annotated[
+        bool | None,
+        Field(description="Refresh the central repositories first (default: when stale)"),
+    ] = None,
+) -> mcp_tools.FleetStatusReport:
+    """Show, for every repository set up for steersync on this machine, what is pushed.
+
+    Use for "which of my repositories have unpushed Kiro changes", "is everything in sync",
+    "which projects are behind the central configuration". States: local-ahead (to push),
+    proposed (pushed, awaiting merge), central-ahead (to pull), diverged (changed on both
+    sides), in-sync, missing, unconfigured, error. Read only; pushing and pulling many
+    repositories is done in the terminal with `steersync fleet`.
+    """
+    return await _run(functools.partial(mcp_tools.fleet_status, refresh))
+
+
 async def kiro_v3_status(cwd: Cwd = None) -> mcp_tools.HarnessReport:
     """Report whether kiro-cli runs the V3 agent harness and which agents are not V3 ready.
 
@@ -317,6 +336,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         list_kiro_collections, "List synced collections", read_only=True, open_world=False
     ),
     "doctor_kiro_config": ToolSpec(doctor_kiro_config, "Check steersync setup", read_only=True),
+    "fleet_status": ToolSpec(fleet_status, "Fleet status", read_only=True),
     "kiro_v3_status": ToolSpec(
         kiro_v3_status, "Kiro CLI V3 status", read_only=True, open_world=False
     ),

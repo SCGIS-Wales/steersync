@@ -211,7 +211,7 @@ def test_replace_directory_contents(tmp_path: Path) -> None:
 
 def test_lock_round_trip(tmp_path: Path) -> None:
     lock = tmp_path / "lock.json"
-    assert read_lock(lock) == {"version": 2, "collections": {}}
+    assert read_lock(lock) == {"schema_version": 2, "collections": {}}
     write_lock(
         lock,
         remote="r",
@@ -221,7 +221,7 @@ def test_lock_round_trip(tmp_path: Path) -> None:
     data = read_lock(lock)
     assert data["remote"] == "r"
     assert data["commit"] == "c"
-    assert data["version"] == 2
+    assert data["schema_version"] == 2
     assert list(data["collections"]["steering"]["files"]) == ["a.md", "b.md"]
     assert lock_hashes(data) == {"a.md": "1", "b.md": "2"}
     assert lock_hashes(data, "skills") == {"s/SKILL.md": "3"}
@@ -240,16 +240,22 @@ def test_lock_round_trip(tmp_path: Path) -> None:
     assert lock_collections({"collections": {"x": {"files": "nope"}, "y": 3}}) == {}
 
 
-def test_lock_version_one_is_read_as_steering(tmp_path: Path) -> None:
+def test_record_from_before_schema_version_is_still_valid(tmp_path: Path) -> None:
+    """Records written with "version": 2 (the same format) stay valid."""
     lock = tmp_path / "lock.json"
-    lock.write_text(
-        json.dumps({"version": 1, "remote": "r", "commit": "c", "files": {"a.md": "1"}})
-    )
-    data = read_lock(lock)
-    assert data["version"] == 2
-    assert data["remote"] == "r"
-    assert lock_hashes(data) == {"a.md": "1"}
-    assert lock_hashes(data, "specs") == {}
+    lock.write_text(json.dumps({"version": 2, "collections": {"steering": {"files": {}}}}))
+    assert lock_hashes(read_lock(lock)) == {}
+    assert lock.exists()
+
+
+def test_no_record_keeps_every_differing_local_file() -> None:
+    """Pins plan_changes: without a record, a local file that differs from the central
+    copy is a conflict (kept), and one the central repository lacks is local only."""
+    plan = plan_changes({"a.md": b"central"}, {"a.md": b"local", "b.md": b"mine"}, {})
+    assert plan.conflict == ("a.md",)
+    assert plan.local_only == ("b.md",)
+    assert plan.update == ()
+    assert plan.delete == ()
 
 
 def test_read_document(tmp_path: Path) -> None:

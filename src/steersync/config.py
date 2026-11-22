@@ -330,11 +330,11 @@ def _shares_safely(left: CollectionConfig, right: CollectionConfig) -> bool:
 
 
 class PathsConfig(_Strict):
-    workspace_lock: str = ".kiro/steersync.lock.json"
+    # The workspace record lives under the git directory (<git dir>/steersync/lock.json).
     global_lock: str = "steersync.lock.json"
     cache_dir: str = "~/.cache/steersync"
 
-    @field_validator("workspace_lock", "global_lock")
+    @field_validator("global_lock")
     @classmethod
     def _relative(cls, value: str) -> str:
         return _relative_path(value)
@@ -371,6 +371,14 @@ class GitLabConfig(_Strict):
     squash: bool = False
     labels: tuple[str, ...] = ("kiro-config",)
     timeout_seconds: int = Field(default=30, ge=5, le=300)
+    # Retries for transient API failures (502, 503, 504, 429, timeouts, resets). A create
+    # merge request call is never repeated blindly: it first looks for the merge request.
+    retries: int = Field(default=3, ge=0, le=10)
+    retry_statuses: tuple[int, ...] = (429, 502, 503, 504)
+    retry_backoff_seconds: float = Field(default=1.0, ge=0, le=60)
+    retry_max_backoff_seconds: float = Field(default=30.0, ge=0, le=600)
+    # GitLab can answer 404 for a branch or merge request for a moment after a push.
+    retry_not_found: bool = True
 
     @field_validator("api_url")
     @classmethod
@@ -389,6 +397,18 @@ class GitLabConfig(_Strict):
             msg = "gitlab.project must be a group/project path"
             raise ValueError(msg)
         return candidate
+
+
+class FleetConfig(_Strict):
+    """`steersync fleet`: every initialised repository on this machine."""
+
+    scan_max_depth: int = Field(default=4, ge=1, le=12)
+    # 0 picks min(8, number of CPUs).
+    max_workers: int = Field(default=0, ge=0, le=64)
+    # A central cache younger than this is shown without a network refresh.
+    refresh_max_age_seconds: int = Field(default=300, ge=0, le=86_400)
+    backup_keep_days: int = Field(default=14, ge=1, le=3650)
+    backup_max_bytes: int = Field(default=536_870_912, ge=1_048_576)
 
 
 class HookConfig(_Strict):
@@ -411,6 +431,7 @@ class Config(_Strict):
     collections: dict[str, CollectionConfig] = {}
     sync: SyncConfig = SyncConfig()
     gitlab: GitLabConfig = GitLabConfig()
+    fleet: FleetConfig = FleetConfig()
     lint: LintConfig = LintConfig()
     hook: HookConfig = HookConfig()
     logging: LoggingConfig = LoggingConfig()
@@ -605,6 +626,14 @@ def _migrate_legacy_paths(data: dict[str, Any], origin: str) -> dict[str, Any]:
     paths_section = data.get("paths")
     if not isinstance(paths_section, dict):
         return data
+    if "workspace_lock" in paths_section:
+        log.warning(
+            "%s: paths.workspace_lock is no longer used; the workspace sync record is kept "
+            "at <git dir>/steersync/lock.json. Remove the key.",
+            origin,
+        )
+        paths_section = {k: v for k, v in paths_section.items() if k != "workspace_lock"}
+        data = {**data, "paths": paths_section}
     legacy = {k: v for k, v in paths_section.items() if k in _LEGACY_PATH_KEYS}
     if not legacy:
         return data

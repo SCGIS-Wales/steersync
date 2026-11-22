@@ -5,19 +5,22 @@ settings or anything configured): a pull applies each collection of each scope,
 a push proposes all selected collections of one scope in a single branch.
 """
 
+import contextlib
 import functools
 import logging
 import os
-from collections.abc import Callable, Mapping, Sequence
+import time
+from collections.abc import Callable, Generator, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple, ParamSpec, TypeVar, cast
 from urllib.parse import urlsplit
 
-from steersync import gitlab, gitops, paths
+from steersync import backups, gitlab, gitops, paths
 from steersync.config import CollectionConfig, Config, remote_host, validate_remote_url
 from steersync.errors import ConfigError, GitError, GitLabError, LintError, SyncConflictError
 from steersync.lint import LintReport, lint_snapshot, merge_reports, prefix_report
 from steersync.locking import exclusive_lock
+from steersync.retry import RetryEvent
 from steersync.steering import (
     ChangePlan,
     FileSpec,
@@ -76,6 +79,8 @@ class PullResult(NamedTuple):
     dry_run: bool
     # True when the central repository was unreachable and the cached copy was used.
     offline: bool = False
+    # Backups taken before a forced pull replaced or deleted local files.
+    backups: tuple[str, ...] = ()
 
     @property
     def conflicts(self) -> tuple[str, ...]:
@@ -258,6 +263,27 @@ def _project_dir(config: Config, cache_dir: Path, project: str) -> Path:
     return paths.ensure_within(cache_dir, Path(config.remote.projects_dir) / project)
 
 
+def workspace_lock(config: Config, workspace_root: Path, env: Mapping[str, str]) -> Path:
+    """The workspace's last sync record under its git directory.
+
+    A record left in the work tree by steersync 0.6 or earlier is moved here the first time,
+    so upgrading keeps the last sync state: central updates still apply as updates and
+    deletions still prune, instead of every changed file turning into a conflict.
+    """
+    git_dir = gitops.git_dir(config, workspace_root, env=gitops.git_environment(env))
+    record = paths.workspace_lock_path(git_dir)
+    legacy = workspace_root / paths.LEGACY_WORKSPACE_LOCK
+    if not record.exists() and legacy.is_file():
+        try:
+            record.parent.mkdir(parents=True, exist_ok=True)
+            legacy.replace(record)
+            log.info("moved the sync record from %s to %s", legacy, record)
+        except OSError as exc:
+            log.warning("could not move the sync record from %s: %s", legacy, exc)
+            return legacy
+    return record
+
+
 def resolve_project(
     config: Config, *, workspace_root: Path, env: Mapping[str, str], remote_url: str | None
 ) -> str | None:
@@ -303,6 +329,7 @@ def pull(
     cache_dir, commit, offline = _refresh_cache(config, environment, url, allow_offline=True)
     strict_pull = config.sync.strict_pull if strict is None else strict
     targets: list[_ScopeTarget] = []
+    project_slug = "workspace"
 
     if include_global:
         targets.append(
@@ -320,15 +347,29 @@ def pull(
         if project is None:
             log.warning("workspace has no origin remote; skipping workspace collections")
         else:
+            project_slug = project
             targets.append(
                 _ScopeTarget(
                     "workspace",
                     _project_dir(config, cache_dir, project),
-                    paths.workspace_lock_path(config, workspace_root),
+                    workspace_lock(config, workspace_root, environment),
                     lambda c: paths.workspace_collection_dir(c, workspace_root),
                 )
             )
 
+    taken: tuple[str, ...] = ()
+    if force and not dry_run:
+        taken = _backup_before_overwrite(
+            config,
+            targets,
+            selected,
+            url=url,
+            commit=commit,
+            env=environment,
+            workspace_root=workspace_root,
+            strict_pull=strict_pull,
+            project_of=project_slug,
+        )
     results: list[CollectionResult] = []
     total = 1 + len(targets)
     for index, target in enumerate(targets, start=1):
@@ -347,7 +388,68 @@ def pull(
             )
         )
     step(total, total, f"applied {sum(r.plan.change_count for r in results)} change(s)")
-    return PullResult(url, commit, tuple(results), dry_run, offline)
+    return PullResult(url, commit, tuple(results), dry_run, offline, taken)
+
+
+def _backup_before_overwrite(
+    config: Config,
+    targets: Sequence[_ScopeTarget],
+    selected: Mapping[str, CollectionConfig],
+    *,
+    url: str,
+    commit: str,
+    env: Mapping[str, str],
+    workspace_root: Path | None,
+    strict_pull: bool,
+    project_of: str,
+) -> tuple[str, ...]:
+    """Back up and verify every local file a forced pull will replace or delete.
+
+    Plans the pull without writing, copies the files that exist locally, verifies the
+    copies against their manifest and, just before returning (and so just before the
+    overwrite), re-hashes the originals. Any failure raises BackupError and the pull
+    stops with nothing overwritten. There is no way to skip this.
+    """
+    stamp = backups.stamp_now()
+    root = paths.backup_root(env)
+    taken: list[backups.Backup] = []
+    bases: list[Path] = []
+    for target in targets:
+        preview = _pull_scope(
+            target,
+            config,
+            selected,
+            url=url,
+            commit=commit,
+            force=True,
+            dry_run=True,
+            strict_pull=strict_pull,
+            workspace_root=workspace_root if target.scope == "workspace" else None,
+        )
+        base = (
+            workspace_root
+            if target.scope == "workspace" and workspace_root is not None
+            else paths.kiro_home(env)
+        )
+        relatives = [
+            (result.target_dir / rel).relative_to(base).as_posix()
+            for result in preview
+            for rel in (*result.plan.update, *result.plan.delete, *result.plan.conflict)
+            if (result.target_dir / rel).is_file()
+        ]
+        if not relatives:
+            continue
+        label = project_of if target.scope == "workspace" else "global"
+        taken.append(backups.take(root, base, relatives, project=label, stamp=stamp))
+        bases.append(base)
+    for backup, base in zip(taken, bases, strict=True):
+        backups.verify_unchanged(backup, base)
+        log.warning(
+            "backed up %d file(s) to %s before overwriting them",
+            len(backup.items),
+            backup.directory,
+        )
+    return tuple(str(b.directory) for b in taken)
 
 
 def _pull_scope(
@@ -761,7 +863,7 @@ def _merge_request_for(
         )
     except (GitLabError, ConfigError) as exc:
         log.warning("merge request not confirmed: %s", exc)
-        return None, f"merge request not confirmed: {exc}"
+        return None, f"merge request not confirmed ({exc}); retry with `steersync mr`"
     return mr.url, "merge request created" if created else "merge request already open"
 
 
@@ -953,3 +1055,161 @@ def status(
 def raise_on_conflicts(result: PullResult) -> None:
     if result.conflicts:
         raise SyncConflictError("locally modified files kept: " + ", ".join(result.conflicts))
+
+
+# --- snapshots for many workspaces (steersync fleet) ------------------------------------
+
+
+class CentralSnapshot(NamedTuple):
+    """One refreshed view of a central repository, shared by every workspace using it."""
+
+    url: str
+    cache_dir: Path
+    commit: str
+    offline: bool
+    age_seconds: float  # since the cache last talked to the remote
+    branches: tuple[str, ...]  # proposal branches (template prefix up to {project})
+
+
+class CollectionView(NamedTuple):
+    """One collection seen from both sides, with the hashes of the last sync."""
+
+    name: str
+    local: Snapshot
+    central: Snapshot
+    last_sync: Mapping[str, str]
+    pull: ChangePlan  # exactly what `pull` would do (same plan_changes call)
+
+
+class WorkspaceView(NamedTuple):
+    project: str
+    collections: tuple[CollectionView, ...]
+    digest: str  # content hash that a push would put in the proposal branch name
+
+
+@contextlib.contextmanager
+def central_lock(config: Config, env: Mapping[str, str], url: str) -> Generator[None]:
+    """Hold the cache clone of ``url`` for a refresh and every read that follows it."""
+    cache_dir = paths.cache_repo_dir(config, env, url)
+    paths.cache_root(config, env).mkdir(parents=True, exist_ok=True, mode=0o700)
+    with exclusive_lock(
+        cache_dir.with_name(cache_dir.name + ".lock"), timeout=config.sync.lock_timeout_seconds
+    ):
+        yield
+
+
+def _cache_age(cache_dir: Path) -> float:
+    for marker in (cache_dir / ".git" / "FETCH_HEAD", cache_dir / ".git" / "HEAD"):
+        if marker.exists():
+            return max(0.0, time.time() - marker.stat().st_mtime)
+    return float("inf")
+
+
+def cache_is_fresh(
+    config: Config, env: Mapping[str, str], url: str, max_age_seconds: float
+) -> bool:
+    """A cache clone exists and talked to the remote less than ``max_age_seconds`` ago."""
+    cache_dir = paths.cache_repo_dir(config, env, url)
+    return (cache_dir / ".git").is_dir() and _cache_age(cache_dir) <= max_age_seconds
+
+
+def refresh_central(
+    config: Config,
+    env: Mapping[str, str],
+    url: str,
+    *,
+    refresh: bool = True,
+    on_retry: Callable[[RetryEvent], None] | None = None,
+) -> CentralSnapshot:
+    """Refresh (unless ``refresh`` is off and a cache exists) and list proposal branches.
+
+    The caller holds :func:`central_lock`. An unreachable remote falls back to the cached
+    copy when ``sync.offline_fallback`` allows it, and the snapshot says so.
+    """
+    cache_dir = paths.cache_repo_dir(config, env, url)
+    git_env = _cache_git_env(config, env)
+    if refresh or not (cache_dir / ".git").is_dir():
+        cache_dir, commit, offline = _refresh_cache(config, env, url, allow_offline=True)
+    else:
+        commit, offline = gitops.head_commit(config, cache_dir, env=git_env), False
+    branches: tuple[str, ...] = ()
+    if not offline:
+        head = config.branch.template.split("{project}", 1)[0]
+        try:
+            branches = tuple(
+                gitops.list_remote_branches(
+                    config, url, f"{head}*", env=gitops.git_environment(env), on_retry=on_retry
+                )
+            )
+        except GitError as exc:
+            log.warning("could not list proposal branches on %s: %s", gitops.redact_url(url), exc)
+    return CentralSnapshot(url, cache_dir, commit, offline, _cache_age(cache_dir), branches)
+
+
+def _views(
+    config: Config,
+    selected: Mapping[str, CollectionConfig],
+    base: Path,
+    target_for: Callable[[CollectionConfig], Path | None],
+    lock: Mapping[str, Mapping[str, str]],
+) -> tuple[CollectionView, ...]:
+    views: list[CollectionView] = []
+    for name, collection in selected.items():
+        target = target_for(collection)
+        if target is None:
+            continue
+        spec = _spec(collection)
+        local = snapshot_directory(target, spec)
+        central = _central_snapshot(config, paths.central_collection_dir(base, collection), spec)
+        previous = lock.get(name, {})
+        pull = plan_changes(central, local, previous, prune=config.sync.prune)
+        views.append(CollectionView(name, local, central, previous, pull))
+    return tuple(views)
+
+
+def compare_workspace(
+    config: Config,
+    snapshot: CentralSnapshot,
+    workspace_root: Path,
+    env: Mapping[str, str],
+    *,
+    project: str,
+) -> WorkspaceView:
+    """Local I/O only: the workspace's collections against an already refreshed cache."""
+    selected = config.enabled_collections()
+    lock = lock_collections(read_lock(workspace_lock(config, workspace_root, env)))
+    views = _views(
+        config,
+        selected,
+        _project_dir(config, snapshot.cache_dir, project),
+        lambda c: paths.workspace_collection_dir(c, workspace_root),
+        lock,
+    )
+    combined: Snapshot = {}
+    for view in views:
+        combined.update(_prefixed(selected[view.name], view.local))
+    return WorkspaceView(project, views, snapshot_digest(combined))
+
+
+def compare_global(
+    config: Config, snapshot: CentralSnapshot, env: Mapping[str, str]
+) -> WorkspaceView:
+    """The ``~/.kiro`` collections against the ``global/`` directory of the cache."""
+    selected = config.enabled_collections()
+    lock = lock_collections(read_lock(paths.global_lock_path(config, env)))
+    views = _views(
+        config,
+        selected,
+        paths.ensure_within(snapshot.cache_dir, Path(config.remote.global_dir)),
+        lambda c: paths.global_collection_dir(c, env),
+        lock,
+    )
+    combined: Snapshot = {}
+    for view in views:
+        combined.update(_prefixed(selected[view.name], view.local))
+    return WorkspaceView("global", views, snapshot_digest(combined))
+
+
+def central_url(config: Config) -> str:
+    """The validated central repository URL of ``config``."""
+    return _central_url(config)

@@ -212,3 +212,10 @@ def test_serve_drops_placeholders_before_starting(monkeypatch: pytest.MonkeyPatc
     import os
 
     assert "STEERSYNC_REMOTE" not in os.environ
+
+
+def test_fleet_status_tool(in_project: Path) -> None:
+    assert structured(call("pull_kiro_config"))["commit"]
+    document = structured(call("fleet_status"))
+    assert any(r["path"] == str(in_project.resolve()) for r in document["repositories"])
+    assert document["remotes"][0]["offline"] is False

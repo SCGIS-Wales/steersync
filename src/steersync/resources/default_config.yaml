@@ -61,9 +61,17 @@ gitlab:
   squash: false
   labels: [kiro-config]
   timeout_seconds: 30
+  # Transient API failures (these statuses, timeouts, resets) are retried with exponential
+  # backoff and jitter; 429 honours Retry-After, 500 is retried for reads only, 401 and 403
+  # never. Creating a merge request is never repeated blindly.
+  retries: 3
+  retry_statuses: [429, 502, 503, 504]
+  retry_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 30.0
+  # GitLab can answer 404 for a branch or merge request just after a push: retry reads twice.
+  retry_not_found: true
 
 paths:
-  workspace_lock: .kiro/steersync.lock.json
   # Resolved against KIRO_HOME when set, else ~/.kiro
   global_lock: steersync.lock.json
   cache_dir: ~/.cache/steersync
@@ -191,6 +199,19 @@ collections:
 # workspace permissions per user so a cloned repository cannot inject rules),
 # ~/.kiro/powers/**, ~/.kiro/memories/**, ~/.kiro/sessions/**, ~/.kiro/crew/**,
 # ~/.kiro/settings/cli.json, managed-settings.json and knowledge base indexes.
+
+# `steersync fleet`: every repository steersync has seen on this machine. The registry
+# and backups live in $XDG_STATE_HOME/steersync (~/.local/state/steersync).
+fleet:
+  # How deep `steersync fleet scan` looks below each root for git repositories.
+  scan_max_depth: 4
+  # Parallel status workers; 0 picks min(8, number of CPUs).
+  max_workers: 0
+  # A central cache younger than this is shown without refreshing it first.
+  refresh_max_age_seconds: 300
+  # Backups taken before a forced pull: kept this many days, and at most this many bytes.
+  backup_keep_days: 14
+  backup_max_bytes: 536870912
 
 sync:
   # Delete locally managed files that disappeared from the central repository.

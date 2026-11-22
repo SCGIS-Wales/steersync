@@ -36,6 +36,11 @@ gitlab:
   target_branch: ""             # defaults to remote.default_branch
   auto_merge_request: true
   labels: [kiro-config]
+  retries: 3                    # 429, 502, 503, 504 and a transient 404 are retried
+  retry_statuses: [429, 502, 503, 504]
+  retry_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 30.0
+  retry_not_found: true         # GitLab answers 404 briefly after a branch is pushed
 
 # Collections are merged over the packaged defaults (steering, specs, skills, agents,
 # hooks, settings); list only what differs. See `steersync config default` for every key.
@@ -49,6 +54,13 @@ collections:
     include: ["**/*.md"]
     lint: markdown
     git_exclude: false
+
+fleet:                          # steersync fleet: every repository on the machine
+  scan_max_depth: 4
+  max_workers: 0                # 0 picks min(8, number of CPUs)
+  refresh_max_age_seconds: 300
+  backup_keep_days: 14          # backups taken before a forced pull
+  backup_max_bytes: 536870912
 
 sync:
   prune: true
