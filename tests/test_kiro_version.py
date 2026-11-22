@@ -42,6 +42,7 @@ def test_v3_cli_needs_no_reminder(tmp_path: Path) -> None:
             "--version": (0, "kiro-cli 3.5.0"),
             "settings -f json chat.agentEngine": (0, '"v3"'),
             "settings -f json chat.enableAutoAgentUpgrade": (0, "true"),
+            "settings -f json chat.enableWorkflows": (0, "true"),
         }
     )
     status = detect_harness({"HOME": str(tmp_path)}, run=run, which=which_found)
@@ -49,6 +50,7 @@ def test_v3_cli_needs_no_reminder(tmp_path: Path) -> None:
     assert status.engine == "v3"
     assert status.engine_source == "kiro-cli"
     assert status.auto_upgrade is True
+    assert status.workflows_enabled is True
     assert status.on_v3
     assert not status.needs_reminder
     assert status.to_dict()["message"] is None
@@ -192,3 +194,17 @@ def test_mcp_tool(project: Path, config_file: Path, monkeypatch: pytest.MonkeyPa
     assert status.v2_agents[0].endswith("old.json")
     monkeypatch.setenv("STEERSYNC_CONFIG", str(project / "missing.yaml"))
     assert mcp_tools.v3_status().v2_agents == []
+
+
+def test_harness_lines_mention_disabled_workflows(tmp_path: Path) -> None:
+    from steersync.cli import _harness_lines
+
+    run = fake_runner({"--version": (0, "kiro-cli 3.5.0")})
+    status = detect_harness({"HOME": str(tmp_path)}, run=run, which=which_found)
+    assert status.workflows_enabled is None
+    assert any("chat.enableWorkflows true" in line for line in _harness_lines(status))
+    on = fake_runner(
+        {"--version": (0, "kiro-cli 3.5.0"), "settings -f json chat.enableWorkflows": (0, "true")}
+    )
+    enabled = detect_harness({"HOME": str(tmp_path)}, run=on, which=which_found)
+    assert not any("workflows" in line for line in _harness_lines(enabled))

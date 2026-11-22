@@ -151,6 +151,9 @@ class HarnessReport(_Report):
     engine_source: Literal["kiro-cli", "settings-file", "default", "unknown"]
     auto_upgrade: bool | None
     acp_engine: str | None = Field(description="acp.agentEngine for `kiro-cli acp`, or null")
+    workflows_enabled: bool | None = Field(
+        description="chat.enableWorkflows; synced workflow recipes load only when true"
+    )
     v2_agents: list[str] = Field(description="Agent files Kiro would rewrite on load")
     reasons: list[str]
     on_v3: bool

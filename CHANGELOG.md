@@ -5,6 +5,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Kiro `SessionStart` hook now runs steersync through `uvx --python ">=3.14"` pinned to
+  the installed version, instead of whatever `steersync` comes first on `PATH`. An end to
+  end test found a stale 0.3.0 install there that rejected `--quiet`, so the session pull
+  silently never ran. Run `steersync init` again to update the hook.
+
+### Added
+
+- `steersync doctor`, `steersync v3-status` and the `kiro_v3_status` MCP tool report
+  `chat.enableWorkflows`: synced workflow recipes load only when it is on.
+- `[tool.uv] required-version = ">=0.13"`.
+
 ## [0.5.2] - 2026-11-22
 
 ### Fixed

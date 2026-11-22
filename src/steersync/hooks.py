@@ -10,6 +10,15 @@ from steersync import __version__, gitops
 from steersync.config import Config
 
 HOOK_MARKER = "# managed by steersync"
+# steersync needs Python 3.14. uvx resolves a tool with its default interpreter, which may
+# be older (the server then exits before Kiro connects), so the constraint is explicit.
+MIN_PYTHON = ">=3.14"
+# The Kiro SessionStart hook runs a pinned steersync through uvx rather than whatever
+# `steersync` comes first on PATH, which may be a stale install with other options.
+SESSION_PULL_COMMAND = (
+    f'uvx --quiet --python "{MIN_PYTHON}" --from "steersync=={__version__}" '
+    "steersync pull --quiet --best-effort"
+)
 CHAINED_SUFFIX = ".local"
 
 PRE_PUSH_TEMPLATE = """#!/bin/sh
@@ -84,7 +93,7 @@ def install_pre_push_hook(
 def render_kiro_hook(
     engine: Literal["v2", "v3"],
     *,
-    command: str = "steersync pull --quiet --best-effort",
+    command: str = SESSION_PULL_COMMAND,
     timeout: int = 30,
 ) -> str:
     """Render the Kiro hook definition that pulls steering when a session starts."""
@@ -112,9 +121,6 @@ MCP_SERVER_NAME = "steersync"
 KIRO_HOOK_FILE = "steersync.json"
 # Name of the environment variable (not a secret) that carries the GitLab token.
 DEFAULT_TOKEN_ENV = "GITLAB_TOKEN"  # noqa: S105
-# steersync needs Python 3.14. uvx resolves a tool with its default interpreter, which may
-# be older (the server then exits before Kiro connects), so the constraint is explicit.
-MIN_PYTHON = ">=3.14"
 # uvx needs the mcp extra; pinning the version keeps every machine on the same server.
 DEFAULT_MCP_ARGS: tuple[str, ...] = (
     "--python",
@@ -224,7 +230,7 @@ def merge_mcp_config(
 
 
 def write_kiro_hook(
-    hooks_dir: Path, *, command: str = "steersync pull --quiet --best-effort", timeout: int = 30
+    hooks_dir: Path, *, command: str = SESSION_PULL_COMMAND, timeout: int = 30
 ) -> Literal["written", "updated", "unchanged"]:
     """Write the V3 SessionStart hook file that refreshes the configuration."""
     target = hooks_dir / KIRO_HOOK_FILE
