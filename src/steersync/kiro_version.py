@@ -241,7 +241,11 @@ def _cli_reasons(status: HarnessStatus) -> list[str]:
 
 
 def reminder_text(status: HarnessStatus) -> str:
-    """The reminder shown by doctor, the SessionStart hook and the MCP tool."""
+    """The reminder shown by doctor, the SessionStart hook and the MCP tool.
+
+    Only the steps that apply are listed: a machine already on V3 with V2 format agent
+    files is told to upgrade the files, not to switch the engine it already runs.
+    """
     lines = [
         "Kiro CLI V3 is the default agent harness since Kiro CLI 3.0.0.",
         *(f"- {reason}" for reason in status.reasons),
@@ -249,10 +253,18 @@ def reminder_text(status: HarnessStatus) -> str:
     parsed = parse_version(status.cli_version or "")
     if parsed is not None and parsed < V3_MIN_VERSION:
         lines.append("Update kiro-cli to 3.x first.")
-    lines.append(
-        "Run `kiro-cli settings chat.agentEngine v3`, start `kiro-cli`, then run "
-        "`/upgrade-agent`. For a shared agent directory run `kiro-cli agent upgrade <dir>`."
-    )
+    if status.engine in {"v1", "v2"} or (parsed is not None and parsed < V3_MIN_VERSION):
+        lines.append(
+            "Run `kiro-cli settings chat.agentEngine v3`, start `kiro-cli`, then run "
+            "`/upgrade-agent`."
+        )
+    if status.v2_agents:
+        folders = sorted({str(Path(path).parent) for path in status.v2_agents})
+        lines.append(
+            "Upgrade the agent files to the universal format: "
+            + "; ".join(f"`kiro-cli agent upgrade {folder}`" for folder in folders)
+            + " (or `/upgrade-agent` inside kiro-cli)."
+        )
     if status.acp_engine in {"v1", "v2"}:
         lines.append("For editor integrations run `kiro-cli settings acp.agentEngine v3`.")
     lines.append(f"See {DOCS_URL}")

@@ -227,15 +227,18 @@ The Kiro files you had committed are still tracked by the project. Pick one mode
   on disk; Kiro keeps loading them, and every session refreshes them:
 
   ```bash
-  git ls-files .kiro              # check: only directories steersync syncs
-  git rm -r --cached .kiro/steering .kiro/agents .kiro/hooks   # the ones you had
+  git rm -r --cached --ignore-unmatch .kiro/steering .kiro/specs .kiro/skills \
+    .kiro/agents .kiro/hooks .kiro/settings .kiro/workflows .kiro/prompts
   git add .kiro/steersync.yaml
   git commit -m "Kiro configuration comes from the central repository (steersync)"
+  git ls-files .kiro              # only .kiro/steersync.yaml is left
   ```
 
-  Only untrack directories whose files steersync syncs (see
-  [Collections](#collections)); `AGENTS.md` and `.kiroignore` are synced and also stay
-  committed, because other tools read them.
+  `steersync init` prints this command, limited to the directories that hold tracked files.
+  Keep `--ignore-unmatch`: without it `git rm` refuses the whole command when one directory
+  has nothing tracked, and nothing is untracked. Untrack them only after the merge request
+  from step 6 is merged, or teammates who pull in between lose the files. `AGENTS.md` and
+  `.kiroignore` are synced and also stay committed, because other tools read them.
 - **Keep committing the files in the project too.** Run `steersync init --hook
   --no-exclude` instead of step 5, and commit what a pull changes like any other change.
 
@@ -272,6 +275,16 @@ sessions are never synced.
 
 If something looks wrong, `steersync doctor` shows the configuration, the remote, the
 project slug, every directory and the Kiro CLI harness.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `the central repository ... has no branch 'main'` | The GitLab project has no commit yet. Create it with a README, or set `remote.default_branch`. |
+| git operations time out, `ssh: connect to host gitlab.com port 22` | The network blocks SSH on port 22. GitLab.com also serves SSH on port 443: set `url: ssh://git@altssh.gitlab.com:443/<group>/<project>.git` and add `altssh.gitlab.com` to `allowed_hosts` (accept its host key once with `ssh -T -p 443 git@altssh.gitlab.com`; it is the same key as `gitlab.com`). HTTPS with a credential helper works too. |
+| `remote host ... is not in remote.allowed_hosts` | Add the host of `remote.url` to `allowed_hosts`. |
+| The first pull reports a file as locally modified | Your copy differs from the merged one, for example a file still tracked by the project in an older version. Compare, then `steersync pull --force` to take the central copy or `steersync push` to propose yours. |
+| `push` stops with lint errors | The errors name each file and rule; fix them (`steersync migrate-hooks --write`, `kiro-cli agent upgrade .kiro/agents`) or see [Validation](#validation). |
 
 ## Starting Kiro in any repository
 

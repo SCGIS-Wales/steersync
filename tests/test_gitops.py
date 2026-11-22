@@ -131,7 +131,7 @@ def test_run_git_timeout(
     def boom(*args: object, **kwargs: object) -> None:
         raise subprocess.TimeoutExpired(cmd="git", timeout=1)
 
-    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(gitops, "_execute", boom)
     with pytest.raises(GitError, match="timed out"):
         gitops.run_git(config, ["status"], cwd=tmp_path, env=env)
 

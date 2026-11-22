@@ -85,7 +85,7 @@ def test_v2_engine_old_cli_and_v2_agents(tmp_path: Path) -> None:
     assert "predates 3.0.0" in text
     assert "kiro-cli settings chat.agentEngine v3" in text
     assert "/upgrade-agent" in text
-    assert "kiro-cli agent upgrade <dir>" in text
+    assert f"kiro-cli agent upgrade {agents}" in text
     assert "automatic agent upgrade is off" in text
     assert "Update kiro-cli" in text
 
@@ -208,3 +208,18 @@ def test_harness_lines_mention_disabled_workflows(tmp_path: Path) -> None:
     )
     enabled = detect_harness({"HOME": str(tmp_path)}, run=on, which=which_found)
     assert not any("workflows" in line for line in _harness_lines(enabled))
+
+
+def test_reminder_lists_only_the_steps_that_apply(tmp_path: Path) -> None:
+    agents = tmp_path / "ws" / ".kiro" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "old.json").write_text(json.dumps({"name": "old", "allowedTools": ["read"]}))
+    on_v3 = fake_runner(
+        {"--version": (0, "kiro-cli 3.5.0"), "settings -f json chat.agentEngine": (0, '"v3"')}
+    )
+    status = detect_harness(
+        {"HOME": str(tmp_path)}, agent_dirs=[agents], run=on_v3, which=which_found
+    )
+    text = kiro_version.reminder_text(status)
+    assert "chat.agentEngine v3" not in text
+    assert f"kiro-cli agent upgrade {agents}" in text
