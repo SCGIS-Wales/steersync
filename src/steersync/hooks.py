@@ -252,3 +252,145 @@ def render_pre_commit_config(rev: str = "v0.5.8") -> str:
         "    hooks:\n"
         "      - id: steersync-push\n"
     )
+
+
+# --- careful registration in a user's existing mcp.json ---------------------------------
+
+
+class McpRegistration(NamedTuple):
+    action: Literal["added", "present", "would-add"]
+    path: Path
+    # Name of the server entry that runs steersync (an existing one when "present").
+    name: str
+    backup: Path | None = None
+
+
+def _runs_steersync(spec: object) -> bool:
+    """True when an mcp.json server entry starts the steersync MCP server."""
+    if not isinstance(spec, Mapping):
+        return False
+    command = spec.get("command")
+    args = spec.get("args")
+    words = [command] if isinstance(command, str) else []
+    if isinstance(args, list):
+        words.extend(a for a in args if isinstance(a, str))
+    names = {Path(w).name for w in words}
+    if names & {"steersync-mcp"}:
+        return True
+    mentions = any(
+        w == "steersync"
+        or w.startswith(("steersync[", "steersync=", "steersync@"))
+        or Path(w).name == "steersync"
+        for w in words
+    )
+    return mentions and "mcp" in words
+
+
+def find_steersync_server(path: Path) -> str | None:
+    """Name of the server in ``path`` that runs steersync, if any (by name or by command)."""
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except OSError, ValueError:
+        return None
+    servers = data.get("mcpServers") if isinstance(data, Mapping) else None
+    if not isinstance(servers, Mapping):
+        return None
+    if MCP_SERVER_NAME in servers:
+        return MCP_SERVER_NAME
+    return next((name for name, spec in servers.items() if _runs_steersync(spec)), None)
+
+
+def register_mcp_server(
+    path: Path, entry: Mapping[str, object], *, dry_run: bool = False
+) -> McpRegistration:
+    """Add the steersync server to ``path`` only when no server there runs steersync yet.
+
+    Nothing else in the file changes: every other server keeps its exact content and its
+    order. The original is copied to ``<name>.bak-steersync`` first, the new file is written
+    to a temporary file and moved into place, and the result is read back and compared with
+    the original before the backup is kept. An unreadable or unexpected file is never
+    touched; the error says what to fix.
+    """
+    original_text: str | None = None
+    data: dict[str, object] = {}
+    if path.exists():
+        try:
+            original_text = path.read_text("utf-8")
+            loaded = json.loads(original_text) if original_text.strip() else {}
+        except (OSError, ValueError) as exc:
+            msg = f"{path} is not valid JSON ({exc}); fix it, then run setup again"
+            raise ValueError(msg) from exc
+        if not isinstance(loaded, dict):
+            msg = f"{path} is not a JSON object; left unchanged"
+            raise ValueError(msg)
+        data = loaded
+    servers = data.get("mcpServers", {})
+    if not isinstance(servers, dict):
+        msg = f'{path}: "mcpServers" is not an object; left unchanged'
+        raise ValueError(msg)  # noqa: TRY004 - callers report ValueError as a file problem
+    existing = find_steersync_server(path) if original_text is not None else None
+    if existing is not None:
+        return McpRegistration("present", path, existing)
+    name = MCP_SERVER_NAME
+    if dry_run:
+        return McpRegistration("would-add", path, name)
+    updated = dict(data)
+    updated["mcpServers"] = {**servers, name: dict(entry)}
+    text = json.dumps(updated, indent=2, ensure_ascii=False) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup: Path | None = None
+    if original_text is not None:
+        backup = path.with_name(path.name + ".bak-steersync")
+        backup.write_text(original_text, encoding="utf-8")
+    tmp = path.with_name(f".{path.name}.steersync-tmp")
+    tmp.write_text(text, encoding="utf-8")
+    if path.exists():
+        tmp.chmod(path.stat().st_mode & 0o777)
+    tmp.replace(path)
+    check = json.loads(path.read_text("utf-8"))
+    others_intact = {k: v for k, v in check["mcpServers"].items() if k != name} == servers
+    rest_intact = {k: v for k, v in check.items() if k != "mcpServers"} == {
+        k: v for k, v in data.items() if k != "mcpServers"
+    }
+    if not (others_intact and rest_intact and check["mcpServers"][name] == dict(entry)):
+        if original_text is not None:
+            path.write_text(original_text, encoding="utf-8")
+        msg = f"{path}: verification after writing failed; the original was restored"
+        raise ValueError(msg)
+    return McpRegistration("added", path, name, backup)
+
+
+def setup_mcp_entry(*, token_env: str = DEFAULT_TOKEN_ENV) -> dict[str, object]:
+    """The entry ``steersync setup`` adds to ``~/.kiro/settings/mcp.json``.
+
+    The central repository comes from the steersync configuration file, so unlike the
+    per project entry it does not forward STEERSYNC_REMOTE.
+    """
+    entry = mcp_server_entry(token_env=token_env)
+    env = dict(entry["env"])  # type: ignore[call-overload]
+    env.pop("STEERSYNC_REMOTE", None)
+    return {**entry, "env": env}
+
+
+def session_hook_present(hooks_dir: Path) -> bool:
+    """True when some hook file in ``hooks_dir`` already runs ``steersync pull`` at start."""
+    if not hooks_dir.is_dir():
+        return False
+    for file in sorted(hooks_dir.glob("*.json")):
+        try:
+            data = json.loads(file.read_text("utf-8"))
+        except OSError, ValueError:
+            continue
+        hooks = data.get("hooks") if isinstance(data, Mapping) else None
+        for hook in hooks if isinstance(hooks, list) else []:
+            action = hook.get("action") if isinstance(hook, Mapping) else None
+            command = action.get("command") if isinstance(action, Mapping) else None
+            if (
+                hook.get("trigger") == "SessionStart"
+                and isinstance(command, str)
+                and ("steersync pull" in command)
+            ):
+                return True
+    return False

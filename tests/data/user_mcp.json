@@ -1,0 +1,121 @@
+{
+  "mcpServers": {
+    "certs": {
+      "command": "certs-mcp",
+      "type": "stdio",
+      "disabled": false
+    },
+    "helm": {
+      "command": "helm-mcp",
+      "args": [
+        "--mode",
+        "stdio",
+        "-debug"
+      ],
+      "type": "stdio",
+      "disabled": false
+    },
+    "eks": {
+      "command": "uvx",
+      "args": [
+        "example.eks-mcp-server@latest",
+        "--allow-write"
+      ],
+      "env": {
+        "AWS_PROFILE": "${AWS_PROFILE}",
+        "AWS_REGION": "${AWS_REGION}",
+        "AWS_CA_BUNDLE": "${AWS_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}",
+        "SSL_CERT_FILE": "${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}",
+        "FASTMCP_LOG_LEVEL": "WARNING"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "list_k8s_resources",
+        "get_pod_logs",
+        "get_k8s_events"
+      ]
+    },
+    "gitlab": {
+      "command": "uvx",
+      "args": [
+        "example-gitlab-mcp@latest"
+      ],
+      "env": {
+        "REQUESTS_CA_BUNDLE": "${REQUESTS_CA_BUNDLE}",
+        "GITLAB_TOKEN": "${GITLAB_TOKEN}"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "search_repositories",
+        "create_merge_request"
+      ]
+    },
+    "wiki": {
+      "command": "uvx",
+      "args": [
+        "example-wiki-mcp@latest"
+      ],
+      "env": {
+        "WIKI_TOKEN": "${WIKI_TOKEN}"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "wiki_search"
+      ]
+    },
+    "directory": {
+      "mcpServers": {
+        "directory-mcp": {
+          "command": "uvx",
+          "args": [
+            "example-directory-mcp@latest"
+          ]
+        }
+      },
+      "disabled": true
+    },
+    "codescope": {
+      "command": "codescope",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "CODESCOPE_LOG": "warning"
+      },
+      "timeout": 120000
+    },
+    "scanner": {
+      "command": "/home/dev/.local/bin/scanner-mcp",
+      "args": [],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [
+        "get_job_status",
+        "doctor"
+      ]
+    },
+    "quality": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--init",
+        "-i",
+        "--rm",
+        "-v",
+        "/usr/local/share/ca-certificates/:/usr/local/share/ca-certificates/:ro",
+        "-e",
+        "QUALITY_TOKEN",
+        "registry.example.com/quality/quality-mcp@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "env": {
+        "QUALITY_TOKEN": "${QUALITY_TOKEN}",
+        "QUALITY_READ_ONLY": "true"
+      },
+      "timeout": 120000,
+      "disabled": false,
+      "autoApprove": [
+        "list_quality_gates"
+      ]
+    }
+  }
+}
