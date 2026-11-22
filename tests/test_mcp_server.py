@@ -176,3 +176,39 @@ def test_tool_logic_without_the_protocol(in_project: Path) -> None:
     report = mcp_tools.pull(dry_run=True)
     assert report.dry_run
     assert report.scopes["workspace"]["steering"].written == []
+
+
+def test_unexpanded_placeholders_are_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kiro passes ${VAR} through literally when the variable is unset or not approved."""
+    environ = {
+        "STEERSYNC_REMOTE": "${STEERSYNC_REMOTE}",
+        "GITLAB_TOKEN": " ${GITLAB_TOKEN} ",
+        "HTTPS_PROXY": "http://proxy:3128",
+        "NOTE": "costs ${AMOUNT} today",
+        "PATH": "/usr/bin",
+    }
+    assert sorted(mcp_server.drop_unexpanded_placeholders(environ)) == [
+        "GITLAB_TOKEN",
+        "STEERSYNC_REMOTE",
+    ]
+    assert environ == {
+        "HTTPS_PROXY": "http://proxy:3128",
+        "NOTE": "costs ${AMOUNT} today",
+        "PATH": "/usr/bin",
+    }
+
+
+def test_serve_drops_placeholders_before_starting(monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[str] = []
+
+    class Fake:
+        def run(self, transport: str) -> None:
+            started.append(transport)
+
+    monkeypatch.setenv("STEERSYNC_REMOTE", "${STEERSYNC_REMOTE}")
+    monkeypatch.setattr(mcp_server, "build_server", Fake)
+    mcp_server.serve()
+    assert started == ["stdio"]
+    import os
+
+    assert "STEERSYNC_REMOTE" not in os.environ
