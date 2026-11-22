@@ -215,15 +215,27 @@ def enforce_limits(snapshot: Mapping[str, bytes], *, max_files: int, max_total_b
         raise LimitExceededError(msg)
 
 
+def comparable(data: bytes) -> bytes:
+    """Content as compared and hashed: text with CRLF line endings normalised to LF.
+
+    A checkout with ``core.autocrlf`` or a Windows editor must not look like a change.
+    Binary content (any NUL byte) is left exactly as it is; files on disk are never
+    rewritten, only their hash is computed this way.
+    """
+    if b"\0" in data or b"\r\n" not in data:
+        return data
+    return data.replace(b"\r\n", b"\n")
+
+
 def file_digest(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(comparable(data)).hexdigest()
 
 
 def snapshot_digest(snapshot: Mapping[str, bytes]) -> str:
     """Return a stable digest for an entire snapshot (paths and content)."""
     hasher = hashlib.sha256()
     for relative in sorted(snapshot):
-        data = snapshot[relative]
+        data = comparable(snapshot[relative])
         hasher.update(relative.encode("utf-8"))
         hasher.update(b"\0")
         hasher.update(str(len(data)).encode("ascii"))
@@ -444,6 +456,17 @@ def _set_aside(path: Path) -> Path | None:
     except OSError:
         return None
     return target
+
+
+def lock_problem(path: Path) -> str | None:
+    """Why the record at ``path`` would be set aside, without touching it (None: fine)."""
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return f"unreadable: {exc}"
+    return None if _valid_lock(data) else "fails validation (wrong types or schema version)"
 
 
 def read_lock(path: Path) -> dict[str, Any]:

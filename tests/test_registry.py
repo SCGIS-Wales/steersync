@@ -169,7 +169,9 @@ def test_fleet_cli_commands(
     assert scanned.exit_code == 0
     assert str(project.resolve()) in scanned.output
     assert "1 repository found and registered" in scanned.output
-    assert str(project.resolve()) in runner.invoke(main, ["fleet"]).output
+    status = json.loads(runner.invoke(main, ["fleet", "status", "--json"]).stdout)
+    assert str(project.resolve()) in [r["path"] for r in status["repositories"]]
+    assert "Repository" in runner.invoke(main, ["fleet"]).output  # no terminal: the table
 
 
 def test_workspace_commands_register_themselves(

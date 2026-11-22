@@ -5,10 +5,12 @@ settings or anything configured): a pull applies each collection of each scope,
 a push proposes all selected collections of one scope in a single branch.
 """
 
+import contextlib
 import functools
 import logging
 import os
-from collections.abc import Callable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple, ParamSpec, TypeVar, cast
 from urllib.parse import urlsplit
@@ -18,6 +20,7 @@ from steersync.config import CollectionConfig, Config, remote_host, validate_rem
 from steersync.errors import ConfigError, GitError, GitLabError, LintError, SyncConflictError
 from steersync.lint import LintReport, lint_snapshot, merge_reports, prefix_report
 from steersync.locking import exclusive_lock
+from steersync.retry import RetryEvent
 from steersync.steering import (
     ChangePlan,
     FileSpec,
@@ -963,3 +966,161 @@ def status(
 def raise_on_conflicts(result: PullResult) -> None:
     if result.conflicts:
         raise SyncConflictError("locally modified files kept: " + ", ".join(result.conflicts))
+
+
+# --- snapshots for many workspaces (steersync fleet) ------------------------------------
+
+
+class CentralSnapshot(NamedTuple):
+    """One refreshed view of a central repository, shared by every workspace using it."""
+
+    url: str
+    cache_dir: Path
+    commit: str
+    offline: bool
+    age_seconds: float  # since the cache last talked to the remote
+    branches: tuple[str, ...]  # proposal branches (template prefix up to {project})
+
+
+class CollectionView(NamedTuple):
+    """One collection seen from both sides, with the hashes of the last sync."""
+
+    name: str
+    local: Snapshot
+    central: Snapshot
+    last_sync: Mapping[str, str]
+    pull: ChangePlan  # exactly what `pull` would do (same plan_changes call)
+
+
+class WorkspaceView(NamedTuple):
+    project: str
+    collections: tuple[CollectionView, ...]
+    digest: str  # content hash that a push would put in the proposal branch name
+
+
+@contextlib.contextmanager
+def central_lock(config: Config, env: Mapping[str, str], url: str) -> Iterator[None]:
+    """Hold the cache clone of ``url`` for a refresh and every read that follows it."""
+    cache_dir = paths.cache_repo_dir(config, env, url)
+    paths.cache_root(config, env).mkdir(parents=True, exist_ok=True, mode=0o700)
+    with exclusive_lock(
+        cache_dir.with_name(cache_dir.name + ".lock"), timeout=config.sync.lock_timeout_seconds
+    ):
+        yield
+
+
+def _cache_age(cache_dir: Path) -> float:
+    for marker in (cache_dir / ".git" / "FETCH_HEAD", cache_dir / ".git" / "HEAD"):
+        if marker.exists():
+            return max(0.0, time.time() - marker.stat().st_mtime)
+    return float("inf")
+
+
+def cache_is_fresh(
+    config: Config, env: Mapping[str, str], url: str, max_age_seconds: float
+) -> bool:
+    """A cache clone exists and talked to the remote less than ``max_age_seconds`` ago."""
+    cache_dir = paths.cache_repo_dir(config, env, url)
+    return (cache_dir / ".git").is_dir() and _cache_age(cache_dir) <= max_age_seconds
+
+
+def refresh_central(
+    config: Config,
+    env: Mapping[str, str],
+    url: str,
+    *,
+    refresh: bool = True,
+    on_retry: Callable[[RetryEvent], None] | None = None,
+) -> CentralSnapshot:
+    """Refresh (unless ``refresh`` is off and a cache exists) and list proposal branches.
+
+    The caller holds :func:`central_lock`. An unreachable remote falls back to the cached
+    copy when ``sync.offline_fallback`` allows it, and the snapshot says so.
+    """
+    cache_dir = paths.cache_repo_dir(config, env, url)
+    git_env = _cache_git_env(config, env)
+    if refresh or not (cache_dir / ".git").is_dir():
+        cache_dir, commit, offline = _refresh_cache(config, env, url, allow_offline=True)
+    else:
+        commit, offline = gitops.head_commit(config, cache_dir, env=git_env), False
+    branches: tuple[str, ...] = ()
+    if not offline:
+        head = config.branch.template.split("{project}", 1)[0]
+        try:
+            branches = tuple(
+                gitops.list_remote_branches(
+                    config, url, f"{head}*", env=gitops.git_environment(env), on_retry=on_retry
+                )
+            )
+        except GitError as exc:
+            log.warning("could not list proposal branches on %s: %s", gitops.redact_url(url), exc)
+    return CentralSnapshot(url, cache_dir, commit, offline, _cache_age(cache_dir), branches)
+
+
+def _views(
+    config: Config,
+    selected: Mapping[str, CollectionConfig],
+    base: Path,
+    target_for: Callable[[CollectionConfig], Path | None],
+    lock: Mapping[str, Mapping[str, str]],
+) -> tuple[CollectionView, ...]:
+    views: list[CollectionView] = []
+    for name, collection in selected.items():
+        target = target_for(collection)
+        if target is None:
+            continue
+        spec = _spec(collection)
+        local = snapshot_directory(target, spec)
+        central = _central_snapshot(config, paths.central_collection_dir(base, collection), spec)
+        previous = lock.get(name, {})
+        pull = plan_changes(central, local, previous, prune=config.sync.prune)
+        views.append(CollectionView(name, local, central, previous, pull))
+    return tuple(views)
+
+
+def compare_workspace(
+    config: Config,
+    snapshot: CentralSnapshot,
+    workspace_root: Path,
+    env: Mapping[str, str],
+    *,
+    project: str,
+) -> WorkspaceView:
+    """Local I/O only: the workspace's collections against an already refreshed cache."""
+    selected = config.enabled_collections()
+    lock = lock_collections(read_lock(workspace_lock(config, workspace_root, env)))
+    views = _views(
+        config,
+        selected,
+        _project_dir(config, snapshot.cache_dir, project),
+        lambda c: paths.workspace_collection_dir(c, workspace_root),
+        lock,
+    )
+    combined: Snapshot = {}
+    for view in views:
+        combined.update(_prefixed(selected[view.name], view.local))
+    return WorkspaceView(project, views, snapshot_digest(combined))
+
+
+def compare_global(
+    config: Config, snapshot: CentralSnapshot, env: Mapping[str, str]
+) -> WorkspaceView:
+    """The ``~/.kiro`` collections against the ``global/`` directory of the cache."""
+    selected = config.enabled_collections()
+    lock = lock_collections(read_lock(paths.global_lock_path(config, env)))
+    views = _views(
+        config,
+        selected,
+        paths.ensure_within(snapshot.cache_dir, Path(config.remote.global_dir)),
+        lambda c: paths.global_collection_dir(c, env),
+        lock,
+    )
+    combined: Snapshot = {}
+    for view in views:
+        combined.update(_prefixed(selected[view.name], view.local))
+    return WorkspaceView("global", views, snapshot_digest(combined))
+
+
+def central_url(config: Config) -> str:
+    """The validated central repository URL of ``config``."""
+    return _central_url(config)

@@ -10,7 +10,7 @@ server turns into an ``isError`` tool result the agent can read.
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -396,3 +396,19 @@ def _workspace_path(config: Config, name: str, default: str) -> str:
     if collection is None or collection.workspace_path is None:
         return default
     return collection.workspace_path
+
+
+class FleetStatusReport(_Report):
+    """``steersync fleet status --json``: every registered repository on this machine."""
+
+    remotes: list[dict[str, Any]]
+    repositories: list[dict[str, Any]]
+
+
+def fleet_status(refresh: bool | None = None) -> FleetStatusReport:
+    from steersync import fleet, registry  # noqa: PLC0415 - only for this tool
+    from steersync.paths import registry_path  # noqa: PLC0415
+
+    entries = registry.load(registry_path(os.environ)).paths()
+    document = fleet.collect(entries, os.environ, refresh=refresh).document()
+    return FleetStatusReport.model_validate(document)

@@ -7,15 +7,18 @@ needed, so other commands keep their start up time.
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import click
 
 from steersync import discovery, registry
+from steersync import fleet as fleet_core
 from steersync.cli_common import _bootstrap
 from steersync.config import load_config
 from steersync.errors import SteersyncError
 from steersync.paths import registry_path
+from steersync.retry import RetryEvent
 
 
 @click.group("fleet", invoke_without_command=True)
@@ -27,7 +30,12 @@ def fleet(ctx: click.Context) -> None:
     prints the status table.
     """
     if ctx.invoked_subcommand is None:
-        ctx.invoke(fleet_list)
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            from steersync.cli_fleet_actions import interactive  # noqa: PLC0415 - lazy UI
+
+            ctx.invoke(interactive)
+        else:
+            ctx.invoke(fleet_status)
 
 
 @fleet.command("list")
@@ -109,3 +117,81 @@ def fleet_scan(roots: tuple[Path, ...], max_depth: int | None, add: bool) -> Non
         + (" and registered" if add and found else ""),
         err=True,
     )
+
+
+STATES = (
+    "error",
+    "diverged",
+    "local-ahead",
+    "central-ahead",
+    "proposed",
+    "in-sync",
+    "unconfigured",
+    "missing",
+)
+EXIT_PARTIAL = 5
+
+
+def _report(refresh: bool | None, *, show_progress: bool) -> fleet_core.FleetReport:
+    env = os.environ
+    entries = registry.load(registry_path(env)).paths()
+
+    def progress(event: tuple[str, str, str]) -> None:
+        if show_progress:
+            subject, phase, message = event
+            click.echo(f"{subject}: {phase} {message}", err=True)
+
+    def retried(event: RetryEvent) -> None:
+        click.echo(f"  {event.render()}", err=True)
+
+    return fleet_core.collect(entries, env, refresh=refresh, on_event=progress, on_retry=retried)
+
+
+@fleet.command("status")
+@click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
+@click.option(
+    "--refresh/--no-refresh",
+    default=None,
+    help="Refresh the central repositories first (default: when older than "
+    "fleet.refresh_max_age_seconds).",
+)
+@click.option("--state", "states", multiple=True, type=click.Choice(STATES), help="Only these.")
+def fleet_status(as_json: bool, refresh: bool | None, states: tuple[str, ...]) -> None:
+    """Show what is pushed and what is not for every registered repository."""
+    report = _report(refresh, show_progress=not as_json)
+    if states:
+        report = report.model_copy(
+            update={"repositories": tuple(r for r in report.repositories if r.state in states)}
+        )
+    if as_json:
+        click.echo(json.dumps(report.document(), indent=2))
+    else:
+        from rich.console import Console  # noqa: PLC0415 - interface library, on demand
+
+        from steersync.fleet_ui import render  # noqa: PLC0415
+
+        render(report, Console(highlight=False), home=str(Path.home()))
+    if any(r.state == "error" for r in report.repositories):
+        sys.exit(EXIT_PARTIAL)
+
+
+@fleet.command("doctor")
+@click.option("--repair", is_flag=True, help="Apply the safe repairs (never touches work trees).")
+@click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
+def fleet_doctor(repair: bool, as_json: bool) -> None:
+    """Check the registry, cache clones, sync records, locks and backups."""
+    from steersync import fleet_doctor as doctor  # noqa: PLC0415
+
+    checks = doctor.run(os.environ, repair=repair)
+    if as_json:
+        click.echo(json.dumps([c._asdict() for c in checks], indent=2))
+    else:
+        for item in checks:
+            mark = "repaired" if item.repaired else "ok" if item.ok else "PROBLEM"
+            click.echo(f"{mark:<9} {item.check:<12} {item.subject}: {item.detail}")
+    if not all(item.ok for item in checks):
+        if not as_json:
+            click.echo(
+                "problems remain; `steersync fleet doctor --repair` fixes the safe ones", err=True
+            )
+        sys.exit(EXIT_PARTIAL)

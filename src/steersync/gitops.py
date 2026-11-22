@@ -447,7 +447,12 @@ def remote_branch_exists(
 
 
 def list_remote_branches(
-    config: Config, url: str, pattern: str, env: Mapping[str, str] | None = None
+    config: Config,
+    url: str,
+    pattern: str,
+    env: Mapping[str, str] | None = None,
+    *,
+    on_retry: Callable[[RetryEvent], None] | None = None,
 ) -> list[str]:
     """Return the remote branch names matching a glob such as ``kiro-config/acme/api/*``."""
     result = run_git(
@@ -455,6 +460,7 @@ def list_remote_branches(
         ["ls-remote", "--heads", "--", url, f"refs/heads/{pattern}"],
         env=env,
         retries=config.git.retries,
+        on_retry=on_retry,
     )
     names: list[str] = []
     for line in result.stdout.splitlines():

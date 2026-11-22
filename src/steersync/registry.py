@@ -63,6 +63,19 @@ def _lock(path: Path) -> Path:
     return path.with_name(path.name + ".lock")
 
 
+def problem(path: Path) -> str | None:
+    """Why the registry would be set aside, without touching it (None: fine)."""
+    if not path.is_file():
+        return None
+    try:
+        registry = Registry.model_validate(json.loads(path.read_text("utf-8")))
+    except (OSError, UnicodeDecodeError, ValueError, ValidationError) as exc:
+        return f"damaged: {type(exc).__name__}"
+    if registry.schema_version != SCHEMA_VERSION:
+        return f"unknown schema version {registry.schema_version}"
+    return None
+
+
 def load(path: Path) -> Registry:
     """Read the registry; a missing file is empty, a damaged one is set aside."""
     if not path.is_file():

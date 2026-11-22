@@ -35,6 +35,10 @@ dependencies = [
   "python-frontmatter>=1.1,<2",
   "PyYAML>=6.0.3,<7",
   "pymarkdownlnt>=0.9.40,<1",
+  # steersync fleet: tables and live progress (works with a preinstalled rich 15), and
+  # checkbox and select prompts.
+  "rich>=14.0,<16",
+  "questionary>=2.1,<3",
 ]
 
 [project.optional-dependencies]
@@ -144,6 +148,7 @@ testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "--strict-config"]
 xfail_strict = true
 filterwarnings = ["error"]
+markers = ["benchmark: timing bound for fleet status over many repositories (-m 'not benchmark' skips it)"]
 
 [tool.coverage.run]
 branch = true
