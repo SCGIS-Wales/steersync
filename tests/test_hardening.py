@@ -619,3 +619,34 @@ def test_cache_lock_is_released_when_the_holder_dies(tmp_path: Path) -> None:
             holder.kill()
         if holder.stdout is not None:
             holder.stdout.close()
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Connection to 172.65.251.78 port 22 timed out",
+        "ssh: connect to host gitlab.com port 22: No route to host",
+        "ssh: connect to host gitlab.com port 22: Network is unreachable",
+    ],
+)
+def test_ssh_connect_failures_are_transient(stderr: str) -> None:
+    advice = (
+        "\nfatal: Could not read from remote repository.\n\n"
+        "Please make sure you have the correct access rights\nand the repository exists.\n"
+    )
+    assert gitops.is_transient(stderr + advice)
+    assert gitops.failure_reason(stderr + advice) == stderr
+    assert gitops.without_advice(stderr + advice) == stderr
+
+
+def test_error_message_drops_git_advice(
+    config: Config, monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    stderr = (
+        "ERROR: Repository not found.\nfatal: Could not read from remote repository.\n\n"
+        "Please make sure you have the correct access rights\nand the repository exists.\n"
+    )
+    monkeypatch.setattr(gitops, "_execute", _FakeRun([(128, stderr)]))
+    with pytest.raises(GitError) as raised:
+        gitops.run_git(config, ["fetch"], retries=0)
+    assert str(raised.value) == "git fetch failed (128): ERROR: Repository not found."

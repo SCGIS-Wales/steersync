@@ -5,6 +5,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- An SSH connection that timed out in ssh's own `ConnectTimeout` ("Connection to ... port
+  22 timed out"), "No route to host" and "Network is unreachable" are now retried as
+  transient network errors instead of failing at once.
+- git error messages no longer end with git's generic "Could not read from remote
+  repository ... Please make sure you have the correct access rights" advice; the retry
+  line and the error show the actual cause.
+- `steersync fleet` commands print warnings in the steersync log format, and only warnings
+  and errors by default (`--log-level` still applies).
+
 ## [0.7.0] - 2026-11-22
 
 ### Added

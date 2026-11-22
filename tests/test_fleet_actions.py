@@ -245,3 +245,14 @@ def test_interactive_overview_flows(fleet_env: dict[str, Path]) -> None:
         (sorted([path["behind"], path["both"]]), {path["both"]})
     ]
     assert any("local edits that also changed centrally" in q for q in script.asked)
+
+
+def test_fleet_warnings_use_the_steersync_log_format(
+    fleet_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreachable(*args: object, **kwargs: object) -> None:
+        raise GitError("git fetch failed (128): ssh: connect to host central: No route to host")
+
+    monkeypatch.setattr(gitops, "ensure_cache_clone", unreachable)
+    result = CliRunner().invoke(main, ["fleet", "status", "--refresh"])
+    assert "WARNING:steersync" not in result.output
