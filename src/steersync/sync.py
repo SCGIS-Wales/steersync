@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal, NamedTuple, ParamSpec, TypeVar, cast
 from urllib.parse import urlsplit
 
-from steersync import gitlab, gitops, paths
+from steersync import backups, gitlab, gitops, paths
 from steersync.config import CollectionConfig, Config, remote_host, validate_remote_url
 from steersync.errors import ConfigError, GitError, GitLabError, LintError, SyncConflictError
 from steersync.lint import LintReport, lint_snapshot, merge_reports, prefix_report
@@ -79,6 +79,8 @@ class PullResult(NamedTuple):
     dry_run: bool
     # True when the central repository was unreachable and the cached copy was used.
     offline: bool = False
+    # Backups taken before a forced pull replaced or deleted local files.
+    backups: tuple[str, ...] = ()
 
     @property
     def conflicts(self) -> tuple[str, ...]:
@@ -312,6 +314,7 @@ def pull(
     cache_dir, commit, offline = _refresh_cache(config, environment, url, allow_offline=True)
     strict_pull = config.sync.strict_pull if strict is None else strict
     targets: list[_ScopeTarget] = []
+    project_slug = "workspace"
 
     if include_global:
         targets.append(
@@ -329,6 +332,7 @@ def pull(
         if project is None:
             log.warning("workspace has no origin remote; skipping workspace collections")
         else:
+            project_slug = project
             targets.append(
                 _ScopeTarget(
                     "workspace",
@@ -342,6 +346,19 @@ def pull(
                 )
             )
 
+    taken: tuple[str, ...] = ()
+    if force and not dry_run:
+        taken = _backup_before_overwrite(
+            config,
+            targets,
+            selected,
+            url=url,
+            commit=commit,
+            env=environment,
+            workspace_root=workspace_root,
+            strict_pull=strict_pull,
+            project_of=project_slug,
+        )
     results: list[CollectionResult] = []
     total = 1 + len(targets)
     for index, target in enumerate(targets, start=1):
@@ -360,7 +377,68 @@ def pull(
             )
         )
     step(total, total, f"applied {sum(r.plan.change_count for r in results)} change(s)")
-    return PullResult(url, commit, tuple(results), dry_run, offline)
+    return PullResult(url, commit, tuple(results), dry_run, offline, taken)
+
+
+def _backup_before_overwrite(
+    config: Config,
+    targets: Sequence[_ScopeTarget],
+    selected: Mapping[str, CollectionConfig],
+    *,
+    url: str,
+    commit: str,
+    env: Mapping[str, str],
+    workspace_root: Path | None,
+    strict_pull: bool,
+    project_of: str,
+) -> tuple[str, ...]:
+    """Back up and verify every local file a forced pull will replace or delete.
+
+    Plans the pull without writing, copies the files that exist locally, verifies the
+    copies against their manifest and, just before returning (and so just before the
+    overwrite), re-hashes the originals. Any failure raises BackupError and the pull
+    stops with nothing overwritten. There is no way to skip this.
+    """
+    stamp = backups.stamp_now()
+    root = paths.backup_root(env)
+    taken: list[backups.Backup] = []
+    bases: list[Path] = []
+    for target in targets:
+        preview = _pull_scope(
+            target,
+            config,
+            selected,
+            url=url,
+            commit=commit,
+            force=True,
+            dry_run=True,
+            strict_pull=strict_pull,
+            workspace_root=workspace_root if target.scope == "workspace" else None,
+        )
+        base = (
+            workspace_root
+            if target.scope == "workspace" and workspace_root is not None
+            else paths.kiro_home(env)
+        )
+        relatives = [
+            (result.target_dir / rel).relative_to(base).as_posix()
+            for result in preview
+            for rel in (*result.plan.update, *result.plan.delete, *result.plan.conflict)
+            if (result.target_dir / rel).is_file()
+        ]
+        if not relatives:
+            continue
+        label = project_of if target.scope == "workspace" else "global"
+        taken.append(backups.take(root, base, relatives, project=label, stamp=stamp))
+        bases.append(base)
+    for backup, base in zip(taken, bases, strict=True):
+        backups.verify_unchanged(backup, base)
+        log.warning(
+            "backed up %d file(s) to %s before overwriting them",
+            len(backup.items),
+            backup.directory,
+        )
+    return tuple(str(b.directory) for b in taken)
 
 
 def _pull_scope(

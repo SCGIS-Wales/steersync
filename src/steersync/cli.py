@@ -1267,7 +1267,8 @@ def run() -> None:
 
 
 main.add_command(fleet)
-
+# Registers `fleet push`, `fleet pull` and `fleet restore` on the group (no UI imports).
+import steersync.cli_fleet_actions  # noqa: E402, F401
 
 if __name__ == "__main__":  # pragma: no cover
     run()

@@ -410,3 +410,160 @@ def collect(
                 rows.extend(found)
     rows.sort(key=lambda r: (r.is_global(), STATE_ORDER.index(r.state), r.path))
     return FleetReport(remotes=tuple(remotes), repositories=tuple(rows))
+
+
+# --- push and pull many --------------------------------------------------------------------
+
+PUSHABLE: frozenset[State] = frozenset({"local-ahead", "diverged", "proposed"})
+
+
+class Outcome(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    project: str | None
+    action: Literal["push", "pull"]
+    status: Literal["done", "failed", "skipped", "dry-run"]
+    detail: str
+    branch: str | None = None
+    merge_request: str | None = None
+    backups: tuple[str, ...] = ()
+    rerun: str | None = None
+
+
+def push_reason(row: RepoStatus) -> str | None:
+    """Why ``row`` cannot be pushed (None: it can)."""
+    if row.state in {"missing", "unconfigured", "error"}:
+        return row.error or row.state
+    if row.offline:
+        return "central repository unreachable (offline, cached copy); push is disabled"
+    if row.state not in PUSHABLE:
+        return f"nothing to push ({row.state})"
+    return None
+
+
+def pull_reason(row: RepoStatus) -> str | None:
+    """Why ``row`` cannot be pulled (None: it can)."""
+    if row.state in {"missing", "unconfigured", "error"}:
+        return row.error or row.state
+    if row.offline:
+        return "central repository unreachable (offline, cached copy); pull is disabled"
+    if not row.pull.any() and not row.conflicts:
+        return f"nothing to pull ({row.state})"
+    return None
+
+
+def _rerun(row: RepoStatus, command: str) -> str:
+    if row.is_global():
+        return f"steersync {command}" + (" --scope global" if command == "push" else "")
+    return f"cd {row.path} && steersync {command}"
+
+
+Action = Literal["push", "pull"]
+Status = Literal["done", "failed", "skipped", "dry-run"]
+
+
+def _outcome(
+    row: RepoStatus, action: Action, status: Status, detail: str, **extra: object
+) -> Outcome:
+    fields = {"path": row.path, "project": row.project, "action": action}
+    return Outcome.model_validate({**fields, "status": status, "detail": detail, **extra})
+
+
+def push_one(row: RepoStatus, env: Mapping[str, str], *, dry_run: bool = False) -> Outcome:
+    """Lint and push one repository; failures are returned, never raised."""
+    reason = push_reason(row)
+    if reason is not None:
+        return _outcome(row, "push", "skipped", reason)
+    try:
+        if row.is_global():
+            config = load_config(workspace_root=None, env=env)
+            result = sync.push(
+                config, workspace_root=Path.home(), env=env, scope="global", dry_run=dry_run
+            )
+        else:
+            root = Path(row.path)
+            config = load_config(workspace_root=root, env=env)
+            result = sync.push(config, workspace_root=root, env=env, dry_run=dry_run)
+    except SteersyncError as exc:
+        return _outcome(row, "push", "failed", str(exc), rerun=_rerun(row, "push"))
+    except Exception as exc:
+        log.debug("unexpected push failure for %s", row.path, exc_info=True)
+        detail = f"{type(exc).__name__}: {exc}"
+        return _outcome(row, "push", "failed", detail, rerun=_rerun(row, "push"))
+    return _outcome(
+        row,
+        "push",
+        "dry-run" if dry_run else "done",
+        f"{result.status}: {result.message}",
+        branch=result.branch,
+        merge_request=result.merge_request,
+    )
+
+
+def pull_one(
+    row: RepoStatus, env: Mapping[str, str], *, overwrite: bool = False, dry_run: bool = False
+) -> Outcome:
+    """Pull one repository; ``overwrite`` replaces local edits after a verified backup."""
+    reason = pull_reason(row)
+    if reason is not None:
+        return _outcome(row, "pull", "skipped", reason)
+    try:
+        if row.is_global():
+            config = load_config(workspace_root=None, env=env)
+            result = sync.pull(
+                config,
+                workspace_root=None,
+                env=env,
+                include_workspace=False,
+                force=overwrite,
+                dry_run=dry_run,
+            )
+        else:
+            root = Path(row.path)
+            config = load_config(workspace_root=root, env=env)
+            result = sync.pull(
+                config,
+                workspace_root=root,
+                env=env,
+                include_global=False,
+                force=overwrite,
+                dry_run=dry_run,
+            )
+    except SteersyncError as exc:
+        return _outcome(row, "pull", "failed", str(exc), rerun=_rerun(row, "pull"))
+    except Exception as exc:
+        log.debug("unexpected pull failure for %s", row.path, exc_info=True)
+        detail = f"{type(exc).__name__}: {exc}"
+        return _outcome(row, "pull", "failed", detail, rerun=_rerun(row, "pull"))
+    kept = len(result.conflicts)
+    detail = f"{result.change_count} change(s)" + (
+        f", {kept} locally edited file(s) kept" if kept else ""
+    )
+    status: Status = "dry-run" if dry_run else "done"
+    return _outcome(row, "pull", status, detail, backups=result.backups)
+
+
+def run_batch(
+    rows: Sequence[RepoStatus],
+    action: Callable[[RepoStatus], Outcome],
+    *,
+    kind: Action,
+    on_event: OnEvent = _quiet,
+) -> tuple[list[Outcome], bool]:
+    """Run ``action`` for each row in order; returns outcomes and whether Ctrl C stopped it.
+
+    Repositories run one after another, so pushes to one central remote stay serial. An
+    interrupt marks the rest as skipped so the summary shows what completed.
+    """
+    outcomes: list[Outcome] = []
+    for index, row in enumerate(rows):
+        on_event((row.path, "running", f"{index + 1} of {len(rows)}"))
+        try:
+            outcome = action(row)
+        except KeyboardInterrupt:
+            outcomes.extend(_outcome(r, kind, "skipped", "interrupted") for r in rows[index:])
+            return outcomes, True
+        on_event((row.path, outcome.status, outcome.detail))
+        outcomes.append(outcome)
+    return outcomes, False
