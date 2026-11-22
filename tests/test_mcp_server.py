@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -40,10 +38,21 @@ def test_tools_round_trip(in_project: Path) -> None:
         "agents",
         "hooks",
         "settings",
+        "sandbox",
+        "workflows",
         "prompts",
         "agents-md",
+        "kiroignore",
     ]
     assert mcp_server.push_kiro_config(message="via mcp")["status"] == "pushed"
+
+
+def test_force_pull_needs_confirmation(in_project: Path) -> None:
+    refused = mcp_server.pull_kiro_config(force=True)
+    assert refused["ok"] is False
+    assert "confirm" in refused["error"]
+    assert mcp_server.pull_kiro_config(force=True, dry_run=True)["ok"]
+    assert mcp_server.pull_kiro_config(force=True, confirm=True)["ok"]
 
 
 def test_tools_report_errors(
@@ -71,4 +80,10 @@ def test_build_server_registers_tools(in_project: Path) -> None:
         "diff_kiro_config",
         "validate_kiro_config",
         "list_kiro_collections",
+        "kiro_v3_status",
     }
+    tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
+    assert tools["validate_kiro_config"].annotations.read_only_hint is True
+    assert tools["push_kiro_config"].annotations.read_only_hint is False
+    assert tools["pull_kiro_config"].annotations.idempotent_hint is True
+    assert tools["kiro_v3_status"].title == "Kiro CLI V3 status"

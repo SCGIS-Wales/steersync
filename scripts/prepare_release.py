@@ -18,8 +18,6 @@ Used by the CI workflow on every push to ``main``. The decision is deterministic
 Every function is pure apart from ``apply`` so the rules are unit tested.
 """
 
-from __future__ import annotations
-
 import argparse
 import datetime as dt
 import re

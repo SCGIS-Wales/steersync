@@ -1,7 +1,5 @@
 """Shared fixtures: isolated HOME, git identity, a central bare repository and a project clone."""
 
-from __future__ import annotations
-
 import os
 import subprocess
 from collections.abc import Callable, Mapping
@@ -24,6 +22,13 @@ HOOK_DOC = (
     '"action": {"type": "command", "command": "./gradlew test"}}]}\n'
 )
 AGENT_DOC = '{"name": "entra", "description": "Entra agent", "tools": ["read"]}\n'
+
+
+@pytest.fixture(autouse=True)
+def _no_local_kiro_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep tests independent of a kiro-cli installed on the developer's machine."""
+    monkeypatch.setattr("steersync.kiro_version.CLI_BINARY", "kiro-cli-not-installed-in-tests")
+    monkeypatch.setenv("STEERSYNC_NO_V3_REMINDER", "1")
 
 
 def central_global(work: Path, collection: str = "steering") -> Path:

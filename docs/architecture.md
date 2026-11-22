@@ -7,8 +7,8 @@ pure data, and only then are files or branches written.
 Everything is expressed in terms of *collections*. A collection (`CollectionConfig`) names a
 workspace directory, an optional global directory under the Kiro home, a directory in the
 central repository, the glob patterns that select files inside it and the lint profile that
-validates them. The packaged defaults define steering, specs, skills, agents, hooks and
-settings; nothing in the sync, lint or CLI code knows those names, so a new collection is
+validates them. The packaged defaults define steering, specs, skills, agents, hooks,
+settings, sandbox, cli-settings, workflows, prompts, agents-md and kiroignore; nothing in the sync, lint or CLI code knows those names, so a new collection is
 configuration only.
 
 ```text
@@ -21,11 +21,15 @@ sync.py         pull / push / status / merge_request orchestration over every co
   ├── steering.py   FileSpec discovery, front matter, snapshots, change plans, atomic writes,
   │                 executable bits, versioned lock file
   ├── lint.py       lint profiles (steering, markdown, skill, agent, hooks, settings, prompt,
-  │                 json, generic) and the workspace auto load checks
+  │                 workflow, kiroignore, json, generic) and the workspace auto load checks
+  ├── kiro_rules.py pure schema rules for hooks, agents, mcp/sandbox/cli settings, workflow
+  │                 recipes and .kiroignore
   ├── practices.py  best practice warnings cited from the Kiro documentation
   ├── paths.py      Kiro home, per collection directories, lock paths, cache, containment
   └── config.py     layered YAML + environment configuration validated by pydantic
 hooks.py        pre-push hook installer, Kiro hook and mcp.json renderers
+kiro_version.py Kiro CLI V3 harness detection and the rate limited reminder
+migrate.py      legacy *.kiro.hook and inline agent hooks to .kiro/hooks/*.json
 logging_utils.py text or JSON logging with secret redaction
 errors.py       exception types carrying exit codes
 ```

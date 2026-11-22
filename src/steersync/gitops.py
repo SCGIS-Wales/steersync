@@ -4,8 +4,6 @@ All calls use argument lists, never a shell, and run with interactive prompts
 disabled so hooks and MCP servers fail fast instead of hanging.
 """
 
-from __future__ import annotations
-
 import getpass
 import logging
 import os

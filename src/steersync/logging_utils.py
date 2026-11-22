@@ -1,7 +1,5 @@
 """Logging configuration with secret redaction and optional JSON output."""
 
-from __future__ import annotations
-
 import json
 import logging
 import re

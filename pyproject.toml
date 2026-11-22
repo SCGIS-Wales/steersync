@@ -1,17 +1,20 @@
 [build-system]
-requires = ["hatchling>=1.32,<2"]
+requires = ["hatchling>=1.33,<2"]
 build-backend = "hatchling.build"
 
 [project]
 name = "steersync"
 dynamic = ["version"]
-description = "Sync Kiro steering documents between developer machines and a central git repository."
+description = "Sync Kiro configuration (steering, specs, skills, agents, hooks, workflows, settings) with a central git repository."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
 authors = [{ name = "Dejan Gregor", email = "dejan.gregor@gmail.com" }]
-keywords = ["kiro", "steering", "git", "pre-push", "mcp", "developer-experience"]
+keywords = [
+  "kiro", "kiro-cli", "steering", "agents", "hooks", "workflows", "git", "pre-push", "mcp",
+  "developer-experience",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
@@ -20,15 +23,16 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Topic :: Software Development :: Version Control :: Git",
   "Typing :: Typed",
 ]
 dependencies = [
-  "click>=8.5,<9",
-  "pydantic>=2.14,<3",
+  "click>=8.5.1,<9",
+  "pydantic>=2.14.4,<3",
   "python-frontmatter>=1.3,<2",
-  "PyYAML>=6.0.3,<7",
-  "pymarkdownlnt>=0.9.40,<1",
+  "PyYAML>=6.0.4,<7",
+  "pymarkdownlnt>=0.9.42,<1",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +40,7 @@ mcp = ["mcp>=2.3,<3"]
 
 [project.scripts]
 steersync = "steersync.cli:run"
+steersync-mcp = "steersync.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/SCGIS-Wales/steersync"
@@ -45,13 +50,13 @@ Changelog = "https://github.com/SCGIS-Wales/steersync/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
-  "pytest>=9.1,<10",
+  "pytest>=9.2,<10",
   "pytest-cov>=7.1,<8",
-  "ruff>=0.17,<1",
+  "ruff>=0.17.6,<1",
   "mypy>=2.4,<3",
   "types-PyYAML>=6.0.12",
-  "bandit[toml]>=1.8,<2",
-  "pip-audit>=2.9,<3",
+  "bandit[toml]>=1.9,<2",
+  "pip-audit>=2.10,<3",
   "mcp>=2.3,<3",
 ]
 
@@ -108,9 +113,10 @@ files = ["src", "tests", "scripts"]
 module = ["frontmatter", "frontmatter.*", "pymarkdown.*", "mcp.*"]
 ignore_missing_imports = true
 
-[tool.pytest.ini_options]
+[tool.pytest]
+# pytest 9 native TOML configuration.
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --strict-config"
+addopts = ["-ra", "--strict-markers", "--strict-config"]
 xfail_strict = true
 filterwarnings = ["error"]
 
@@ -120,7 +126,7 @@ source = ["steersync"]
 omit = ["src/steersync/__main__.py"]
 
 [tool.coverage.report]
-fail_under = 85
+fail_under = 90
 show_missing = true
 skip_covered = false
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]

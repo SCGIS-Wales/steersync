@@ -8,8 +8,6 @@ repository. Thresholds live in :class:`PracticeLimits` and can be tuned from
 ``lint.practices`` in configuration.
 """
 
-from __future__ import annotations
-
 import json
 import re
 from collections.abc import Mapping
@@ -273,15 +271,6 @@ def agent_findings(
                 "agent-inline-hooks",
                 "inline agent hooks are the CLI 2.x mechanism; CLI 3.0 and IDE 1.0 read "
                 "standalone .kiro/hooks/*.json files that apply to every agent",
-            )
-        )
-    if "toolsSettings" in data and "permissions" not in data:
-        findings.append(
-            Finding(
-                path,
-                "agent-permissions-missing",
-                "permissions.rules replace toolsSettings on CLI 3.0 and IDE 1.0; run "
-                "/upgrade-agent to convert",
             )
         )
     return findings

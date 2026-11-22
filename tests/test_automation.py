@@ -1,7 +1,5 @@
 """Resilience and GitLab workflow: offline pulls, proposal warnings, merge requests, bootstrap."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

@@ -39,14 +39,22 @@ configuration, Prompts, Code intelligence).
 ## agent (`.kiro/agents`, `~/.kiro/agents`)
 
 JSON agents and Markdown agents (front matter holds the configuration) at the top level of
-the collection. Files under subdirectories such as `prompts/` are linted as markdown.
+the collection. Files under subdirectories such as `prompts/` are linted as markdown. The
+universal format written by `/upgrade-agent` (both `toolsSettings` and `permissions`, plus a
+`kiroUpgrade` block) passes; `*.json.bak` backups are not synced.
 
 | Rule | Severity | Check | Source |
 |---|---|---|---|
 | `json-syntax`, `agent-schema` | error | Valid JSON object. | Configuration reference |
 | `agent-name` | warning | A `name` is expected. | Configuration reference |
-| `agent-deprecated-key` | warning | `toolsSettings` is deprecated. | Configuration reference |
-| `agent-permissions-missing` | warning | `toolsSettings` without `permissions.rules`; `/upgrade-agent` converts it. | Configuration reference |
+| `agent-v2-format` | error | `toolsSettings` or `allowedTools` without `permissions` is the CLI 2.x format. Kiro rewrites it in place on load (automatic agent upgrade), so a synced copy would turn into a local edit everywhere. Run `/upgrade-agent` or `kiro-cli agent upgrade <dir>` and commit the universal format, which keeps both. | Agent config changes (V3) |
+| `agent-permissions` | error | `permissions.rules[]` objects with a `capability`, an `effect` of `allow`, `ask` or `deny`, and `match`/`exclude` as strings or lists of strings. | Permissions |
+| `agent-permission-capability` | warning | Unknown capability (known: `fs_read`, `fs_write`, `shell`, `web_fetch`, `web_search`, `mcp`, `subagent`, `skill`, `power`, `context`, `diagnostics`, `sandbox_network`, `all`, `builtin`, `filesystem`). | Permissions |
+| `agent-legacy-key` | warning | `toolAliases` and `keyboardShortcut` are not supported by V3. | Agent config changes (V3) |
+| `agent-v2-tool-name` | warning | `fs_read`, `fs_write`, `execute_bash`, `execute_cmd`, `use_subagent` in `tools`; V3 uses `read`, `write`, `shell`, `subagent`. | Agent config changes (V3) |
+| `agent-use-aws` | warning | The built in `use_aws` tool is gone in V3; use the AWS MCP server. | Agent config changes (V3) |
+| `agent-resource-scheme`, `agent-knowledge-base` | warning, error | Resources are `file://` or `skill://` strings or `knowledgeBase` objects with a `source` (`indexType` `best` or `fast`). | Configuration reference |
+| `agent-machine-path` | warning | A resource under `/Users/...` or `/home/...` does not resolve for the rest of the team. | Configuration reference |
 | `agent-tools-wildcard` | warning | `tools: ["*"]` grants every tool; list the tags needed and gate the rest with permissions. | Agent config changes (V3) |
 | `agent-allowed-wildcard` | warning | `allowedTools: ["*"]` disables every permission prompt. | Configuration reference |
 | `agent-steering-glob` | warning | `file://.kiro/steering/**` loads every steering file at startup and bypasses the inclusion modes. | Configuration reference, Steering |
@@ -60,9 +68,13 @@ the collection. Files under subdirectories such as `prompts/` are linted as mark
 | Rule | Severity | Check | Source |
 |---|---|---|---|
 | `json-syntax` | error | Valid JSON. | Hooks |
-| `hook-schema` | error | `hooks[]` with `name`, `trigger` and `action`; `version` should be `v1`. | Hooks |
-| `hook-trigger` | warning | Unknown trigger; V3 triggers are PascalCase (`SessionStart`, `Stop`, `PreToolUse`, ...). | Hook triggers |
-| `hook-action` | error | `action.type` is `command` or `agent`. | Hooks |
+| `hook-schema` | error | `"version": "v1"` and `hooks[]` with `name`, `trigger` and `action`; `enabled` is a boolean. | Hooks |
+| `hook-trigger` | warning | Unknown trigger. V3 triggers: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest` (CLI 3.4), `PreCompact`, `PostCompact` (CLI 3.1), `PreTaskExec`, `PostTaskExec`, `PostFileCreate`, `PostFileSave`, `PostFileDelete`, `Stop`, `Manual`. | Hook triggers |
+| `hook-trigger-alias` | warning | CLI 2.x camelCase names (`agentSpawn`, `preToolUse`, ...) and the V3 trigger each became. | Hooks migration |
+| `hook-action` | error | `action.type` is `command` (with `action.command`) or `agent` (with `action.prompt`). | Hooks |
+| `hook-timeout-value` | error | `timeout` is a whole number of seconds, 0 or more (0 disables it). | Hooks |
+| `hook-confirm` | error | `confirm` needs a `question`, options with `id` and `label`, and only works on `Stop` command hooks. | Hooks |
+| `hook-duplicate-name`, `hook-use-aws` | warning | Duplicate hook names in one file; matchers on the removed `use_aws` tool. | Hooks |
 | `hook-when-then` | warning | The IDE 0.x `when`/`then` schema. | IDE 0.x reference |
 | `hook-legacy-format` | warning | `.kiro.hook` files are deprecated; IDE 1.0 does not execute them until migrated. | What's new in 1.0 |
 | `hook-timeout` | warning | A timeout above 300 s blocks the session. | Hooks |
@@ -83,14 +95,54 @@ the collection. Files under subdirectories such as `prompts/` are linted as mark
 Scripts and assets are scanned for secrets; binary assets are allowed up to the collection's
 size limit (1 MiB by default).
 
-## settings (`.kiro/settings`: `mcp.json`, `lsp.json`)
+## settings (`.kiro/settings`: `mcp.json`, `lsp.json`, `sandbox.json`, `cli.json`)
 
 | Rule | Severity | Check | Source |
 |---|---|---|---|
 | `json-syntax` | error | Valid JSON. | MCP configuration |
+| `mcp-literal-secret` | error | A secret looking `env` or `headers` entry (token, secret, password, API key, `Authorization`) or `oauth.clientSecret` holds a literal value instead of `${VAR}`. | MCP configuration |
+| `mcp-oauth` | error, warning | `oauth.mode` is `browser`, `enterprise` or `auto`; `clientMetadataUrl` is `https://`; Kiro ignores it when `clientSecret` is set. | MCP configuration |
+| `mcp-timeout`, `mcp-shape` (errors) | error | `timeout`/`timeoutMs` are positive integers, `autoApprove`/`disabledTools` lists of names, `disabled` a boolean. | MCP configuration |
 | `mcp-shape`, `mcp-server-command` | warning | `mcpServers` mapping; each server has a `command` or a `url`. | MCP configuration |
 | `mcp-machine-path` | warning | A home directory path will not work on other machines. | MCP configuration |
 | `lsp-shape` | warning | `lsp.json` has a `languages` mapping. | Code intelligence |
+
+### `sandbox.json` (the `sandbox` collection)
+
+| Rule | Severity | Check | Source |
+|---|---|---|---|
+| `sandbox-shape` | error | A JSON object; `enabled` and `mcpSandboxing` are booleans. | Sandbox |
+| `sandbox-network-access` | error | `networkAccess` is `DEFAULT_ALLOWED`, `COMMON_DEPENDENCIES` or `DEFAULT_BLOCKED`. | Sandbox, Kiro CLI 3.5 |
+| `sandbox-cannot-loosen` | warning | A project file can only tighten an active global policy, so `enabled: false` or `DEFAULT_ALLOWED` may have no effect. | Sandbox |
+| `sandbox-unknown-key` | warning | Keys other than `enabled`, `networkAccess`, `fsMode`, `mcpSandboxing`. | Kiro CLI 3.5 |
+
+### Workspace `cli.json` (the opt in `cli-settings` collection)
+
+| Rule | Severity | Check | Source |
+|---|---|---|---|
+| `cli-settings-global-only` | error | `chat.agentEngine`, `chat.enableAutoAgentUpgrade` and `app.warnOnElevatedPrivileges` are read only from `~/.kiro/settings/cli.json`. Flat (`"chat.agentEngine"`) and nested layouts are both checked. | CLI settings |
+
+## workflow (`.kiro/workflows`, `~/.kiro/workflows`)
+
+Recipes are `<name>.workflow.json`, `.yaml` or `.yml`. The rules follow the recipe schema
+shipped with Kiro CLI 3.5.
+
+| Rule | Severity | Check |
+|---|---|---|
+| `json-syntax`, `yaml-syntax` | error | The file parses. |
+| `workflow-schema` | error | A `name` and a non empty `steps` list; `inputs` maps names to descriptions; each node has an `id` and a `type` of `step` (`agent`, `prompt`), `sequence` (`steps`), `repeat` (`steps`), `parallel` (`branches`, `joinPolicy` `all`, `allSettled` or `any`) or `watch` (`handler`). |
+| `workflow-duplicate-id` | error | Node ids are unique in the recipe. |
+| `workflow-repeat` | error | `maxIterations` from 1 to 1000, `onMaxIterations` `abort`, `continue` or `pause`, and at most one of `stopCondition` or `stopWhen`. |
+| `workflow-file-name` | warning | Kiro saves a recipe as the kebab case of its `name`. |
+| `workflow-unknown-key` | warning | Top level keys Kiro ignores. |
+| `workflow-depth`, `workflow-size` | warning | More than 8 nesting levels or 50 static steps. |
+
+## kiroignore (`.kiroignore` anywhere, `~/.kiro/settings/kiroignore`)
+
+| Rule | Severity | Check |
+|---|---|---|
+| `kiroignore-syntax` | error, warning | A trailing backslash escapes nothing; `**` glued to other characters acts like `*`. |
+| `kiroignore-secrets` | warning | The root file does not keep `.env*` or `*.pem` files from the agent. |
 
 ## prompt (`.kiro/prompts`, `~/.kiro/prompts`)
 
@@ -100,7 +152,7 @@ size limit (1 MiB by default).
 
 Plus the markdown profile.
 
-## markdown (specs, `AGENTS.md`, prompt files, references)
+## markdown (specs, nested `AGENTS.md`, prompt files, references)
 
 Encoding, size, secret patterns and pymarkdown style. No Kiro front matter rules.
 

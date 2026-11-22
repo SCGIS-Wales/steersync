@@ -8,8 +8,6 @@ more. Only the standard library is used, the token comes from an environment
 variable named in configuration, and it never reaches a log line.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import urllib.error

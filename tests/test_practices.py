@@ -1,7 +1,5 @@
 """Best practice warnings: every rule is objective and taken from the Kiro documentation."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 
@@ -108,8 +106,7 @@ def test_agent_practices(config: Config, tmp_path: Path) -> None:
         "agent-prompt-file-missing",
         "agent-hooks-object-form",
         "agent-inline-hooks",
-        "agent-permissions-missing",
-        "agent-deprecated-key",
+        "agent-v2-format",
     } <= found
     markdown = "---\nname: reviewer\ntools: ['*']\n---\nYou review code.\n"
     assert "agent-tools-wildcard" in rules(config, "reviewer.md", "agent", markdown)

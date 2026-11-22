@@ -1,7 +1,10 @@
 # steersync
 
-Sync the whole [Kiro](https://kiro.dev) `.kiro/` configuration, steering, specs, skills,
-agents, hooks and settings, between developer machines and a central git repository. A plain
+Sync the whole [Kiro](https://kiro.dev) `.kiro/` configuration (steering, specs, skills,
+agents, hooks, settings, the sandbox policy, workflow recipes, prompts, `AGENTS.md` and
+`.kiroignore` files) between developer machines and a central git repository. It targets Kiro
+IDE 1.5 and Kiro CLI 3.5 with the V3 agent harness, and reminds you when a machine is still
+on V2. A plain
 Python CLI runs from a git pre-push hook and shells out to the `git` binary, so your existing
 SSH agent or credential helper does the authentication. An MCP server and Kiro session hooks
 are optional layers on top of the same core.
@@ -24,23 +27,33 @@ layout; each one is configurable and new ones are added with a single YAML block
 | Collection | Workspace | Global (`~/.kiro`) | Central directory | Files | Lint profile |
 |---|---|---|---|---|---|
 | `steering` | `.kiro/steering` | `steering` | `steering/` | `**/*.md` | `steering`: Kiro front matter, references, secrets, markdown |
-| `specs` | `.kiro/specs` | none | `specs/` | `**/*.md` | `markdown`: secrets and markdown style |
+| `specs` | `.kiro/specs` | none | `specs/` | every file in each spec (`requirements.md` or `bugfix.md`, `design.md`, `tasks.md`, metadata) | `markdown`: secrets and markdown style |
 | `skills` | `.kiro/skills` | `skills` | `skills/` | everything (`SKILL.md`, `scripts/`, `references/`, `assets/`) | `skill`: `SKILL.md` needs `name` and `description`, secrets in scripts |
-| `agents` | `.kiro/agents` | `agents` | `agents/` | `**/*.json`, `**/*.md` | `agent`: valid JSON with a `name`, flags deprecated `toolsSettings` |
-| `hooks` | `.kiro/hooks` | `hooks` | `hooks/` | `**/*.json` | `hooks`: `version`, `hooks[]` with `name`, `trigger`, `action` |
-| `settings` | `.kiro/settings` | none | `settings/` | `lsp.json`, `mcp.json` | `settings`: valid JSON, `mcpServers` and `languages` shapes, machine paths |
+| `agents` | `.kiro/agents` | `agents` | `agents/` | `**/*.json`, `**/*.md` (not the `*.json.bak` upgrade backups) | `agent`: V3 universal format, `permissions.rules`, tool names, resources, inline hooks |
+| `hooks` | `.kiro/hooks` | `hooks` | `hooks/` | `**/*.json`, legacy `**/*.kiro.hook` | `hooks`: `version: v1`, triggers, actions, timeouts, `confirm` |
+| `settings` | `.kiro/settings` | none | `settings/` | `lsp.json`, `mcp.json` | `settings`: shapes, literal secrets, OAuth, machine paths |
+| `sandbox` | `.kiro/settings` | none | `sandbox/` | `sandbox.json` | `settings`: `enabled`, `networkAccess` |
+| `cli-settings` (off by default) | `.kiro/settings` | none | `cli-settings/` | `cli.json` | `settings`: rejects global only keys such as `chat.agentEngine` |
+| `workflows` | `.kiro/workflows` | `workflows` | `workflows/` | `**/*.workflow.json`, `.yaml`, `.yml` | `workflow`: the recipe schema of Kiro CLI 3.5 |
 | `prompts` | `.kiro/prompts` | `prompts` | `prompts/` | `**/*.md` | `prompt`: markdown plus the 50 character name limit |
-| `agents-md` | `AGENTS.md` at the root | none | `agents-md/` | `AGENTS.md` | `markdown` (kept in the project repository too) |
+| `agents-md` | the repository | none | `agents-md/` | `**/AGENTS.md` (root and nested) | `markdown` (kept in the project repository too) |
+| `kiroignore` | the repository | `settings` (`kiroignore`) | `kiroignore/` | `**/.kiroignore` | `kiroignore`: gitignore syntax, advice on `.env*` and `*.pem` |
 
-Execute bits on skill scripts survive the round trip, hidden files are never synced, and
-files a collection's patterns do not select are never touched on either side. Limit any
+Execute bits on skill scripts survive the round trip. Hidden directories are never synced,
+and a hidden file only when a pattern names it (`**/.kiroignore`). Files a collection's
+patterns do not select are never touched on either side, which is why `settings`, `sandbox`
+and `cli-settings` can share `.kiro/settings`. The repository wide collections skip
+`node_modules`, virtual environments, `dist`, `build` and `target` without walking them. Limit any
 command to some collections with `--collection NAME` (repeatable), list them with
 `steersync config collections`, and see [docs/central-layout.md](docs/central-layout.md) for
 a worked example of a full `.kiro/` tree in the central repository.
 
-Not synced on purpose: `~/.kiro/powers/` (installed by Kiro from a registry, not authored),
-`~/.kiro/settings/cli.json` and `permissions.yaml` (per user, outside any repository) and
-knowledge bases (declared in agent resources, indexed by Kiro). Every path above comes from
+Never synced, by design: workspace permissions (`~/.kiro/workspace-roots/<hash>/permissions.yaml`,
+kept per user so that a cloned repository cannot inject permission rules) and
+`~/.kiro/settings/permissions.yaml`, `~/.kiro/powers/` (installed from a registry),
+`~/.kiro/memories/`, `~/.kiro/sessions/`, `~/.kiro/crew/`, `~/.kiro/settings/cli.json`,
+`managed-settings.json` and knowledge base indexes (the declarations in agent `resources`
+are synced with the agent). Every path above comes from
 the Kiro configuration scopes documentation; a new kind of content is one YAML block.
 
 ## Install
@@ -52,6 +65,9 @@ sdist and a `SHA256SUMS` file, with signed build provenance.
 ```bash
 VERSION=0.3.0
 uv tool install "https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
+# or run it without installing
+uvx steersync --help
+uvx --from "steersync[mcp]" steersync-mcp
 # with the MCP server
 uv tool install "steersync[mcp] @ https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
 # verify where the wheel came from
@@ -151,10 +167,12 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 | `steersync init [--write-config] [--hook] [--no-exclude] [--no-kiro] [--mcp-command PATH]` | Prepare a repository: excludes, git hook, Kiro session hook and MCP server entry. |
 | `steersync install-hook [--force]` | Install or update the chaining pre-push hook. |
 | `steersync kiro-hook [--engine v2\|v3] [--write]` | Render a Kiro hook that runs `steersync pull --quiet` at session start. |
-| `steersync mcp-config [--remote URL]` | Render an `mcp.json` fragment. |
-| `steersync mcp` | Run the MCP stdio server. |
+| `steersync migrate-hooks [--write]` | Convert `*.kiro.hook` files and CLI 2.x inline agent hooks into `.kiro/hooks/*.json`. Dry run by default; never overwrites or deletes. |
+| `steersync v3-status [--json] [--strict]` | Report the kiro-cli version, `chat.agentEngine` and agents still in the V2 format. `--strict` exits 10 when a reminder applies. |
+| `steersync mcp-config [--command uvx] [--remote URL]` | Render an `mcp.json` fragment. |
+| `steersync mcp` (or `steersync-mcp`) | Run the MCP stdio server. |
 | `steersync config show\|validate\|default\|collections` | Inspect configuration and the resolved collection directories. |
-| `steersync doctor` | Report git version, resolved paths, remote and project slug. |
+| `steersync doctor` | Report git version, resolved paths, remote, project slug and the Kiro CLI harness. |
 
 Global options: `--config PATH`, `--log-level`, `--log-format text|json`, `--quiet`.
 
@@ -307,9 +325,12 @@ The merge request is opened in two ways:
 ## Validation
 
 Each collection runs one lint profile: `steering`, `agent`, `hooks`, `skill`, `settings`,
-`prompt`, `markdown`, `json` or `generic`. **Errors** are things Kiro cannot read (front
-matter after a blank line, an unknown inclusion mode, invalid JSON, a `SKILL.md` without
-`name` and `description`) or secrets; they stop a push. **Warnings** are best practices from
+`prompt`, `workflow`, `kiroignore`, `markdown`, `json` or `generic`. **Errors** are things
+Kiro cannot read or would rewrite (front matter after a blank line, an unknown inclusion
+mode, invalid JSON, a `SKILL.md` without `name` and `description`, a hook without
+`version: "v1"`, a workflow `repeat` without `maxIterations`, an unknown sandbox
+`networkAccess`, a V2 format agent) or secrets, including literal tokens in `mcp.json`
+`env`, `headers` and `oauth.clientSecret`; they stop a push. **Warnings** are best practices from
 the Kiro documentation, reported objectively and never blocking: a steering file with a
 numeric prefix, an `auto` description that is not written as a trigger, a `globs` key where
 Kiro reads `fileMatchPattern`, an agent with `tools: ["*"]` or a `file://.kiro/steering/**`
@@ -329,8 +350,22 @@ and `lint.practices: false` turns the warnings off.
 fire only in headless runs or with a custom agent active, so treat them as a convenience and
 keep the git hook as the dependable trigger.
 
+**Kiro CLI V3.** Kiro CLI 3.0.0 made V3 the default agent harness; V2 still runs but gets no
+new features. `steersync doctor`, `steersync v3-status`, the `kiro_v3_status` MCP tool and
+the session hook (at most once a day) check `kiro-cli --version`, `chat.agentEngine` and your
+agent files. When a reminder applies, run `kiro-cli settings chat.agentEngine v3`, start
+`kiro-cli` and run `/upgrade-agent`; for a shared agent directory run
+`kiro-cli agent upgrade <dir>`. See <https://kiro.dev/docs/cli/v3/>. The probes never start a
+chat, so they use no Kiro credits, and a reminder never fails a sync. Set
+`STEERSYNC_NO_V3_REMINDER=1` to silence the session hook reminder.
+
 **MCP server.** `steersync init` registers the server in `.kiro/settings/mcp.json`
-(`steersync mcp-config` prints the fragment). The server tells the agent which tool answers
+(`steersync mcp-config` prints the fragment). It runs through
+`uvx --from "steersync[mcp]==<version>" steersync mcp`, so nothing needs installing, and it
+auto approves only the read only tools. The server is built on the MCP Python SDK v2
+(`MCPServer`, specification 2026-07-28): tools return structured JSON and carry titles and
+read only, destructive and idempotent hints. A forced pull needs `confirm: true` because it
+overwrites local edits. The server tells the agent which tool answers
 which request, so plain sentences work:
 
 | Say | Tool |
@@ -341,6 +376,7 @@ which request, so plain sentences work:
 | "what changed", "status", "any open proposals for this repo" | `diff_kiro_config` |
 | "validate / lint / check the kiro config, agents, hooks, skills" | `validate_kiro_config` |
 | "what is synced and where" | `list_kiro_collections` |
+| "am I on Kiro V3", "do my agents need upgrading" | `kiro_v3_status` |
 
 Every tool accepts a `collections` list. Kiro does not pass the shell's `PATH`,
 `SSH_AUTH_SOCK`, proxy variables or `GITLAB_TOKEN` to MCP servers, so the rendered entry

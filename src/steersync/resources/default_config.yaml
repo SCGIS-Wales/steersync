@@ -74,10 +74,12 @@ paths:
 # central repository: global/<central_dir>/ and projects/<slug>/<central_dir>/.
 #
 # include and exclude are glob patterns relative to the collection directory
-# (** spans directories). lint selects the validation profile: steering,
-# markdown, skill, agent, hooks, json or generic. Set enabled: false to switch a
-# collection off, or add a new key to sync something else. Hidden files and
-# directories are never synced.
+# (** spans directories). lint selects the validation profile: steering, markdown,
+# skill, agent, hooks, settings, prompt, workflow, kiroignore, json or generic. Set
+# enabled: false to switch a collection off, or add a new key to sync something
+# else. Hidden directories are never synced; a hidden file is synced only when an
+# include pattern names it literally (**/.kiroignore). Collections may share a
+# directory when each names its files literally and the names do not overlap.
 collections:
   steering:
     description: Kiro steering documents
@@ -87,11 +89,13 @@ collections:
     include: ["**/*.md"]
     lint: steering
   specs:
-    description: Spec driven development plans (requirements, design, tasks)
+    description: Spec driven development (requirements or bugfix, design, tasks and metadata)
     workspace_path: .kiro/specs
     global_path: null
     central_dir: specs
-    include: ["**/*.md"]
+    # Every file in a spec directory travels with it, not only the markdown.
+    include: ["**/*"]
+    exclude: ["**/__pycache__/**", "**/node_modules/**", "**/*.bak", "**/*.tmp"]
     lint: markdown
   skills:
     description: Agent Skills (SKILL.md with scripts, references and assets)
@@ -108,6 +112,8 @@ collections:
     global_path: agents
     central_dir: agents
     include: ["**/*.json", "**/*.md"]
+    # Backups written by /upgrade-agent and the automatic V3 upgrade stay local.
+    exclude: ["**/*.json.bak", "**/*.bak"]
     lint: agent
   hooks:
     description: Standalone Kiro hooks (V3 and IDE 1.0; legacy .kiro.hook files are flagged)
@@ -123,6 +129,30 @@ collections:
     central_dir: settings
     include: ["lsp.json", "mcp.json"]
     lint: settings
+  sandbox:
+    description: Project sandbox policy (.kiro/settings/sandbox.json; can only tighten the global one)
+    workspace_path: .kiro/settings
+    global_path: null
+    central_dir: sandbox
+    include: ["sandbox.json"]
+    lint: settings
+  cli-settings:
+    # Opt in: team defaults for kiro-cli (chat.defaultAgent, compaction thresholds).
+    # Global only keys such as chat.agentEngine are rejected by the linter.
+    enabled: false
+    description: Workspace kiro-cli settings (.kiro/settings/cli.json)
+    workspace_path: .kiro/settings
+    global_path: null
+    central_dir: cli-settings
+    include: ["cli.json"]
+    lint: settings
+  workflows:
+    description: Workflow recipes (.kiro/workflows/<name>.workflow.json, .yaml or .yml)
+    workspace_path: .kiro/workflows
+    global_path: workflows
+    central_dir: workflows
+    include: ["**/*.workflow.json", "**/*.workflow.yaml", "**/*.workflow.yml"]
+    lint: workflow
   prompts:
     description: Saved prompts (slash commands, @prompt-name)
     workspace_path: .kiro/prompts
@@ -131,14 +161,36 @@ collections:
     include: ["**/*.md"]
     lint: prompt
   agents-md:
-    description: AGENTS.md at the repository root (read by Kiro and other agents)
+    description: AGENTS.md files anywhere in the repository (each one scoped to its directory)
     workspace_path: .
     global_path: null
     central_dir: agents-md
-    include: ["AGENTS.md"]
-    max_depth: 1
+    include: ["**/AGENTS.md"]
+    exclude: &workspace_wide_exclude
+      - "**/node_modules/**"
+      - "**/.venv/**"
+      - "**/venv/**"
+      - "**/dist/**"
+      - "**/build/**"
+      - "**/target/**"
+      - "**/__pycache__/**"
     lint: markdown
     git_exclude: false
+  kiroignore:
+    description: .kiroignore files (gitignore syntax; paths the agent must not read)
+    workspace_path: .
+    # ~/.kiro/settings/kiroignore is the global file.
+    global_path: settings
+    central_dir: kiroignore
+    include: ["**/.kiroignore", "kiroignore"]
+    exclude: *workspace_wide_exclude
+    lint: kiroignore
+    git_exclude: false
+
+# Never synced, by design: ~/.kiro/workspace-roots/** and permissions.yaml (Kiro keeps
+# workspace permissions per user so a cloned repository cannot inject rules),
+# ~/.kiro/powers/**, ~/.kiro/memories/**, ~/.kiro/sessions/**, ~/.kiro/crew/**,
+# ~/.kiro/settings/cli.json, managed-settings.json and knowledge base indexes.
 
 sync:
   # Delete locally managed files that disappeared from the central repository.

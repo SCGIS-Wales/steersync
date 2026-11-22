@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -173,9 +171,14 @@ def test_collections_defaults_and_overrides(env: dict[str, str], tmp_path: Path)
         "agents",
         "hooks",
         "settings",
+        "sandbox",
+        "cli-settings",
+        "workflows",
         "prompts",
         "agents-md",
+        "kiroignore",
     ]
+    assert "cli-settings" not in default.enabled_collections()
     assert default.collections["steering"].lint == "steering"
     assert default.collections["specs"].global_path is None
     assert default.collections["skills"].max_file_bytes == 1_048_576
