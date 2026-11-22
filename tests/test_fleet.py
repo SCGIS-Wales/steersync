@@ -106,7 +106,8 @@ def test_table_never_crops_the_note(fleet_env: dict[str, Path], width: int) -> N
     from steersync.paths import registry_path
 
     report = fleet.collect(registry.load(registry_path(os.environ)).paths(), os.environ)
-    console = Console(file=io.StringIO(), width=width, no_color=True)
+    # Plain text even when FORCE_COLOR is set (as in CI): escape codes are not columns.
+    console = Console(file=io.StringIO(), width=width, force_terminal=False, color_system=None)
     console.print(fleet_ui.table(report, width=width))
     lines = console.file.getvalue().splitlines()  # type: ignore[attr-defined]
     assert all(len(line) <= width for line in lines)

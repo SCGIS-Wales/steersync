@@ -10,6 +10,7 @@ in between aborts it. ``restore`` verifies the backup before copying it back. Th
 no way to skip a backup.
 """
 
+import contextlib
 import hashlib
 import json
 import shutil
@@ -19,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 
+from steersync import gitops
 from steersync.errors import SteersyncError
 
 MANIFEST = "manifest.json"
@@ -220,7 +222,8 @@ def prune(
         total -= size
     if not dry_run:
         for name in removed:
-            shutil.rmtree(root / name, ignore_errors=True)
+            with contextlib.suppress(OSError):  # a backup still in use is pruned next time
+                gitops.remove_tree(root / name)
     return PruneResult(tuple(removed), total)
 
 

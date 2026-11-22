@@ -1,7 +1,6 @@
 """Shared fixtures: isolated HOME, git identity, a central bare repository and a project clone."""
 
 import os
-import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -10,7 +9,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from steersync import registry
+from steersync import gitops, registry
 from steersync.cli import main
 from steersync.config import Config, load_config
 from steersync.paths import registry_path
@@ -233,7 +232,7 @@ def fleet_env(
     plain.mkdir()
     git("init", "-q", str(plain), cwd=base, env=env)
     registry.upsert(registry_path(dict(os.environ)), [gone, plain], "manual")
-    shutil.rmtree(gone)
+    gitops.remove_tree(gone)  # git objects are read only on Windows
     monkeypatch.chdir(tmp_path)
     return repos
 

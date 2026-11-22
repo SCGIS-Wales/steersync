@@ -509,7 +509,7 @@ def ensure_cache_clone(
             log.warning("cache clone %s is unusable (%s); recreating it", cache_dir, exc)
         else:
             return cache_dir
-    _remove_cache_dir(cache_dir)
+    remove_tree(cache_dir)
     cache_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         run_git(
@@ -599,11 +599,12 @@ def _clear_readonly(function: Callable[..., object], path: str, _: BaseException
     function(path)
 
 
-def _remove_cache_dir(cache_dir: Path) -> None:
-    if cache_dir.is_symlink() or cache_dir.is_file():
-        cache_dir.unlink()
-    elif cache_dir.exists():
-        shutil.rmtree(cache_dir, onexc=_clear_readonly)
+def remove_tree(path: Path) -> None:
+    """Delete a file or directory tree, including git's read only objects on Windows."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path, onexc=_clear_readonly)
 
 
 def head_commit(config: Config, repo: Path, env: Mapping[str, str] | None = None) -> str:

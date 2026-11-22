@@ -540,7 +540,7 @@ def test_read_only_cache_files_are_removed(tmp_path: Path) -> None:
     obj = cache / ".git" / "objects" / "ab" / "cdef"
     obj.write_bytes(b"x")
     obj.chmod(stat_module.S_IREAD)
-    gitops._remove_cache_dir(cache)
+    gitops.remove_tree(cache)
     assert not cache.exists()
 
 

@@ -26,7 +26,7 @@ def edited(
     sync.pull(config, workspace_root=project, env=env, include_global=False)
     local = project / ".kiro" / "steering" / "python.md"
     local.write_text(MINE)
-    local.chmod(0o640)
+    local.chmod(0o640)  # Windows keeps only the read only bit; compare with what it reports
     central_commit(lambda w: (central_project(w) / "python.md").write_text("# Theirs\n"), "edit")
     return local
 
@@ -40,17 +40,18 @@ def force(config: Config, env: dict[str, str], project: Path) -> sync.PullResult
 def test_forced_pull_backs_up_then_restore_reproduces_bytes_and_modes(
     config: Config, env: dict[str, str], project: Path, edited: Path
 ) -> None:
+    mode = stat.S_IMODE(edited.stat().st_mode)  # 0o640, or what Windows keeps of it
     result = force(config, env, project)
     assert edited.read_text() == "# Theirs\n"
     (directory,) = result.backups
     backup = backups.load(Path(directory))
     assert [item.path for item in backup.items] == [".kiro/steering/python.md"]
     manifest = json.loads((Path(directory) / "manifest.json").read_text())
-    assert manifest["items"][0]["mode"] == 0o640
+    assert manifest["items"][0]["mode"] == mode
     restored = backups.restore(backup)
     assert restored == [".kiro/steering/python.md"]
     assert edited.read_text() == MINE
-    assert stat.S_IMODE(edited.stat().st_mode) == 0o640
+    assert stat.S_IMODE(edited.stat().st_mode) == mode
     assert backups.listing(backup_root(dict(os.environ)))[0].directory == backup.directory
 
 

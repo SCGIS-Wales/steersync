@@ -9,7 +9,6 @@ missing registry entries and prune expired backups. It never touches a work tree
 
 import contextlib
 import os
-import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
@@ -72,7 +71,7 @@ def _cache_check(url: str, config: Config, env: Mapping[str, str], repair: bool)
         return Check("cache clone", subject, False, problem)
     try:
         with sync.central_lock(config, env, url):
-            shutil.rmtree(cache, ignore_errors=True)
+            gitops.remove_tree(cache)
             sync.refresh_central(config, env, url, refresh=True)
     except SteersyncError as exc:
         return Check("cache clone", subject, False, f"{problem}; rebuild failed: {exc}")

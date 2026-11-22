@@ -2,13 +2,12 @@
 
 import json
 import os
-import shutil
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
-from steersync import backups
+from steersync import backups, gitops
 from steersync.cli import main
 from steersync.config import Config
 from steersync.paths import backup_root, cache_repo_dir, registry_path
@@ -55,9 +54,9 @@ def test_damaged_cache_clone_is_rebuilt(
 ) -> None:
     cache = cache_repo_dir(config, dict(os.environ), str(central))
     git("checkout", "-q", "--detach", cwd=cache, env=env)
-    shutil.rmtree(cache / ".git" / "objects" / "pack", ignore_errors=True)
+    gitops.remove_tree(cache / ".git" / "objects" / "pack")
     for loose in (cache / ".git" / "objects").glob("[0-9a-f][0-9a-f]"):
-        shutil.rmtree(loose)
+        gitops.remove_tree(loose)
     code, checks = doctor()
     assert code == 5
     assert "cache clone" in problems(checks)
@@ -95,7 +94,7 @@ def test_missing_work_trees_and_old_backups(
     other.mkdir()
     git("init", "-q", str(other), cwd=tmp_path, env=env)
     assert CliRunner().invoke(main, ["fleet", "add", str(other)]).exit_code == 0
-    shutil.rmtree(other)
+    gitops.remove_tree(other)
     root = backup_root(dict(os.environ))
     old = root / "20200101T000000000000Z" / "x"
     old.mkdir(parents=True)
