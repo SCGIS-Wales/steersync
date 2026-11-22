@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-22
+
 ### Fixed
 
 - The Kiro `SessionStart` hook now runs steersync through `uvx --python ">=3.14"` pinned to
