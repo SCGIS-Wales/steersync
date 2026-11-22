@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-11-22
+
 Found by running the README guide against a real GitLab.com project: push options opened
 merge requests !1 (seed), !2 (pre-push hook of a teammate) and !3 (global scope).
 
