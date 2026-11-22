@@ -114,6 +114,19 @@ steersync push -c hooks -m "hooks: format terraform on save"
 steersync lint
 ```
 
+## Line endings
+
+steersync compares text files with line endings normalised, so a Windows checkout with
+`core.autocrlf` is never reported as a local edit. Files are still written byte for byte as
+they are in the central repository, so keep them LF there. Add a `.gitattributes` at the
+root of the central repository:
+
+```text
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+```
+
 ## Syncing `AGENTS.md`
 
 `AGENTS.md` sits at the repository root rather than under `.kiro/`. Add a collection with a

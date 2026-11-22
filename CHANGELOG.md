@@ -5,6 +5,59 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `steersync fleet`: every repository on the machine at once. `fleet status` shows, per
+  repository, what is to push and to pull, conflicts, open proposals and offline remotes,
+  with a stable `--json` document; each central repository is refreshed once per run.
+  `fleet push` and `fleet pull` act on a chosen set (`--repo`, `--state`, `--all`), one
+  merge request per repository, and one failure never stops the rest (exit code 5, with
+  the command to rerun each failure). On a terminal, bare `steersync fleet` is an
+  interactive overview with details, push, pull and refresh.
+- A registry of repositories in `$XDG_STATE_HOME/steersync/workspaces.json`, filled in by
+  `pull`, `push`, `status`, `init`, `setup` and the MCP server; `fleet scan`, `add`,
+  `remove`, `list` and `prune` manage it.
+- `fleet pull --overwrite-local` replaces local edits only after a typed confirmation and a
+  verified backup (copy, manifest of hashes and modes, verification, and a recheck of the
+  originals just before writing); `fleet restore` puts the files back. `steersync pull
+  --force` takes the same backup.
+- `fleet doctor [--repair]` checks the registry, work trees, sync records, cache clones,
+  cache locks and backups, and applies only safe repairs.
+- The read only `fleet_status` MCP tool.
+- GitLab API calls retry 429, 502, 503, 504 and a transient 404 with backoff, honour
+  `Retry-After` and print each retry (`gitlab.retries`, `gitlab.retry_statuses`,
+  `gitlab.retry_backoff_seconds`, `gitlab.retry_max_backoff_seconds`,
+  `gitlab.retry_not_found`). Creating a merge request is idempotent across retries. 401,
+  403 and 404 errors name the likely cause.
+- A `fleet` configuration section: `scan_max_depth`, `max_workers`,
+  `refresh_max_age_seconds`, `backup_keep_days`, `backup_max_bytes`.
+- rich and questionary are dependencies (rich 14 and 15 are supported); they load only for
+  `fleet` commands.
+
+### Changed
+
+- The workspace sync record moved from `.kiro/steersync.lock.json` to
+  `<git dir>/steersync/lock.json`, outside the work tree, so it never shows in
+  `git status`. An existing record is moved there by the first command that reads it, so
+  upgrading keeps the last sync state. The `paths.workspace_lock` setting no longer has an
+  effect; a configuration that still sets it loads with a warning.
+- **Breaking:** `steersync init` no longer writes the Kiro session hook and MCP entry into
+  the repository's `.kiro` by default, because `steersync setup` installs both once in
+  `~/.kiro`. Use `steersync init --kiro` to commit them per repository.
+- Sync records carry `schema_version: 2`; records with the older `version: 2` key still
+  load.
+- Git and GitLab share one retry loop (`steersync.retry`), and every retry is printed with
+  its reason and delay.
+- The README starts with installation and a quick start; the details follow, and every
+  link is absolute so the page renders on PyPI.
+
+### Fixed
+
+- A damaged sync record or registry is set aside as `*.corrupt-<time>` with a warning and
+  treated as absent, instead of failing the command.
+- A Windows checkout with CRLF line endings is no longer reported as locally modified: text
+  files are hashed with line endings normalised.
+
 ## [0.6.1] - 2026-11-22
 
 ### Fixed

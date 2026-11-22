@@ -1,18 +1,148 @@
 # steersync
 
-Sync the whole [Kiro](https://kiro.dev) `.kiro/` configuration (steering, specs, skills,
-agents, hooks, settings, the sandbox policy, workflow recipes, prompts, `AGENTS.md` and
-`.kiroignore` files) between developer machines and a central git repository. It targets Kiro
-IDE 1.5 and Kiro CLI 3.5 with the V3 agent harness, and reminds you when a machine is still
-on V2. A plain
-Python CLI runs from a git pre-push hook and shells out to the `git` binary, so your existing
-SSH agent or credential helper does the authentication. An MCP server and Kiro session hooks
-are optional layers on top of the same core.
+[![PyPI](https://img.shields.io/pypi/v/steersync)](https://pypi.org/project/steersync/)
+[![Python](https://img.shields.io/pypi/pyversions/steersync)](https://pypi.org/project/steersync/)
+[![CI](https://github.com/SCGIS-Wales/steersync/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/SCGIS-Wales/steersync/actions/workflows/ci.yml)
+[![Licence](https://img.shields.io/pypi/l/steersync)](https://github.com/SCGIS-Wales/steersync/blob/main/LICENSE)
 
-Kiro CLI has no built in command to import or sync its configuration from a remote
-repository; its guidance is to copy files from a central repository into `~/.kiro/` and
-`.kiro/`. steersync automates that in both directions for every *collection* it is
-configured with:
+Keep the [Kiro](https://kiro.dev) configuration of every repository (steering, specs, skills,
+agents, hooks, settings, prompts, workflow recipes, `AGENTS.md`, `.kiroignore`) in one central
+GitLab repository. `steersync pull` brings the merged configuration to your machine;
+`steersync push` proposes your changes as a merge request; `steersync fleet` shows and syncs
+every repository on the machine at once. It uses your existing git authentication and never
+overwrites a file you edited without asking.
+
+## Install
+
+Requires Python 3.14 or newer and git 2.18 or newer. [uv](https://docs.astral.sh/uv/)
+installs Python 3.14 for you when it is missing.
+
+```bash
+uv tool install --python 3.14 "steersync[mcp]"
+```
+
+Without uv: `pipx install "steersync[mcp]"` or `python3.14 -m pip install "steersync[mcp]"`.
+The `mcp` extra adds the MCP server for Kiro chat; leave it out for the command line only.
+To try it without installing: `uvx --python ">=3.14" steersync --help`.
+
+## Quick start
+
+### One repository
+
+```bash
+cd ~/code/my-service            # any git repository you work in
+steersync setup
+```
+
+`steersync setup` asks a few questions and does the rest. Nothing needs editing by hand, and
+it is safe to run again: it only adds what is missing.
+
+1. **git**: checks that git 2.18 or later is installed.
+2. **Central repository**: paste the GitLab page address
+   (`https://gitlab.example.com/platform/kiro-config`) or a clone URL. setup tries SSH, then
+   HTTPS, with `git ls-remote`, and explains what to fix when neither answers (an unknown
+   host key, a refused SSH key, a blocked port 22, no access).
+3. **Branch**: offers the repository's default branch (`master` when it cannot tell) and
+   confirms it exists. An empty project stops here with how to fix it.
+4. **Extra folders**: offers to sync folders under `.kiro` that are not synced by default,
+   such as `.kiro/notes` or `.kiro/plan`.
+5. **Configuration**: saves `~/.config/steersync/config.yaml` (the previous file is kept as
+   `config.yaml.bak`). It applies to every repository on the machine.
+6. **Kiro MCP server**: adds `steersync` to `~/.kiro/settings/mcp.json` only when no server
+   there runs steersync yet, under any name. Every other server is left exactly as it is; the
+   original is kept as `mcp.json.bak-steersync` and the result is read back before setup
+   reports success. A file that is not valid JSON is never touched.
+7. **Kiro session hook**: adds `~/.kiro/hooks/steersync.json`, so every Kiro session, in any
+   repository, starts by pulling the latest merged configuration.
+8. **This repository**: keeps the synced folders out of `git status`, installs the pre-push
+   hook that proposes your Kiro changes on `git push`, and shows what the first
+   `steersync push` would propose.
+
+For scripts: `steersync setup --yes --remote <url> [--branch <name>]` accepts every default;
+`--no-mcp`, `--no-session-hook` and `--no-project` skip a step.
+
+Then edit anything under `.kiro/`. On your next `git push`, or with `steersync push`, every
+collection is proposed to the central repository as one merge request. After it is merged,
+everyone gets it on their next Kiro session or `steersync pull`.
+
+### Every repository on the machine
+
+Every repository you run steersync in is remembered. To pick up the ones you set up before,
+scan your code folder once, then work with all of them together:
+
+```bash
+steersync fleet scan ~/code     # find and remember repositories set up for steersync
+steersync fleet                 # overview; on a terminal it asks what to push or pull
+```
+
+```text
+central: git@gitlab.example.com:platform/kiro-config.git @ 48686f7c (refreshed 1s ago)
+7 repositories, 4 need attention
+
+#   Repository             Project         State           To push    To pull        Note
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+1   ~/code/acme-both       acme/both       diverged        none       none, 1 both   none
+2   ~/code/acme-ahead      acme/ahead      local-ahead     +1 ~0 -0   none           none
+3   ~/code/acme-behind     acme/behind     central-ahead   none       +0 ~1 -0       none
+4   ~/code/acme-proposed   acme/proposed   proposed        +1 ~0 -0   none           kiro-config/acme/proposed
+                                                                                     /tester-70fa698b
+5   ~/code/acme-same       acme/same       in-sync         none       none           none
+6   ~/code/plain           none            unconfigured                              no origin remote to
+                                                                                     derive a project
+7   ~/code/acme-gone       none            missing                                   path no longer exists or
+                                                                                     is not a git work tree
+g   ~/.kiro (global)       global          central-ahead   none       +1 ~0 -0       none
+```
+
+```bash
+steersync fleet pull --all      # bring every repository up to date; local edits are kept
+steersync fleet push --state local-ahead   # one merge request per repository
+```
+
+See [Working across many repositories](https://github.com/SCGIS-Wales/steersync#working-across-many-repositories)
+for what each state means and how overwrites are protected.
+
+### Everyday commands
+
+| You want to | Run |
+|---|---|
+| Get the latest merged configuration | Nothing: each Kiro session pulls. Or `steersync pull`, or ask Kiro to "pull the kiro config". |
+| Share a change | Edit under `.kiro/`, then `git push` the project, or `steersync push`, or ask Kiro to "push my kiro config". |
+| See what differs | `steersync status` here, `steersync fleet status` everywhere. |
+| Find the merge request | `steersync mr` (needs a GitLab token in `GITLAB_TOKEN`). |
+| Check the setup | `steersync doctor`, and `steersync fleet doctor` for every repository. |
+| Validate the configuration | `steersync lint`. |
+| Replace your local edits with the central copy | `steersync pull --force`, or `steersync fleet pull --overwrite-local` (backed up first; undo with `steersync fleet restore`). |
+
+## Contents
+
+- [How it works](https://github.com/SCGIS-Wales/steersync#how-it-works)
+- [Collections](https://github.com/SCGIS-Wales/steersync#collections)
+- [Getting started with existing GitLab repositories](https://github.com/SCGIS-Wales/steersync#getting-started-with-existing-gitlab-repositories)
+- [Working across many repositories](https://github.com/SCGIS-Wales/steersync#working-across-many-repositories)
+- [Starting Kiro in any repository](https://github.com/SCGIS-Wales/steersync#starting-kiro-in-any-repository)
+- [Central repository layout](https://github.com/SCGIS-Wales/steersync#central-repository-layout)
+- [Commands](https://github.com/SCGIS-Wales/steersync#commands) and [exit codes](https://github.com/SCGIS-Wales/steersync#exit-codes)
+- [Configuration](https://github.com/SCGIS-Wales/steersync#configuration)
+- [Reliability](https://github.com/SCGIS-Wales/steersync#reliability)
+- [How pull decides what to write](https://github.com/SCGIS-Wales/steersync#how-pull-decides-what-to-write)
+- [Git hook](https://github.com/SCGIS-Wales/steersync#git-hook)
+- [Proposal branches and GitLab merge requests](https://github.com/SCGIS-Wales/steersync#proposal-branches-and-gitlab-merge-requests)
+- [Validation](https://github.com/SCGIS-Wales/steersync#validation)
+- [Kiro integration](https://github.com/SCGIS-Wales/steersync#kiro-integration)
+- [Verifying a release](https://github.com/SCGIS-Wales/steersync#verifying-a-release)
+- [Security](https://github.com/SCGIS-Wales/steersync#security)
+- [Development](https://github.com/SCGIS-Wales/steersync#development)
+
+## How it works
+
+Kiro has no built in command to import or sync its configuration from a remote repository;
+its guidance is to copy files from a central repository into `~/.kiro/` and `.kiro/`.
+steersync automates that in both directions for every *collection* it is configured with.
+It targets Kiro IDE 1.5 and Kiro CLI 3.5 with the V3 agent harness, and reminds you when a
+machine is still on V2. It is a plain Python CLI that shells out to the `git` binary, so your
+SSH agent or credential helper does the authentication; the MCP server and Kiro hooks are
+optional layers on the same core.
 
 | Direction | Command | What happens |
 |---|---|---|
@@ -47,7 +177,7 @@ patterns do not select are never touched on either side, which is why `settings`
 and `cli-settings` can share `.kiro/settings`. The repository wide collections skip
 `node_modules`, virtual environments, `dist`, `build` and `target` without walking them. Limit any
 command to some collections with `--collection NAME` (repeatable), list them with
-`steersync config collections`, and see [docs/central-layout.md](docs/central-layout.md) for
+`steersync config collections`, and see [docs/central-layout.md](https://github.com/SCGIS-Wales/steersync/blob/main/docs/central-layout.md) for
 a worked example of a full `.kiro/` tree in the central repository.
 
 Never synced, by design: workspace permissions (`~/.kiro/workspace-roots/<hash>/permissions.yaml`,
@@ -57,68 +187,6 @@ kept per user so that a cloned repository cannot inject permission rules) and
 `managed-settings.json` and knowledge base indexes (the declarations in agent `resources`
 are synced with the agent). Every path above comes from
 the Kiro configuration scopes documentation; a new kind of content is one YAML block.
-
-## Install
-
-Requires Python 3.14 or newer and git 2.18 or newer. Every
-[GitHub release](https://github.com/SCGIS-Wales/steersync/releases) carries the wheel, the
-sdist and a `SHA256SUMS` file, with signed build provenance.
-
-```bash
-VERSION=0.6.1
-uv tool install "https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
-# or run it without installing
-uvx --python ">=3.14" steersync --help
-uvx --python ">=3.14" --from "steersync[mcp]" steersync-mcp
-# with the MCP server
-uv tool install "steersync[mcp] @ https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
-# verify where the wheel came from
-gh attestation verify "steersync-${VERSION}-py3-none-any.whl" --repo SCGIS-Wales/steersync
-```
-
-Every release is also published to [PyPI](https://pypi.org/project/steersync/) through
-trusted publishing, so `uv tool install steersync` (or `steersync[mcp]`) installs the same
-files that the GitHub release carries.
-
-## Quick start
-
-```bash
-uv tool install --python 3.14 "steersync[mcp]"
-cd ~/code/my-service            # any git repository you work in
-steersync setup
-```
-
-`steersync setup` asks a few questions and does the rest. Nothing needs editing by hand,
-and it is safe to run again: it only adds what is missing.
-
-1. **git**: checks that git 2.18 or later is installed.
-2. **Central repository**: paste the GitLab page address
-   (`https://gitlab.example.com/platform/kiro-config`) or a clone URL. setup tries the SSH
-   URL, then HTTPS, with `git ls-remote`, and explains what to fix when neither answers (an
-   unknown host key, a refused SSH key, a blocked port 22, no access).
-3. **Branch**: offers the repository's default branch (`master` when it cannot tell) and
-   confirms it exists with git. An empty project stops here with how to fix it.
-4. **Extra folders**: offers to sync folders under `.kiro` that steersync does not sync by
-   default, such as `.kiro/notes` or `.kiro/plan`.
-5. **Configuration**: saves `~/.config/steersync/config.yaml` (the previous file is kept as
-   `config.yaml.bak`). It applies to every repository on the machine.
-6. **Kiro MCP server**: adds `steersync` to `~/.kiro/settings/mcp.json` only when no server
-   there runs steersync yet, under any name. Every other server is left exactly as it is; the
-   original is kept as `mcp.json.bak-steersync`, and the result is read back and compared
-   before setup reports success. A file that is not valid JSON is never touched.
-7. **Kiro session hook**: adds `~/.kiro/hooks/steersync.json`, so every Kiro session, in any
-   repository, starts by pulling the latest merged configuration.
-8. **This repository**: adds the synced folders to `.git/info/exclude`, installs the
-   pre-push hook that proposes your Kiro changes on `git push`, and shows what the first
-   `steersync push` would propose.
-
-For scripts: `steersync setup --yes --remote <url> [--branch <name>]` accepts every default;
-`--no-mcp`, `--no-session-hook` and `--no-project` skip a step.
-
-Then edit anything under `.kiro/`. On your next `git push`, or with `steersync push`, every
-collection is proposed to the central repository as one merge request. Run
-`steersync doctor` at any time to see what steersync has resolved, and `steersync lint` to
-validate the configuration against Kiro's rules and best practices.
 
 ## Getting started with existing GitLab repositories
 
@@ -141,7 +209,7 @@ In GitLab, create a project for the shared configuration, for example `platform/
   they can push proposal branches (`kiro-config/<group>/<project>/<user>-<hash>`); nobody
   pushes to `main` directly.
 - Leave it otherwise empty: the first push creates the layout (see
-  [Central repository layout](#central-repository-layout)). If you adopt a repository that
+  [Central repository layout](https://github.com/SCGIS-Wales/steersync#central-repository-layout)). If you adopt a repository that
   already has Kiro files, they must follow that layout: `global/<collection>/` and
   `projects/<group>/<project>/<collection>/`.
 
@@ -158,7 +226,7 @@ key or credential helper); steersync never asks for or stores a password. setup 
 central repository (paste its GitLab address), confirms the branch with git, saves the
 configuration for every repository on the machine, registers the MCP server and the session
 hook in `~/.kiro` without disturbing anything already there, and prepares the repository you
-run it in (see [Quick start](#quick-start) for each step). It replaces steps 3 and 5 below.
+run it in (see [Quick start](https://github.com/SCGIS-Wales/steersync#quick-start) for each step). It replaces steps 3 and 5 below.
 
 ### 3. Optional: share the configuration through the project
 
@@ -189,8 +257,8 @@ setup prepared the repository you ran it in. In every other repository run
 `steersync setup --yes` (it reuses the saved answers) or just `steersync init --hook`. This
 adds the synced directories to `.git/info/exclude` (new files there are no longer offered to
 the project repository; files you already committed stay tracked) and installs the
-pre-push hook. When `~/.kiro` already has the steersync session hook and MCP server, nothing
-is added to the repository's own `.kiro`.
+pre-push hook. The session hook and MCP server come from `~/.kiro`, so nothing is written
+into the repository's own `.kiro` unless you add `--kiro`.
 
 ### 6. Seed the central repository
 
@@ -264,6 +332,7 @@ sessions are never synced.
 | Find the merge request | `steersync mr` (needs `GITLAB_TOKEN`). |
 | See what differs | `steersync status`. |
 | Overwrite your local edits with the central copy | `steersync pull --force`. |
+| See every repository at once | `steersync fleet` (see [Working across many repositories](https://github.com/SCGIS-Wales/steersync#working-across-many-repositories)). |
 
 If something looks wrong, `steersync doctor` shows the configuration, the remote, the
 project slug, every directory and the Kiro CLI harness.
@@ -276,18 +345,93 @@ project slug, every directory and the Kiro CLI harness.
 | git operations time out, `ssh: connect to host gitlab.com port 22` | The network blocks SSH on port 22. GitLab.com also serves SSH on port 443: set `url: ssh://git@altssh.gitlab.com:443/<group>/<project>.git` and add `altssh.gitlab.com` to `allowed_hosts` (accept its host key once with `ssh -T -p 443 git@altssh.gitlab.com`; it is the same key as `gitlab.com`). HTTPS with a credential helper works too. |
 | `remote host ... is not in remote.allowed_hosts` | Add the host of `remote.url` to `allowed_hosts`. |
 | The first pull reports a file as locally modified | Your copy differs from the merged one, for example a file still tracked by the project in an older version. Compare, then `steersync pull --force` to take the central copy or `steersync push` to propose yours. |
-| `push` stops with lint errors | The errors name each file and rule; fix them (`steersync migrate-hooks --write`, `kiro-cli agent upgrade .kiro/agents`) or see [Validation](#validation). |
+| `push` stops with lint errors | The errors name each file and rule; fix them (`steersync migrate-hooks --write`, `kiro-cli agent upgrade .kiro/agents`) or see [Validation](https://github.com/SCGIS-Wales/steersync#validation). |
+
+## Working across many repositories
+
+`steersync fleet` answers "which of my repositories have Kiro changes that are not pushed,
+and which are behind the central repository?" for every repository on the machine, and
+pushes or pulls a chosen set in one go.
+
+**Which repositories.** Every repository where you run `pull`, `push`, `status`, `init` or
+`setup`, or where Kiro starts the MCP server, is remembered in
+`$XDG_STATE_HOME/steersync/workspaces.json` (default `~/.local/state/steersync/`). Add the
+ones you set up earlier with `steersync fleet scan ~/code` (searches four folder levels by
+default; `--no-add` only lists them) or `steersync fleet add PATH`. `fleet list` shows the
+registry, `fleet remove PATH` forgets a repository without touching its files, and
+`fleet prune` forgets the ones that no longer exist.
+
+**States.** Each repository is compared three ways: your files, the central default
+branch, and the record of the last sync. Files that only line endings separate (a Windows
+checkout with `core.autocrlf`) count as equal.
+
+| State | Meaning | What to do |
+|---|---|---|
+| `diverged` | A file changed both locally and centrally since the last sync. | `fleet pull` keeps your edit; compare, then push yours or overwrite with the central copy. |
+| `local-ahead` | You have changes the central repository does not. | `fleet push`. |
+| `central-ahead` | The central repository has merged changes you do not have. | `fleet pull`. |
+| `proposed` | Your changes are already on a proposal branch or merge request. | Get it reviewed and merged. |
+| `in-sync` | Nothing differs. | Nothing. |
+| `unconfigured` | steersync cannot work out the project, for example no `origin` remote. | `steersync doctor` in that repository. |
+| `missing` | The folder is gone or is no longer a git work tree. | `fleet prune`. |
+| `error` | Comparing this repository failed; the note says why. | Fix it; every other repository is still shown. |
+
+The `~/.kiro` row (`g`) is your global configuration. Each central repository is refreshed
+once per run, not once per repository; `--no-refresh` uses the cached copy, and by default
+a copy younger than `fleet.refresh_max_age_seconds` (300) is reused. When the central
+repository cannot be reached the table says `offline` and shows the cached copy; pushes and
+pulls for those rows are refused until it answers again.
+
+**Pushing and pulling.** On a terminal, bare `steersync fleet` shows the table and asks what
+to do: details of one repository, push, pull, refresh or quit. Without a terminal it prints
+the table. The same actions take flags for scripts:
+
+```bash
+steersync fleet push --repo ~/code/a --repo ~/code/b      # or --state local-ahead, or --all
+steersync fleet pull --all --yes
+steersync fleet status --json                            # the stable machine readable view
+```
+
+Each repository gets its own proposal branch and merge request, exactly as `steersync push`
+in that repository would. One failure never stops the others: the summary lists what was
+done, skipped and failed, each failure with the command to rerun it, and the exit code is 5
+when anything failed.
+
+**Local edits are never lost.** `fleet pull` keeps every file you edited locally and says
+so. `--overwrite-local` (or choosing "overwrite" in the interactive flow) replaces them
+with the central versions, but only after you type `overwrite` (or `overwrite 3` for three
+repositories) and only after a verified backup:
+
+1. every file about to be replaced or deleted is copied to
+   `~/.local/state/steersync/backups/<UTC time>/<project>/` with a `manifest.json` of
+   hashes, modes and sizes, and the copy is checked against it;
+2. just before writing, the originals are hashed again, and a file that changed since the
+   backup stops the overwrite;
+3. any failure, such as a full disk, stops the overwrite and leaves your files untouched.
+
+`steersync fleet restore --list` shows the backups and `steersync fleet restore STAMP`
+puts the files back (the backup is verified first). Backups older than
+`fleet.backup_keep_days` (14) or beyond `fleet.backup_max_bytes` (512 MiB) are pruned by
+`steersync fleet doctor --repair`.
+
+**Health check.** `steersync fleet doctor` checks the registry, every work tree, every sync
+record, the cache clones (`git fsck`), the cache locks and the backups. `--repair` applies
+the safe fixes: a damaged registry or sync record is set aside (renamed, never deleted) and
+rebuilt, a broken cache clone is cloned again, old backups are pruned. It never changes a
+work tree. Details are in [docs/fleet.md](https://github.com/SCGIS-Wales/steersync/blob/main/docs/fleet.md).
 
 ## Starting Kiro in any repository
 
 The goal is that anyone who clones a project and starts Kiro gets the whole configuration
-without asking for it. `steersync init` makes that true for a repository:
+without asking for it. `steersync setup` makes that true once per machine, in `~/.kiro`, so
+it covers every repository; teams that prefer to commit the pieces into each project use
+`steersync init --kiro` instead:
 
 | Piece | What it does | Written by |
 |---|---|---|
-| `.kiro/hooks/steersync.json` | A V3 `SessionStart` hook running `steersync pull --quiet --best-effort` (through `uvx`, pinned to the installed version), so the session starts from the latest merged configuration. Bounded git time; never fails the session. | `steersync init` (or `steersync kiro-hook --write`) |
-| `.kiro/settings/mcp.json` | The steersync MCP server, so "pull the kiro config", "push my steering", "raise an MR for the kiro config" or "validate the agents" work in chat. | `steersync init` (merged into an existing file, other servers kept) |
-| `.git/hooks/pre-push` | Proposes `.kiro/` on every push of the project. | `steersync init --hook` |
+| `hooks/steersync.json` | A V3 `SessionStart` hook running `steersync pull --quiet --best-effort` (through `uvx`, pinned to the installed version), so the session starts from the latest merged configuration. Bounded git time; never fails the session. | `steersync setup` in `~/.kiro`, or `steersync init --kiro` (or `steersync kiro-hook --write`) in the repository |
+| `settings/mcp.json` | The steersync MCP server, so "pull the kiro config", "push my steering", "raise an MR for the kiro config" or "validate the agents" work in chat. | `steersync setup` in `~/.kiro`, or `steersync init --kiro` in the repository (merged into an existing file, other servers kept) |
+| `.git/hooks/pre-push` | Proposes `.kiro/` on every push of the project. | `steersync setup`, or `steersync init --hook` |
 
 Kiro then loads what it finds: always on steering in every session, `fileMatch`, `manual`
 and `auto` steering on CLI V3, skills on demand, prompts as slash commands, hooks and
@@ -330,7 +474,7 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 | `steersync status [-c NAME] [--json]` | Show adds, updates, deletes and local edits per collection in both directions. |
 | `steersync lint [PATHS] [-c NAME] [--profile P] [--json]` | Validate every collection with its profile, or explicit paths. Exit code 4 on errors. |
 | `steersync mr [--branch NAME] [--title T] [-c NAME] [--json]` | Open, or find, the GitLab merge request for the pushed proposal branch. Needs the token in `GITLAB_TOKEN` (configurable). |
-| `steersync init [--write-config] [--hook] [--no-exclude] [--no-kiro] [--mcp-command PATH]` | Prepare a repository: excludes, git hook, Kiro session hook and MCP server entry. |
+| `steersync init [--write-config] [--hook] [--no-exclude] [--kiro] [--mcp-command PATH]` | Prepare a repository: excludes and git hook; `--kiro` also writes the Kiro session hook and MCP server entry into its `.kiro`. |
 | `steersync install-hook [--force]` | Install or update the chaining pre-push hook. |
 | `steersync kiro-hook [--engine v2\|v3] [--write]` | Render a Kiro hook that runs `steersync pull --quiet` at session start. |
 | `steersync migrate-hooks [--write]` | Convert `*.kiro.hook` files and CLI 2.x inline agent hooks into `.kiro/hooks/*.json`. Dry run by default; never overwrites or deletes. |
@@ -339,15 +483,39 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 | `steersync mcp` (or `steersync-mcp`) | Run the MCP stdio server. |
 | `steersync config show\|validate\|default\|collections` | Inspect configuration and the resolved collection directories. |
 | `steersync doctor` | Report git version, resolved paths, remote, project slug and the Kiro CLI harness. |
+| `steersync fleet` | Every registered repository: a table, then (on a terminal) what to push or pull. |
+| `steersync fleet status [--json] [--refresh\|--no-refresh] [--state S]` | The table, or the stable JSON document. |
+| `steersync fleet push [--repo PATH]... [--state S]... [--all] [--dry-run] [--yes] [--json]` | Propose several repositories, one merge request each. |
+| `steersync fleet pull [--repo PATH]... [--state S]... [--all] [--overwrite-local] [--dry-run] [--yes] [--json]` | Pull several repositories; local edits are kept unless `--overwrite-local` (typed confirmation, verified backup). |
+| `steersync fleet restore [STAMP] [--list] [--repo PATH] [--yes]` | Put back what a forced pull replaced. |
+| `steersync fleet scan ROOTS... [--max-depth N] [--no-add]`, `fleet add\|remove\|list\|prune` | Manage which repositories are registered. |
+| `steersync fleet doctor [--repair] [--json]` | Check the registry, work trees, sync records, cache clones, locks and backups. |
 
 Global options: `--config PATH`, `--log-level`, `--log-format text|json`, `--quiet`.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Success (also `--best-effort` failures, which only warn). |
+| 1 | Unexpected error. |
+| 2 | Configuration error, or a command line usage error. |
+| 3 | git failed. |
+| 4 | Lint errors. |
+| 5 | Conflicting changes, a backup that could not be taken, or a `fleet` command where at least one repository failed. |
+| 6 | A path escaped the directory it must stay in. |
+| 7 | Central content exceeds the safety limits. |
+| 8 | Timed out waiting for another steersync process. |
+| 9 | GitLab API error or missing token. |
+| 10 | `v3-status --strict`: a Kiro V3 reminder applies. |
+| 130 | Interrupted (Ctrl-C); a `fleet` summary still lists what completed. |
 
 ## Configuration
 
 Configuration is layered: packaged defaults, then one YAML file, then environment variables.
 The file is found in this order: `--config`, `$STEERSYNC_CONFIG`, `<repo>/.kiro/steersync.yaml`,
 `$XDG_CONFIG_HOME/steersync/config.yaml` (default `~/.config/steersync/config.yaml`). See
-[`steersync.example.yaml`](steersync.example.yaml) for every key and `steersync config default`
+[`steersync.example.yaml`](https://github.com/SCGIS-Wales/steersync/blob/main/steersync.example.yaml) for every key and `steersync config default`
 for the packaged defaults.
 
 | Variable | Overrides |
@@ -361,6 +529,7 @@ for the packaged defaults.
 | `STEERSYNC_GITLAB_API_URL`, `STEERSYNC_GITLAB_PROJECT` | `gitlab.api_url`, `gitlab.project` |
 | `GITLAB_TOKEN` (name set by `gitlab.token_env`) | Token with the `api` scope used only for merge requests |
 | `KIRO_HOME` | Location of `~/.kiro`, as honoured by kiro-cli |
+| `XDG_STATE_HOME` | Where the fleet registry and backups live (`$XDG_STATE_HOME/steersync`, default `~/.local/state/steersync`) |
 
 Unknown keys, invalid patterns, unsafe paths and malformed push options are rejected at load
 time with a precise message. The pre 0.2 keys `paths.workspace_steering` and
@@ -407,11 +576,16 @@ share a directory on either side.
 | Central and local content larger than the limits is refused. | `sync.max_files`, `sync.max_total_bytes` |
 | When the central repository cannot be reached and a cache clone exists, `pull` and `status` apply the cached copy of the default branch and say so (`offline` in JSON output). Permanent errors such as authentication failures still fail, and `push` never uses the cache. | `sync.offline_fallback` |
 | `pull --best-effort` (the Kiro session hook) runs with the hook time budget, so a slow server never stalls a session start. | `hook.timeout_seconds` |
+| GitLab API calls retry 429, 502, 503, 504 and a transient 404 with backoff, honouring `Retry-After`, and print each retry. Creating a merge request is idempotent: a retry first looks for the one an earlier attempt may have opened. | `gitlab.retries`, `gitlab.retry_statuses`, `gitlab.retry_backoff_seconds`, `gitlab.retry_max_backoff_seconds`, `gitlab.retry_not_found` |
+| A damaged sync record or fleet registry is renamed aside (`*.corrupt-<time>`) and treated as absent, so the next pull keeps every local file and reports it, instead of failing or overwriting. | automatic |
+| A forced overwrite takes a verified backup first and aborts if anything changed meanwhile. | `fleet.backup_keep_days`, `fleet.backup_max_bytes` |
 
 ## How pull decides what to write
 
-steersync records the hash of every file it wrote, per collection, in a lock file
-(`<git dir>/steersync/lock.json` for a workspace, outside the work tree, and `~/.kiro/steersync.lock.json` globally).
+steersync records the hash of every file it wrote, per collection, in a sync record
+(`<git dir>/steersync/lock.json` for a workspace, so it never shows up in `git status`, and
+`~/.kiro/steersync.lock.json` globally). Text files are compared with line endings
+normalised, so a CRLF checkout is not a local edit.
 Version 1 lock files written by steersync 0.1 are read as the steering collection. On the
 next pull:
 
@@ -443,7 +617,7 @@ Teams that already use [pre-commit](https://pre-commit.com) can use the publishe
 default_install_hook_types: [pre-commit, pre-push]
 repos:
   - repo: https://github.com/SCGIS-Wales/steersync
-    rev: v0.6.1
+    rev: v0.7.0
     hooks:
       - id: steersync-push
       - id: steersync-lint
@@ -504,17 +678,18 @@ resource that loads everything at startup, inline agent hooks on CLI 3.0, a hook
 15 minute timeout, a skill name that is not kebab case, an `mcp.json` with a home directory
 path, more than 48 KiB of always on steering, missing `product.md`, `tech.md` and
 `structure.md`. Every rule, its severity and the documentation page it comes from are listed
-in [docs/validation.md](docs/validation.md); thresholds live under `lint.practice_limits`
+in [docs/validation.md](https://github.com/SCGIS-Wales/steersync/blob/main/docs/validation.md); thresholds live under `lint.practice_limits`
 and `lint.practices: false` turns the warnings off.
 
 ## Kiro integration
 
-**Session hook (V3).** `steersync init` (or `steersync kiro-hook --write`) creates
-`.kiro/hooks/steersync.json` with a `SessionStart` trigger that runs
+**Session hook (V3).** `steersync setup` creates `~/.kiro/hooks/steersync.json`
+(`steersync init --kiro` or `steersync kiro-hook --write` create `.kiro/hooks/steersync.json`
+in a repository) with a `SessionStart` trigger that runs
 `steersync pull --quiet --best-effort` through
 `uvx --quiet --python ">=3.14" --from "steersync==<version>"`, so it never depends on which
-`steersync` comes first on Kiro's `PATH`. Run `steersync init` again after upgrading to move
-the pin. For CLI 2.x agents paste the output of
+`steersync` comes first on Kiro's `PATH`. Run `steersync setup --yes` again after upgrading
+to move the pin. For CLI 2.x agents paste the output of
 `steersync kiro-hook --engine v2` into the agent's `hooks` block. Field reports say Kiro hooks
 fire only in headless runs or with a custom agent active, so treat them as a convenience and
 keep the git hook as the dependable trigger.
@@ -529,7 +704,8 @@ files. When a reminder applies, run `kiro-cli settings chat.agentEngine v3`, sta
 chat, so they use no Kiro credits, and a reminder never fails a sync. Set
 `STEERSYNC_NO_V3_REMINDER=1` to silence the session hook reminder.
 
-**MCP server.** `steersync init` registers the server in `.kiro/settings/mcp.json`
+**MCP server.** `steersync setup` registers the server in `~/.kiro/settings/mcp.json`
+(`steersync init --kiro` in a repository's `.kiro/settings/mcp.json`)
 (`steersync mcp-config` prints the fragment). It runs through
 `uvx --python ">=3.14" --from "steersync[mcp]==<version>" steersync mcp`, so nothing needs
 installing (the Python constraint matters: uvx otherwise uses its default interpreter, and the
@@ -552,6 +728,7 @@ which request, so plain sentences work:
 | "what is synced and where" | `list_kiro_collections` |
 | "is steersync set up", "why does the sync fail" | `doctor_kiro_config` |
 | "am I on Kiro V3", "do my agents need upgrading" | `kiro_v3_status` |
+| "which repos have unpushed kiro changes", "fleet status" | `fleet_status` (read only) |
 
 Every tool accepts a `collections` list. Kiro does not pass the shell's `PATH`,
 `SSH_AUTH_SOCK`, proxy variables or `GITLAB_TOKEN` to MCP servers, so the rendered entry
@@ -564,9 +741,21 @@ default, so list only the always on steering files in `resources` and reference 
 at startup and defeats the `fileMatch`, `manual` and `auto` inclusion modes. On CLI 2.x list
 the documents you need explicitly.
 
+## Verifying a release
+
+Every [GitHub release](https://github.com/SCGIS-Wales/steersync/releases) carries the wheel,
+the sdist and a `SHA256SUMS` file, with signed build provenance, and the same files are
+published to [PyPI](https://pypi.org/project/steersync/) through trusted publishing.
+
+```bash
+VERSION=0.7.0
+uv tool install "steersync[mcp] @ https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
+gh attestation verify "steersync-${VERSION}-py3-none-any.whl" --repo SCGIS-Wales/steersync
+```
+
 ## Security
 
-See [SECURITY.md](SECURITY.md). In short: no credentials of its own, no shell, validated remote
+See [SECURITY.md](https://github.com/SCGIS-Wales/steersync/blob/main/SECURITY.md). In short: no credentials of its own, no shell, validated remote
 URLs with an optional host allow list, path containment for every write, central symlinks never
 followed, git hooks disabled in the cache, secret scanning before a push, recursion guards in
 hooks, redacted logs, SHA pinned actions, locked and audited dependencies, signed provenance on
@@ -580,7 +769,7 @@ uv run pytest --cov
 uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/architecture.md](docs/architecture.md).
+See [CONTRIBUTING.md](https://github.com/SCGIS-Wales/steersync/blob/main/CONTRIBUTING.md) and [docs/architecture.md](https://github.com/SCGIS-Wales/steersync/blob/main/docs/architecture.md).
 
 ## Licence
 
