@@ -333,3 +333,48 @@ def test_same_remote() -> None:
     assert sync._same_remote("git@h:a/b.git", "ssh://git@h/a/b")
     assert not sync._same_remote("git@h:a/b.git", "git@other:a/b.git")
     assert not sync._same_remote("", "git@h:a/b.git")
+
+
+def test_project_slug_ignores_insteadof_rewrites(
+    config: Config, env: dict[str, str], project: Path
+) -> None:
+    """Mirrors and protocol rewrites must not change which project directory is synced."""
+    from tests.conftest import PROJECT_SLUG, git
+
+    git(
+        "config",
+        "url.file:///srv/mirror/.insteadOf",
+        "ssh://git@gitlab.example.com/",
+        cwd=project,
+        env=env,
+    )
+    rewritten = git("remote", "get-url", "origin", cwd=project, env=env)
+    assert rewritten.startswith("file:///srv/mirror/")
+    assert sync.resolve_project(config, workspace_root=project, env=env, remote_url=None) == (
+        PROJECT_SLUG
+    )
+    # The pre-push hook receives the rewritten URL; it maps back to origin.
+    from_hook = sync.resolve_project(config, workspace_root=project, env=env, remote_url=rewritten)
+    assert from_hook == PROJECT_SLUG
+    # A URL that belongs to no remote is used as given.
+    other = sync.resolve_project(
+        config, workspace_root=project, env=env, remote_url="git@h.example.com:team/tool.git"
+    )
+    assert other == "team/tool"
+
+
+def test_push_lint_error_names_files_and_rules(
+    config: Config, env: dict[str, str], project: Path
+) -> None:
+    from steersync.errors import LintError
+
+    hooks = project / ".kiro" / "hooks"
+    hooks.mkdir(parents=True)
+    for index in range(12):
+        (hooks / f"bad{index:02d}.json").write_text('{"hooks": []}\n')
+    with pytest.raises(LintError) as caught:
+        sync.push(config, workspace_root=project, env=env)
+    message = str(caught.value)
+    assert "hooks/bad00.json" in message
+    assert "[hook-schema]" in message
+    assert "and 2 more" in message

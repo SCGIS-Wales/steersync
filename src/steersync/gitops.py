@@ -199,10 +199,42 @@ def git_dir(config: Config, repo: Path, env: Mapping[str, str] | None = None) ->
 def remote_url(
     config: Config, repo: Path, name: str = "origin", env: Mapping[str, str] | None = None
 ) -> str | None:
+    """The URL configured for remote ``name``, before ``url.<base>.insteadOf`` rewriting.
+
+    The project slug comes from this URL, so a mirror or protocol rewrite in the user's git
+    configuration does not change which project directory is synced.
+    """
+    configured = run_git(
+        config, ["config", "--get", f"remote.{name}.url"], cwd=repo, env=env, check=False
+    )
+    if configured.returncode == 0 and configured.stdout.strip():
+        return configured.stdout.strip()
     result = run_git(config, ["remote", "get-url", name], cwd=repo, env=env, check=False)
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def remote_for_url(
+    config: Config, repo: Path, url: str, env: Mapping[str, str] | None = None
+) -> str | None:
+    """Name of the remote whose configured or rewritten URL is ``url``.
+
+    git hands a pre-push hook the URL after ``insteadOf`` rewriting; this maps it back to
+    the remote, whose configured URL then gives the project slug.
+    """
+    names = run_git(config, ["remote"], cwd=repo, env=env, check=False)
+    if names.returncode != 0:
+        return None
+    for name in names.stdout.split():
+        candidates = {remote_url(config, repo, name, env=env)}
+        for args in (["remote", "get-url", name], ["remote", "get-url", "--push", name]):
+            result = run_git(config, args, cwd=repo, env=env, check=False)
+            if result.returncode == 0:
+                candidates.add(result.stdout.strip())
+        if url in candidates:
+            return name
+    return None
 
 
 def config_value(
