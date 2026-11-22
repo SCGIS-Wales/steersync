@@ -1,0 +1,41 @@
+{
+  "checked": 6,
+  "findings": [
+    {
+      "path": "01-bad.md",
+      "rule": "auto-requires-metadata",
+      "severity": "error",
+      "line": 2
+    },
+    {
+      "path": "01-bad.md",
+      "rule": "auto-requires-metadata",
+      "severity": "error",
+      "line": 2
+    },
+    {
+      "path": "01-bad.md",
+      "rule": "steering-globs-key",
+      "severity": "warning",
+      "line": 2
+    },
+    {
+      "path": "01-bad.md",
+      "rule": "steering-numeric-prefix",
+      "severity": "warning",
+      "line": null
+    },
+    {
+      "path": "01-bad.md",
+      "rule": "unknown-key",
+      "severity": "warning",
+      "line": 2
+    },
+    {
+      "path": "sometimes.md",
+      "rule": "inclusion-value",
+      "severity": "error",
+      "line": 2
+    }
+  ]
+}

@@ -28,7 +28,11 @@ uv run bandit -c pyproject.toml -r src -ll
   hard coded in the source.
 - Every git interaction goes through `steersync.gitops.run_git`. Never call a shell.
 - New behaviour needs tests. Integration tests use real local git repositories (see
-  `tests/conftest.py`), not mocks.
+  `tests/conftest.py`), not mocks. Lint rule changes show up in the golden files under
+  `tests/golden/`; regenerate them with `STEERSYNC_UPDATE_GOLDEN=1 uv run pytest
+  tests/test_golden.py` and review the diff. Property tests in `tests/test_properties.py`
+  use hypothesis. Tests that need POSIX file semantics carry `@posix_only`, because CI also
+  runs on Windows.
 - Update `CHANGELOG.md` under Unreleased.
 
 ## Releasing

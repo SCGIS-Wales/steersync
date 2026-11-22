@@ -1,0 +1,11 @@
+{
+  "checked": 1,
+  "findings": [
+    {
+      "path": "cli.json",
+      "rule": "cli-settings-global-only",
+      "severity": "error",
+      "line": null
+    }
+  ]
+}

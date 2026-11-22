@@ -9,7 +9,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from importlib import resources
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -138,8 +138,7 @@ class RemoteConfig(_Strict):
     @field_validator("global_dir", "projects_dir")
     @classmethod
     def _relative_dir(cls, value: str) -> str:
-        parts = Path(value).parts
-        if Path(value).is_absolute() or ".." in parts or not parts:
+        if _escapes(value) or not PurePosixPath(value).parts:
             msg = "must be a relative directory inside the repository"
             raise ValueError(msg)
         return value.strip("/")
@@ -230,9 +229,25 @@ class BranchConfig(_Strict):
         return head.format(project=project) + "*"
 
 
+def _escapes(value: str) -> bool:
+    """True for a path that is absolute or climbs out, by POSIX or Windows rules.
+
+    Checked under both rules on every platform, so ``/abs`` is refused on Windows and
+    ``C:\\abs`` on Linux: a configuration file is shared between machines.
+    """
+    posix, windows = PurePosixPath(value), PureWindowsPath(value)
+    return (
+        posix.is_absolute()
+        or bool(windows.drive)
+        or windows.root != ""
+        or ".." in posix.parts
+        or ".." in windows.parts
+    )
+
+
 def _relative_path(value: str) -> str:
     """Validate a path that must stay inside its base directory."""
-    if Path(value).is_absolute() or ".." in Path(value).parts or not value.strip():
+    if _escapes(value) or not value.strip():
         msg = "must be a relative path without parent references"
         raise ValueError(msg)
     return value.strip().strip("/")

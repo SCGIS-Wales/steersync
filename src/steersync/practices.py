@@ -319,7 +319,8 @@ def hook_findings(
                     "asynchronously",
                 )
             )
-        if hook.get("trigger") in {"Stop", "SessionStart"} and hook.get("matcher"):
+        trigger = hook.get("trigger")
+        if isinstance(trigger, str) and trigger in {"Stop", "SessionStart"} and hook.get("matcher"):
             findings.append(
                 Finding(
                     path,

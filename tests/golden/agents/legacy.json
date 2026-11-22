@@ -1,0 +1,19 @@
+{
+  "name": "legacy",
+  "tools": [
+    "fs_read",
+    "use_aws"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ],
+  "toolsSettings": {},
+  "keyboardShortcut": "ctrl+l",
+  "hooks": {
+    "agentSpawn": [
+      {
+        "command": "echo hi"
+      }
+    ]
+  }
+}

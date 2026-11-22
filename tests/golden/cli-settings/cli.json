@@ -1,0 +1,6 @@
+{
+  "chat.defaultAgent": "reviewer",
+  "chat": {
+    "agentEngine": "v3"
+  }
+}

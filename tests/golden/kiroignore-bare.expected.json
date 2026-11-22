@@ -1,0 +1,17 @@
+{
+  "checked": 1,
+  "findings": [
+    {
+      "path": ".kiroignore",
+      "rule": "kiroignore-secrets",
+      "severity": "warning",
+      "line": null
+    },
+    {
+      "path": ".kiroignore",
+      "rule": "kiroignore-secrets",
+      "severity": "warning",
+      "line": null
+    }
+  ]
+}

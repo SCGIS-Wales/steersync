@@ -1,0 +1,11 @@
+{
+  "checked": 2,
+  "findings": [
+    {
+      "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.md",
+      "rule": "prompt-name-length",
+      "severity": "warning",
+      "line": null
+    }
+  ]
+}

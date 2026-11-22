@@ -10,9 +10,10 @@ import os
 import random
 import re
 import shutil
+import stat
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlsplit
@@ -480,11 +481,18 @@ def reset_cache_clone(
     _reset_to_remote(config, cache_dir=cache_dir, env=env)
 
 
+def _clear_readonly(function: Callable[..., object], path: str, _: BaseException) -> None:
+    """``rmtree`` error handler: git writes its objects read only, which Windows refuses to
+    delete, so clear the read only bit and retry once."""
+    os.chmod(path, stat.S_IWRITE)  # noqa: PTH101 - rmtree hands over a str path
+    function(path)
+
+
 def _remove_cache_dir(cache_dir: Path) -> None:
     if cache_dir.is_symlink() or cache_dir.is_file():
         cache_dir.unlink()
     elif cache_dir.exists():
-        shutil.rmtree(cache_dir)
+        shutil.rmtree(cache_dir, onexc=_clear_readonly)
 
 
 def head_commit(config: Config, repo: Path, env: Mapping[str, str] | None = None) -> str:

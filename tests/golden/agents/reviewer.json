@@ -1,0 +1,19 @@
+{
+  "name": "reviewer",
+  "description": "Reviews diffs",
+  "tools": [
+    "read",
+    "shell"
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "shell",
+        "match": [
+          "git diff*"
+        ],
+        "effect": "allow"
+      }
+    ]
+  }
+}

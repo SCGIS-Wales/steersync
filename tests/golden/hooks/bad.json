@@ -1,0 +1,23 @@
+{
+  "hooks": [
+    {
+      "name": "x",
+      "trigger": "agentSpawn",
+      "action": {
+        "type": "command"
+      },
+      "timeout": -1
+    },
+    {
+      "name": "y",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "x"
+      },
+      "confirm": {
+        "question": "?"
+      }
+    }
+  ]
+}

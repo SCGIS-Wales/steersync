@@ -1,0 +1,10 @@
+{
+  "name": "fmt",
+  "when": {
+    "type": "fileEdited"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "fmt"
+  }
+}

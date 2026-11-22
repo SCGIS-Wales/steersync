@@ -1,0 +1,32 @@
+{
+  "name": "release",
+  "inputs": {
+    "version": "version to release"
+  },
+  "steps": [
+    {
+      "type": "step",
+      "id": "notes",
+      "agent": "writer",
+      "prompt": "Draft notes for {{version}}"
+    },
+    {
+      "type": "parallel",
+      "id": "checks",
+      "joinPolicy": "all",
+      "branches": [
+        {
+          "type": "step",
+          "id": "test",
+          "agent": "default",
+          "prompt": "Run tests"
+        },
+        {
+          "type": "watch",
+          "id": "ci",
+          "handler": "github-checks"
+        }
+      ]
+    }
+  ]
+}

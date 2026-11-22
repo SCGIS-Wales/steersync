@@ -5,6 +5,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- MCP tools return typed pydantic reports, published as each tool's output schema and
+  returned as structured content. Failures come back as tool results with `isError` set
+  rather than `"ok": false` payloads. Pull and push send progress notifications. A forced
+  pull asks the user through elicitation (multi round trip requests on 2026-07-28) when the
+  client supports it, and otherwise needs `confirm: true`. Arguments carry descriptions in
+  the input schema. New `doctor_kiro_config` tool.
+- The tool logic moved to `steersync.mcp_tools`, which does not import `mcp`; `steersync
+  mcp` prints the `uvx --from "steersync[mcp]"` command when the extra is missing.
+- Windows: local remotes given as drive or UNC paths (`C:\repos\central.git`) are
+  recognised as local paths instead of an SCP style host named `C`, and CI runs the test
+  suite on Windows.
+- Property based tests (hypothesis) for path containment, change plans and every lint
+  profile on arbitrary input, and golden file tests for every default collection.
+
+### Changed
+
+- mypy runs with the pydantic plugin.
+
+### Fixed
+
+- Lint rules crashed with `TypeError` on JSON values that are lists or objects where a
+  string enumeration was expected (a workflow node `type`, a permission `effect`, a hook
+  `trigger` in the best practice checks); they now report a finding.
+
 ## [0.4.0] - 2026-11-22
 
 ### Added

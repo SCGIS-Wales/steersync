@@ -879,8 +879,8 @@ def migrate_hooks(ctx: click.Context, write: bool) -> None:
         migrate.apply_migrations(plans) if write else [(plan, "would write") for plan in plans]
     )
     for plan, outcome in outcomes:
-        source = plan.source.relative_to(root)
-        target = plan.target.relative_to(root)
+        source = plan.source.relative_to(root).as_posix()
+        target = plan.target.relative_to(root).as_posix()
         if plan.hooks and outcome != "skipped":
             click.echo(f"{outcome}: {target} ({len(plan.hooks)} hook(s) from {source})")
             if plan.from_agent:

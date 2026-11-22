@@ -252,7 +252,9 @@ def _markdown_findings(doc: SteeringDocument, config: LintConfig) -> list[LintFi
     api = PyMarkdownApi().enable_extension_by_identifier("front-matter")
     for rule in config.pymarkdown.disabled_rules:
         api = api.disable_rule_by_identifier(rule)
-    masked = FILE_REFERENCE_RE.sub(lambda m: "x" * len(m.group(0)), doc.text)
+    # Windows checkouts carry CRLF line endings; pymarkdown would misread them.
+    text = doc.text.replace("\r\n", "\n")
+    masked = FILE_REFERENCE_RE.sub(lambda m: "x" * len(m.group(0)), text)
     try:
         result = api.scan_string(masked)
     except PyMarkdownApiException as exc:

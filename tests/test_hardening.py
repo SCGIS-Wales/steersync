@@ -501,3 +501,16 @@ def test_mcp_tools_report_configuration_errors(
         with pytest.raises(SteersyncError, match="missing"):
             tool()
     assert mcp_tools.v3_status().cli_path is None
+
+
+def test_read_only_cache_files_are_removed(tmp_path: Path) -> None:
+    """Git writes objects read only; Windows refuses to delete those without help."""
+    import stat as stat_module
+
+    cache = tmp_path / "cache" / "repo"
+    (cache / ".git" / "objects" / "ab").mkdir(parents=True)
+    obj = cache / ".git" / "objects" / "ab" / "cdef"
+    obj.write_bytes(b"x")
+    obj.chmod(stat_module.S_IREAD)
+    gitops._remove_cache_dir(cache)
+    assert not cache.exists()

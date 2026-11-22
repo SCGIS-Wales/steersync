@@ -1,0 +1,31 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "tests",
+      "trigger": "Stop",
+      "action": {
+        "type": "command",
+        "command": "make test"
+      },
+      "timeout": 120,
+      "confirm": {
+        "question": "Run the tests?",
+        "options": [
+          {
+            "id": "y",
+            "label": "Yes"
+          }
+        ]
+      }
+    },
+    {
+      "name": "compact",
+      "trigger": "PreCompact",
+      "action": {
+        "type": "agent",
+        "prompt": "Summarise the decisions"
+      }
+    }
+  ]
+}
