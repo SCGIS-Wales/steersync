@@ -761,7 +761,7 @@ def _merge_request_for(
         )
     except (GitLabError, ConfigError) as exc:
         log.warning("merge request not confirmed: %s", exc)
-        return None, f"merge request not confirmed: {exc}"
+        return None, f"merge request not confirmed ({exc}); retry with `steersync mr`"
     return mr.url, "merge request created" if created else "merge request already open"
 
 

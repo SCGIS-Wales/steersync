@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from steersync import cli, gitops, mcp_tools, paths, sync
+from steersync import cli, gitops, mcp_tools, paths, retry, sync
 from steersync.config import Config, load_config
 from steersync.errors import (
     GitError,
@@ -176,8 +176,29 @@ def test_backoff_delay_is_capped(env: dict[str, str], tmp_path: Path) -> None:
     path = tmp_path / "c.yaml"
     path.write_text("git:\n  retry_backoff_seconds: 2\n  retry_max_backoff_seconds: 5\n")
     config = load_config(env=env, explicit=path)
-    assert 2 <= gitops.backoff_delay(config, 0) <= 2.5
-    assert 5 <= gitops.backoff_delay(config, 10) <= 6.25
+    policy = gitops.git_retry_policy(config, retries=2)
+    assert policy.attempts == 3
+    assert 2 <= retry.backoff_delay(policy, 0) <= 2.5
+    assert 5 <= retry.backoff_delay(policy, 10) <= 6.25
+
+
+def test_run_git_reports_retries(
+    config: Config, monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    fake = _FakeRun(
+        [
+            (
+                128,
+                "fatal: unable to access 'https://h/a.git/': The requested URL returned error: 503",
+            ),
+            (0, ""),
+        ]
+    )
+    monkeypatch.setattr(gitops, "_execute", fake)
+    events: list[retry.RetryEvent] = []
+    gitops.run_git(config, ["fetch"], retries=3, on_retry=events.append)
+    assert [(e.operation, e.attempt, e.of) for e in events] == [("git fetch", 1, 4)]
+    assert "returned error: 503" in events[0].reason
 
 
 # Self healing cache
@@ -552,3 +573,42 @@ def test_default_ssh_command_fails_fast() -> None:
     assert gitops.git_environment({"GIT_SSH_COMMAND": "ssh -i key"})["GIT_SSH_COMMAND"] == (
         "ssh -i key"
     )
+
+
+def test_cache_lock_is_released_when_the_holder_dies(tmp_path: Path) -> None:
+    """The lock is an operating system lock (flock or msvcrt.locking): a killed holder
+    cannot leave it behind, so the next process acquires it within the timeout."""
+    import subprocess
+    import sys
+    import time as time_module
+
+    lock = tmp_path / "cache.lock"
+    script = (
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "from steersync.locking import exclusive_lock\n"
+        f"with exclusive_lock(Path({str(lock)!r}), timeout=5):\n"
+        "    print('locked', flush=True)\n"
+        "    time.sleep(60)\n"
+    )
+    holder = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "locked"
+        with pytest.raises(LockTimeoutError), exclusive_lock(lock, timeout=0.5, poll_interval=0.05):
+            pass
+        holder.kill()  # SIGKILL on POSIX: no cleanup code runs in the holder
+        holder.wait(timeout=10)
+        started = time_module.monotonic()
+        with exclusive_lock(lock, timeout=5, poll_interval=0.05):
+            acquired_after = time_module.monotonic() - started
+        assert acquired_after < 5
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+        if holder.stdout is not None:
+            holder.stdout.close()

@@ -371,6 +371,14 @@ class GitLabConfig(_Strict):
     squash: bool = False
     labels: tuple[str, ...] = ("kiro-config",)
     timeout_seconds: int = Field(default=30, ge=5, le=300)
+    # Retries for transient API failures (502, 503, 504, 429, timeouts, resets). A create
+    # merge request call is never repeated blindly: it first looks for the merge request.
+    retries: int = Field(default=3, ge=0, le=10)
+    retry_statuses: tuple[int, ...] = (429, 502, 503, 504)
+    retry_backoff_seconds: float = Field(default=1.0, ge=0, le=60)
+    retry_max_backoff_seconds: float = Field(default=30.0, ge=0, le=600)
+    # GitLab can answer 404 for a branch or merge request for a moment after a push.
+    retry_not_found: bool = True
 
     @field_validator("api_url")
     @classmethod

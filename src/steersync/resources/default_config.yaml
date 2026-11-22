@@ -61,6 +61,15 @@ gitlab:
   squash: false
   labels: [kiro-config]
   timeout_seconds: 30
+  # Transient API failures (these statuses, timeouts, resets) are retried with exponential
+  # backoff and jitter; 429 honours Retry-After, 500 is retried for reads only, 401 and 403
+  # never. Creating a merge request is never repeated blindly.
+  retries: 3
+  retry_statuses: [429, 502, 503, 504]
+  retry_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 30.0
+  # GitLab can answer 404 for a branch or merge request just after a push: retry reads twice.
+  retry_not_found: true
 
 paths:
   workspace_lock: .kiro/steersync.lock.json

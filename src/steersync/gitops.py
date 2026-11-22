@@ -7,7 +7,6 @@ disabled so hooks and MCP servers fail fast instead of hanging.
 import getpass
 import logging
 import os
-import random
 import re
 import shutil
 import signal
@@ -21,6 +20,7 @@ from urllib.parse import urlsplit
 
 from steersync.config import Config, validate_remote_url
 from steersync.errors import GitError
+from steersync.retry import RetryEvent, RetryPolicy, backoff_delay
 
 log = logging.getLogger(__name__)
 
@@ -74,11 +74,13 @@ def is_transient(message: str) -> bool:
     return bool(_TRANSIENT_RE.search(message))
 
 
-def backoff_delay(config: Config, attempt: int) -> float:
-    """Exponential backoff with up to 25 percent jitter, capped by configuration."""
-    base = config.git.retry_backoff_seconds * float(1 << attempt)
-    capped = min(base, config.git.retry_max_backoff_seconds)
-    return capped + random.uniform(0, capped * 0.25)  # noqa: S311  (jitter, not security)
+def git_retry_policy(config: Config, retries: int) -> RetryPolicy:
+    """The shared retry policy for a git network call allowing ``retries`` retries."""
+    return RetryPolicy(
+        attempts=retries + 1,
+        base_delay=config.git.retry_backoff_seconds,
+        max_delay=config.git.retry_max_backoff_seconds,
+    )
 
 
 # Fail fast when a host is unreachable (a firewalled port 22 otherwise hangs until the git
@@ -161,6 +163,7 @@ def run_git(
     timeout: int | None = None,
     stdin: str | None = None,
     retries: int = 0,
+    on_retry: Callable[[RetryEvent], None] | None = None,
 ) -> GitResult:
     """Run git with hardened defaults and return its output.
 
@@ -199,13 +202,15 @@ def run_git(
             raise GitError(msg) from exc
         except subprocess.TimeoutExpired as exc:
             if attempt < retries:
-                attempt = _wait_before_retry(config, name, attempt, "timed out")
+                attempt = _wait_before_retry(config, name, attempt, retries, "timed out", on_retry)
                 continue
             msg = f"git {name} timed out after {exc.timeout:.0f}s"
             raise GitError(msg) from exc
         result = GitResult(completed.returncode, completed.stdout, completed.stderr)
         if result.returncode != 0 and attempt < retries and is_transient(result.stderr):
-            attempt = _wait_before_retry(config, name, attempt, result.stderr.strip())
+            attempt = _wait_before_retry(
+                config, name, attempt, retries, result.stderr.strip(), on_retry
+            )
             continue
         break
     if check and result.returncode != 0:
@@ -215,15 +220,21 @@ def run_git(
     return result
 
 
-def _wait_before_retry(config: Config, name: str, attempt: int, reason: str) -> int:
-    delay = backoff_delay(config, attempt)
+def _wait_before_retry(
+    config: Config,
+    name: str,
+    attempt: int,
+    retries: int,
+    reason: str,
+    on_retry: Callable[[RetryEvent], None] | None,
+) -> int:
+    delay = backoff_delay(git_retry_policy(config, retries), attempt)
+    detail = redact_url(reason.splitlines()[-1] if reason else "unknown")
     log.warning(
-        "git %s failed transiently (%s); retry %d in %.1fs",
-        name,
-        redact_url(reason.splitlines()[-1] if reason else "unknown"),
-        attempt + 1,
-        delay,
+        "git %s failed transiently (%s); retry %d in %.1fs", name, detail, attempt + 1, delay
     )
+    if on_retry is not None:
+        on_retry(RetryEvent(f"git {name}", attempt + 1, retries + 1, delay, detail))
     time.sleep(delay)
     return attempt + 1
 
