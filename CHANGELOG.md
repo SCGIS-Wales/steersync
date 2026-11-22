@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-11-22
+
 ### Added
 
 - README: a step by step guide for adopting steersync where projects already have Kiro files
