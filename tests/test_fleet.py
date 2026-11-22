@@ -182,7 +182,9 @@ def test_status_of_thirty_repositories_is_fast(
 def test_crlf_checkout_is_in_sync(fleet_env: dict[str, Path]) -> None:
     """Task E: line ending conversion alone never makes a repository local ahead."""
     rules = fleet_env["same"] / ".kiro" / "steering" / "rules.md"
-    rules.write_bytes(rules.read_bytes().replace(b"\n", b"\r\n"))
+    # From LF first: a Windows runner with core.autocrlf may have checked it out as CRLF.
+    lf = rules.read_bytes().replace(b"\r\n", b"\n")
+    rules.write_bytes(lf.replace(b"\n", b"\r\n"))
     rows = by_name(
         json.loads(CliRunner().invoke(main, ["fleet", "status", "--json"]).stdout), fleet_env
     )
