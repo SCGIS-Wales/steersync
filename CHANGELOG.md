@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-22
+
 ### Fixed
 
 - The project slug came from the URL after `url.<base>.insteadOf` rewriting, so a mirror or
