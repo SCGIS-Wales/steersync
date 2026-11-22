@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-22
+
 ### Added
 
 - Collections for the rest of the committable Kiro configuration (Kiro IDE 1.5, Kiro CLI 3.5):

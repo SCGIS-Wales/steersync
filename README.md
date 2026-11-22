@@ -63,7 +63,7 @@ Requires Python 3.14 or newer and git 2.18 or newer. Every
 sdist and a `SHA256SUMS` file, with signed build provenance.
 
 ```bash
-VERSION=0.3.0
+VERSION=0.4.0
 uv tool install "https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
 # or run it without installing
 uvx steersync --help
@@ -277,7 +277,7 @@ Teams that already use [pre-commit](https://pre-commit.com) can use the publishe
 default_install_hook_types: [pre-commit, pre-push]
 repos:
   - repo: https://github.com/SCGIS-Wales/steersync
-    rev: v0.3.0
+    rev: v0.4.0
     hooks:
       - id: steersync-push
       - id: steersync-lint
