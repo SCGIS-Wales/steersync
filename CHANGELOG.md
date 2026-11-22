@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-22
+
 ### Fixed
 
 - The MCP server entry written by `steersync init` did not start in Kiro on machines whose
