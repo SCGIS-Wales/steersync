@@ -1,7 +1,5 @@
 """Command line interface for steersync, built with click."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -12,9 +10,10 @@ from typing import Any, cast
 
 import click
 
-from steersync import __version__, gitlab, gitops, hooks, sync
+from steersync import __version__, gitlab, gitops, hooks, kiro_version, migrate, sync
 from steersync.config import (
     LINT_PROFILES,
+    CollectionConfig,
     Config,
     LintProfile,
     default_config_text,
@@ -26,6 +25,7 @@ from steersync.hooks import DEFAULT_TOKEN_ENV
 from steersync.lint import LintReport, lint_paths, lint_workspace, merge_reports
 from steersync.logging_utils import configure_logging
 from steersync.paths import (
+    cache_root,
     global_collection_dir,
     workspace_collection_dir,
     workspace_steering_dir,
@@ -163,6 +163,9 @@ def main(
 )
 @collection_option
 @click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
+@click.option(
+    "-q", "--quiet", "pull_quiet", is_flag=True, help="Only print errors (same as steersync -q)."
+)
 @click.pass_context
 def pull(
     ctx: click.Context,
@@ -175,8 +178,12 @@ def pull(
     best_effort: bool,
     collections: tuple[str, ...],
     as_json: bool,
+    pull_quiet: bool,
 ) -> None:
     """Fetch every collection (steering, specs, skills, ...) from the central repository."""
+    if pull_quiet:
+        # The Kiro SessionStart hook runs `steersync pull --quiet --best-effort`.
+        ctx.find_root().params["quiet"] = True
     try:
         config, root = _bootstrap(ctx, propagate=True)
     except SteersyncError as exc:
@@ -185,6 +192,7 @@ def pull(
     quiet = bool(ctx.find_root().params.get("quiet"))
     if best_effort:
         config = _hook_budget(config)
+        _maybe_remind_v3(config, root)
     try:
         result = sync.pull(
             config,
@@ -347,6 +355,26 @@ def _echo_existing(branches: tuple[str, ...], project: str | None) -> None:
     )
     for name in branches:
         click.echo(f"  {name}", err=True)
+
+
+def _agent_dirs(config: Config, root: Path | None) -> list[Path]:
+    agents = config.collections.get("agents")
+    if root is None or agents is None or agents.workspace_path is None:
+        return []
+    return [root / agents.workspace_path]
+
+
+def _maybe_remind_v3(config: Config, root: Path | None) -> None:
+    """From the SessionStart hook: remind about the V3 harness at most once a day."""
+    env = os.environ
+    try:
+        if not kiro_version.reminder_due(cache_root(config, env), env):
+            return
+        status = kiro_version.detect_harness(env, agent_dirs=_agent_dirs(config, root))
+    except OSError:
+        return
+    if status.needs_reminder:
+        click.echo(f"steersync: {kiro_version.reminder_text(status)}", err=True)
 
 
 def _soft_failure(exc: Exception, *, soft: bool, label: str) -> None:
@@ -525,7 +553,7 @@ def _lint_explicit_paths(
         groups.setdefault(name, []).append(path)
     reports: list[LintReport] = []
     for name, group in groups.items():
-        chosen = config.collections[name] if name else None
+        chosen = config.collections[name] if name else _collection_for_profile(config, profile)
         reports.append(
             lint_paths(
                 group,
@@ -537,6 +565,13 @@ def _lint_explicit_paths(
             )
         )
     return merge_reports(reports)
+
+
+def _collection_for_profile(config: Config, profile: str | None) -> CollectionConfig | None:
+    """The first collection using ``profile``, so its file patterns apply to a directory."""
+    if profile is None:
+        return None
+    return next((c for c in config.collections.values() if c.lint == profile), None)
 
 
 def _collection_for_path(config: Config, root: Path | None, path: Path) -> str | None:
@@ -552,10 +587,14 @@ def _collection_for_path(config: Config, root: Path | None, path: Path) -> str |
             continue
         base = target.resolve()
         if base == root_resolved:
-            # A collection rooted at the workspace (AGENTS.md) owns only the files its
-            # patterns select, never every path under the repository.
+            # A collection rooted at the workspace (AGENTS.md, .kiroignore) owns only the
+            # files its patterns select, never every path under the repository.
             spec = FileSpec(collection.include, collection.exclude, collection.max_depth)
-            if resolved.is_file() and spec.matcher()(resolved.relative_to(base).as_posix()):
+            if (
+                resolved.is_file()
+                and base in resolved.parents
+                and spec.matcher()(resolved.relative_to(base).as_posix())
+            ):
                 best = best or (0, name)
             continue
         if resolved == base or base in resolved.parents:
@@ -774,6 +813,84 @@ def mcp() -> None:
         _fail(exc)
 
 
+@main.command("v3-status")
+@click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
+@click.option("--strict", is_flag=True, help="Exit 10 when a V3 reminder applies.")
+@click.pass_context
+def v3_status(ctx: click.Context, as_json: bool, strict: bool) -> None:
+    """Check whether kiro-cli runs the V3 agent harness and your agents are V3 ready.
+
+    Runs `kiro-cli --version` and `kiro-cli settings` only; no chat session is
+    started, so no Kiro credits are used.
+    """
+    config, root = _bootstrap(ctx)
+    status = kiro_version.detect_harness(os.environ, agent_dirs=_agent_dirs(config, root))
+    if as_json:
+        click.echo(json.dumps(status.to_dict(), indent=2))
+    else:
+        for line in _harness_lines(status):
+            click.echo(line)
+        if status.needs_reminder:
+            click.echo(kiro_version.reminder_text(status), err=True)
+    if strict and status.needs_reminder:
+        sys.exit(10)
+
+
+def _harness_lines(status: kiro_version.HarnessStatus) -> list[str]:
+    if status.cli_path is None:
+        cli = "kiro-cli: not found (Kiro IDE only; nothing to switch)"
+    else:
+        cli = f"kiro-cli: {status.cli_version or 'unknown version'} ({status.cli_path})"
+    engine = status.engine or ("v3 (default)" if status.engine_source == "default" else "unknown")
+    lines = [cli, f"agent engine: {engine} [{status.engine_source}]"]
+    if status.auto_upgrade is not None:
+        lines.append(f"automatic agent upgrade: {'on' if status.auto_upgrade else 'off'}")
+    lines.extend(f"V2 format agent: {path}" for path in status.v2_agents)
+    lines.append("V3 harness: yes" if status.on_v3 else "V3 harness: no")
+    return lines
+
+
+@main.command("migrate-hooks")
+@click.option("--write", is_flag=True, help="Write the hook files (default: dry run).")
+@click.pass_context
+def migrate_hooks(ctx: click.Context, write: bool) -> None:
+    """Convert *.kiro.hook files and 2.x inline agent hooks into .kiro/hooks/*.json.
+
+    Dry run by default. Existing hook files are never overwritten and the sources
+    are left in place for you to delete after review.
+    """
+    config, root = _bootstrap(ctx)
+    if root is None:
+        _fail(SteersyncError("not inside a git repository"))
+        return
+    plans = migrate.plan_migrations(
+        root,
+        hooks_dir=_collection_path(config, "hooks") or ".kiro/hooks",
+        agents_dir=_collection_path(config, "agents") or ".kiro/agents",
+    )
+    if not plans:
+        click.echo("no legacy hooks found")
+        return
+    outcomes = (
+        migrate.apply_migrations(plans) if write else [(plan, "would write") for plan in plans]
+    )
+    for plan, outcome in outcomes:
+        source = plan.source.relative_to(root)
+        target = plan.target.relative_to(root)
+        if plan.hooks and outcome != "skipped":
+            click.echo(f"{outcome}: {target} ({len(plan.hooks)} hook(s) from {source})")
+            if plan.from_agent:
+                click.echo(
+                    "  note: standalone hooks apply to every agent, not only "
+                    f"{plan.source.stem}; review the matchers",
+                    err=True,
+                )
+        for reason in plan.skipped:
+            click.echo(f"skipped: {reason}", err=True)
+    if not write:
+        click.echo("dry run; rerun with --write to create the files")
+
+
 @main.group()
 def config() -> None:
     """Inspect configuration."""
@@ -886,6 +1003,11 @@ def doctor(ctx: click.Context) -> None:
             click.echo(f"project slug: {gitops.project_slug(origin)}")
     else:
         click.echo("workspace: not inside a git repository")
+    status = kiro_version.detect_harness(env, agent_dirs=_agent_dirs(config, root))
+    for line in _harness_lines(status):
+        click.echo(line)
+    if status.needs_reminder:
+        click.echo(kiro_version.reminder_text(status), err=True)
 
 
 def run() -> None:

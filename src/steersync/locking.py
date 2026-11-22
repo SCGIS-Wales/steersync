@@ -5,12 +5,10 @@ repositories, a Kiro session hook and a git hook at the same time). Every
 operation on a cache clone holds an exclusive lock on a sibling lock file.
 """
 
-from __future__ import annotations
-
 import logging
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO
@@ -41,7 +39,7 @@ else:
 
 
 @contextmanager
-def exclusive_lock(path: Path, *, timeout: float, poll_interval: float = 0.2) -> Iterator[None]:
+def exclusive_lock(path: Path, *, timeout: float, poll_interval: float = 0.2) -> Generator[None]:
     """Hold an exclusive lock on ``path`` for the duration of the block.
 
     The lock is released automatically by the operating system if the process

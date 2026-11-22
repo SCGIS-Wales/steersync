@@ -1,7 +1,5 @@
 """Tests for syncing several collections (steering, specs, skills, agents, hooks, settings)."""
 
-from __future__ import annotations
-
 import json
 import logging
 import stat
@@ -108,12 +106,23 @@ def test_pull_applies_every_collection(
         "agents",
         "hooks",
         "settings",
+        "sandbox",
+        "workflows",
         "prompts",
         "agents-md",
+        "kiroignore",
     }
     assert "venafi-tpp-websdk/scripts/renew.sh" in lock["collections"]["skills"]["files"]
     global_lock = read_lock(global_lock_path(config, env))
-    assert set(global_lock["collections"]) == {"steering", "skills", "agents", "hooks", "prompts"}
+    assert set(global_lock["collections"]) == {
+        "steering",
+        "skills",
+        "agents",
+        "hooks",
+        "workflows",
+        "prompts",
+        "kiroignore",
+    }
     assert sync.pull(config, workspace_root=project, env=env).change_count == 0
 
 
@@ -256,12 +265,23 @@ def test_status_reports_every_collection(
         "agents",
         "hooks",
         "settings",
+        "sandbox",
+        "workflows",
         "prompts",
         "agents-md",
+        "kiroignore",
     }
     assert result.workspace["hooks"].add == ("fmt.json",)
     assert result.workspace["hooks"].delete == ("tests-on-stop.json",)
-    assert set(result.global_) == {"steering", "skills", "agents", "hooks", "prompts"}
+    assert set(result.global_) == {
+        "steering",
+        "skills",
+        "agents",
+        "hooks",
+        "workflows",
+        "prompts",
+        "kiroignore",
+    }
     assert result.global_["skills"].add == ("shared-skill/SKILL.md",)
     assert result.lint is not None
     assert result.lint.checked == 1
@@ -324,7 +344,10 @@ def test_custom_collection_and_disabled_defaults(
         "  agents:\n    enabled: false\n"
         "  hooks:\n    enabled: false\n"
         "  settings:\n    enabled: false\n"
+        "  sandbox:\n    enabled: false\n"
+        "  workflows:\n    enabled: false\n"
         "  prompts:\n    enabled: false\n"
+        "  kiroignore:\n    enabled: false\n"
         "  agents-md:\n"
         "    description: Root AGENTS.md\n"
         "    workspace_path: .\n"
@@ -447,7 +470,10 @@ def test_cli_collection_options(
     assert pushed["plan"]["add"] == ["hooks/fmt.json"]
 
     doctor = runner.invoke(main, ["doctor"])
-    assert "collections: steering, specs, skills, agents, hooks, settings, prompts" in doctor.output
+    assert (
+        "collections: steering, specs, skills, agents, hooks, settings, sandbox, workflows, "
+        "prompts, agents-md, kiroignore"
+    ) in doctor.output
     assert "workspace skills:" in doctor.output
     assert "global hooks:" in doctor.output
 

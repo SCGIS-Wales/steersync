@@ -1,13 +1,12 @@
 """Validation of synced content: front matter, size, references, secrets, markdown, JSON.
 
 Each collection selects a lint profile. ``steering`` applies every Kiro front matter
-rule, ``skill`` validates ``SKILL.md`` metadata, ``hooks`` and ``agent`` check the JSON
-shape Kiro expects, ``json`` and ``markdown`` check syntax and style, and ``generic``
-only enforces size limits and secret scanning. Profiles are looked up in
+rule, ``skill`` validates ``SKILL.md`` metadata, ``hooks``, ``agent``, ``settings`` and
+``workflow`` check the shapes Kiro expects (see :mod:`steersync.kiro_rules`),
+``kiroignore`` checks gitignore syntax, ``json`` and ``markdown`` check syntax and style,
+and ``generic`` only enforces size limits and secret scanning. Profiles are looked up in
 :data:`PROFILES`, so a new kind of content is one function and one table entry.
 """
-
-from __future__ import annotations
 
 import json
 import re
@@ -15,8 +14,11 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Literal, NamedTuple
 
-from steersync import practices
+import yaml
+
+from steersync import kiro_rules, practices
 from steersync.config import LintConfig, LintProfile
+from steersync.kiro_rules import HOOK_TRIGGERS
 from steersync.steering import (
     FILE_REFERENCE_RE,
     INCLUSION_MODES,
@@ -41,21 +43,7 @@ class LintContext(NamedTuple):
 
 _H1_RE = re.compile(r"^#\s+\S", re.MULTILINE)
 SKILL_FILE = "SKILL.md"
-HOOK_TRIGGERS: frozenset[str] = frozenset(
-    {
-        "SessionStart",
-        "Stop",
-        "PreToolUse",
-        "PostToolUse",
-        "UserPromptSubmit",
-        "PreTaskExec",
-        "PostTaskExec",
-        "PostFileCreate",
-        "PostFileSave",
-        "PostFileDelete",
-        "Manual",
-    }
-)
+__all__ = ["HOOK_TRIGGERS", "LintFinding", "LintReport", "lint_paths", "lint_snapshot"]
 
 
 class LintFinding(NamedTuple):
@@ -438,10 +426,28 @@ def _profile_settings(
         return findings
     data, syntax = _parse_json(doc)
     findings.extend(syntax)
-    if not syntax and config.practices:
-        findings.extend(_warnings(practices.settings_findings(doc, data)))
+    if not syntax:
+        findings.extend(_issues(doc, _settings_issues(PurePosixPath(doc.relative_path).name, data)))
+        if config.practices:
+            findings.extend(_warnings(practices.settings_findings(doc, data)))
     findings.extend(_secret_findings(doc, config))
     return findings
+
+
+def _settings_issues(name: str, data: object) -> list[kiro_rules.Issue]:
+    match name:
+        case "mcp.json":
+            return kiro_rules.mcp_issues(data)
+        case "sandbox.json":
+            return kiro_rules.sandbox_issues(data)
+        case "cli.json":
+            return kiro_rules.cli_settings_issues(data)
+        case _:
+            return []
+
+
+def _issues(doc: SteeringDocument, issues: Iterable[kiro_rules.Issue]) -> list[LintFinding]:
+    return [LintFinding(doc.relative_path, i.rule, i.severity, i.message) for i in issues]
 
 
 def _profile_prompt(
@@ -451,56 +457,6 @@ def _profile_prompt(
     findings = _profile_markdown(doc, config, ctx)
     if config.practices and PurePosixPath(doc.relative_path).suffix.lower() == ".md":
         findings.extend(_warnings(practices.prompt_findings(doc, _limits(config))))
-    return findings
-
-
-def _hook_shape_findings(doc: SteeringDocument, data: object) -> list[LintFinding]:
-    if not isinstance(data, dict) or not isinstance(data.get("hooks"), list):
-        return [
-            LintFinding(
-                doc.relative_path,
-                "hook-schema",
-                "error",
-                'a standalone hook file is an object with "version" and a "hooks" list',
-            )
-        ]
-    findings: list[LintFinding] = []
-    if data.get("version") != "v1":
-        findings.append(
-            LintFinding(doc.relative_path, "hook-schema", "warning", 'expected "version": "v1"')
-        )
-    for index, hook in enumerate(data["hooks"]):
-        label = f"hooks[{index}]"
-        if not isinstance(hook, dict):
-            findings.append(
-                LintFinding(doc.relative_path, "hook-schema", "error", f"{label} must be an object")
-            )
-            continue
-        findings.extend(
-            LintFinding(doc.relative_path, "hook-schema", "error", f"{label} lacks {key!r}")
-            for key in ("name", "trigger", "action")
-            if key not in hook
-        )
-        trigger = hook.get("trigger")
-        if isinstance(trigger, str) and trigger not in HOOK_TRIGGERS:
-            findings.append(
-                LintFinding(
-                    doc.relative_path,
-                    "hook-trigger",
-                    "warning",
-                    f"{label}: unknown trigger {trigger!r}; Kiro V3 triggers are PascalCase",
-                )
-            )
-        action = hook.get("action")
-        if isinstance(action, dict) and action.get("type") not in {"command", "agent"}:
-            findings.append(
-                LintFinding(
-                    doc.relative_path,
-                    "hook-action",
-                    "error",
-                    f'{label}: action.type must be "command" or "agent"',
-                )
-            )
     return findings
 
 
@@ -516,7 +472,7 @@ def _profile_hooks(
     data, syntax = _parse_json(doc)
     findings.extend(syntax)
     if not syntax and not name.endswith(".kiro.hook"):
-        findings.extend(_hook_shape_findings(doc, data))
+        findings.extend(_issues(doc, kiro_rules.hook_file_issues(data)))
     if config.practices:
         findings.extend(_warnings(practices.hook_findings(doc, data, _limits(config))))
     findings.extend(_secret_findings(doc, config))
@@ -554,15 +510,7 @@ def _profile_agent(
                         doc.relative_path, "agent-name", "warning", 'agent definition has no "name"'
                     )
                 )
-            if "toolsSettings" in data:
-                findings.append(
-                    LintFinding(
-                        doc.relative_path,
-                        "agent-deprecated-key",
-                        "warning",
-                        "toolsSettings is deprecated; use permissions.rules",
-                    )
-                )
+            findings.extend(_issues(doc, kiro_rules.agent_issues(data)))
     findings.extend(_secret_findings(doc, config))
     return findings
 
@@ -574,13 +522,57 @@ def _profile_markdown_agent(
     findings = _profile_markdown(doc, config, ctx)
     fm = doc.front_matter
     if (
-        config.practices
-        and fm is not None
+        fm is not None
         and fm.present
         and not fm.error
         and PurePosixPath(doc.relative_path).parent == PurePosixPath()
     ):
-        findings.extend(_warnings(practices.agent_findings(doc, fm.metadata, ctx.directory)))
+        findings.extend(_issues(doc, kiro_rules.agent_issues(fm.metadata)))
+        if config.practices:
+            findings.extend(_warnings(practices.agent_findings(doc, fm.metadata, ctx.directory)))
+    return findings
+
+
+_WORKFLOW_SUFFIXES: tuple[str, ...] = (".workflow.json", ".workflow.yaml", ".workflow.yml")
+
+
+def _profile_workflow(
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
+) -> list[LintFinding]:
+    """Workflow recipes: ``<name>.workflow.json`` (or YAML) checked against the recipe schema."""
+    name = PurePosixPath(doc.relative_path).name
+    if not name.endswith(_WORKFLOW_SUFFIXES):
+        return _profile_generic(doc, config, ctx)
+    findings = _text_findings(doc)
+    if findings or doc.text is None:
+        return findings
+    if name.endswith(".json"):
+        data, syntax = _parse_json(doc)
+        findings.extend(syntax)
+    else:
+        try:
+            data = yaml.safe_load(doc.text)
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            line = mark.line + 1 if mark is not None else None
+            return [LintFinding(doc.relative_path, "yaml-syntax", "error", str(exc), line)]
+    if not findings:
+        findings.extend(_issues(doc, kiro_rules.workflow_issues(data, name)))
+    findings.extend(_secret_findings(doc, config))
+    return findings
+
+
+def _profile_kiroignore(
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
+) -> list[LintFinding]:
+    """``.kiroignore`` files: gitignore syntax, plus advice on secrets in the root file."""
+    del ctx
+    findings = _text_findings(doc)
+    if findings or doc.text is None:
+        return findings
+    root_file = doc.relative_path in {".kiroignore", "kiroignore"}
+    findings.extend(_issues(doc, kiro_rules.kiroignore_issues(doc.text, root_file=root_file)))
+    findings.extend(_secret_findings(doc, config))
     return findings
 
 
@@ -633,6 +625,8 @@ PROFILES: dict[str, Profile] = {
     "hooks": _profile_hooks,
     "settings": _profile_settings,
     "prompt": _profile_prompt,
+    "workflow": _profile_workflow,
+    "kiroignore": _profile_kiroignore,
     "json": _profile_json,
     "generic": _profile_generic,
 }

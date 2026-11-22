@@ -5,8 +5,6 @@ settings or anything configured): a pull applies each collection of each scope,
 a push proposes all selected collections of one scope in a single branch.
 """
 
-from __future__ import annotations
-
 import functools
 import logging
 import os

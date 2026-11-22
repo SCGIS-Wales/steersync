@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from pathlib import Path
 
@@ -150,8 +148,11 @@ def test_pull_push_status_round_trip(
         "agents",
         "hooks",
         "settings",
+        "sandbox",
+        "workflows",
         "prompts",
         "agents-md",
+        "kiroignore",
     }
     assert runner.invoke(main, ["--quiet", "pull", "--dry-run"]).exit_code == 0
 

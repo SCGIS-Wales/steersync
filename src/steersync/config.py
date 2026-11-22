@@ -4,8 +4,6 @@ Configuration is layered: packaged defaults, then an optional YAML file, then
 environment variables. Everything is validated with pydantic before use.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re
@@ -40,7 +38,17 @@ _ALLOWED_PLACEHOLDERS = frozenset({"default_branch", "project", "user", "hash"})
 _COLLECTION_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 LintProfile = Literal[
-    "steering", "markdown", "skill", "agent", "hooks", "settings", "prompt", "json", "generic"
+    "steering",
+    "markdown",
+    "skill",
+    "agent",
+    "hooks",
+    "settings",
+    "prompt",
+    "workflow",
+    "kiroignore",
+    "json",
+    "generic",
 ]
 LINT_PROFILES: tuple[str, ...] = (
     "steering",
@@ -50,6 +58,8 @@ LINT_PROFILES: tuple[str, ...] = (
     "hooks",
     "settings",
     "prompt",
+    "workflow",
+    "kiroignore",
     "json",
     "generic",
 )
@@ -282,6 +292,26 @@ class CollectionConfig(_Strict):
             raise ValueError(msg)
         return value
 
+    def literal_file_names(self) -> frozenset[str] | None:
+        """File names every include pattern ends in, or ``None`` when any is a wildcard.
+
+        Two collections may share a directory only when both select files by literal
+        name and the names do not overlap, because each one plans, prunes and locks
+        only the files its own patterns select.
+        """
+        names: set[str] = set()
+        for pattern in self.include:
+            name = PurePosixPath(pattern).name
+            if any(c in name for c in "*?["):
+                return None
+            names.add(name)
+        return frozenset(names)
+
+
+def _shares_safely(left: CollectionConfig, right: CollectionConfig) -> bool:
+    left_names, right_names = left.literal_file_names(), right.literal_file_names()
+    return left_names is not None and right_names is not None and not left_names & right_names
+
 
 class PathsConfig(_Strict):
     workspace_lock: str = ".kiro/steersync.lock.json"
@@ -384,7 +414,7 @@ class Config(_Strict):
     @field_validator("collections")
     @classmethod
     def _collections(cls, value: dict[str, CollectionConfig]) -> dict[str, CollectionConfig]:
-        seen: dict[str, dict[str, str]] = {
+        seen: dict[str, dict[str, list[str]]] = {
             "central_dir": {},
             "workspace_path": {},
             "global_path": {},
@@ -402,10 +432,11 @@ class Config(_Strict):
                 path = getattr(collection, key)
                 if path is None:
                     continue
-                if path in used:
-                    msg = f"collections {used[path]!r} and {name!r} share the same {key} {path!r}"
-                    raise ValueError(msg)
-                used[path] = name
+                for other in used.get(path, []):
+                    if key == "central_dir" or not _shares_safely(value[other], collection):
+                        msg = f"collections {other!r} and {name!r} share the same {key} {path!r}"
+                        raise ValueError(msg)
+                used.setdefault(path, []).append(name)
         return value
 
     def enabled_collections(self) -> dict[str, CollectionConfig]:

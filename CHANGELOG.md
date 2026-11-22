@@ -5,6 +5,54 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Collections for the rest of the committable Kiro configuration (Kiro IDE 1.5, Kiro CLI 3.5):
+  `workflows` (`.kiro/workflows/*.workflow.{json,yaml,yml}` and `~/.kiro/workflows`),
+  `sandbox` (`.kiro/settings/sandbox.json`), `kiroignore` (`.kiroignore` at any depth and
+  `~/.kiro/settings/kiroignore`) and the opt in `cli-settings` (`.kiro/settings/cli.json`).
+  `agents-md` now syncs nested `AGENTS.md` files, and `specs` syncs every file in a spec
+  directory (`bugfix.md`, metadata), not only markdown.
+- Schema rules (`steersync.kiro_rules`): hooks need `version: "v1"` and a matching
+  `action.command` or `action.prompt`; integer timeouts; `confirm` only on `Stop` command
+  hooks; the `SessionEnd`, `PermissionRequest`, `PreCompact` and `PostCompact` triggers, with
+  CLI 2.x camelCase names flagged. Agents: V2 format (`toolsSettings` or `allowedTools`
+  without `permissions`) is an error because Kiro rewrites such files on load, plus checks
+  for `permissions.rules`, 2.x tool names, `use_aws`, `toolAliases`, `keyboardShortcut`,
+  resource schemes, home directory paths and inline V3 hooks, for JSON and Markdown agents.
+  `mcp.json`: literal secrets in `env`, `headers` and `oauth.clientSecret`, `oauth.mode`,
+  `clientMetadataUrl`, timeouts. `sandbox.json`, workspace `cli.json`, workflow recipes
+  (node types, unique ids, `repeat` limits, join policies, depth and size) and
+  `.kiroignore` syntax.
+- Kiro CLI V3 harness detection: `steersync v3-status`, a harness section in `doctor`, the
+  `kiro_v3_status` MCP tool and a once a day reminder from the session hook. Uses only
+  `kiro-cli --version` and `kiro-cli settings`, never a chat session.
+- `steersync migrate-hooks` converts `*.kiro.hook` files and CLI 2.x inline agent hooks into
+  standalone `.kiro/hooks/*.json` files (dry run by default).
+- The `steersync-mcp` entry point, MCP tool titles and read only, destructive and idempotent
+  annotations, server version and title, `confirm` for a forced pull, and logs on stderr.
+
+### Changed
+
+- The rendered `mcp.json` entry runs `uvx --from "steersync[mcp]==<version>" steersync mcp`
+  (the previous `uvx steersync mcp` lacked the `mcp` extra) and auto approves the read only
+  tools.
+- Collections may share a directory when each selects its files by literal name and the
+  names do not overlap. Hidden files are synced when a pattern names them literally, and
+  excluded trees such as `node_modules` are no longer walked.
+- Dependency floors: click 8.5.1, pydantic 2.14.4, PyYAML 6.0.4, pymarkdownlnt 0.9.42,
+  hatchling 1.33, pytest 9.2, ruff 0.17.6, bandit 1.9, pip-audit 2.10. pytest uses its
+  native TOML configuration, coverage must stay at 90 per cent, CI also tests Python 3.15
+  and runs ty as an advisory check, and `from __future__ import annotations` is gone
+  (Python 3.14 defers annotations).
+
+### Fixed
+
+- The Kiro session hook command `steersync pull --quiet --best-effort` failed with "No such
+  option: --quiet"; `pull` now accepts `-q/--quiet`.
+- `steersync lint FILE` crashed for a file outside the repository, and
+  `steersync lint --profile P DIR` used the steering file patterns for every profile.
+
 ## [0.3.0] - 2026-10-13
 
 ### Added

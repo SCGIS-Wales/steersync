@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import os
 import stat
@@ -7,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from steersync import hooks
+from steersync import __version__, hooks
 from steersync.config import Config
 
 
@@ -71,7 +69,12 @@ def test_render_mcp_config() -> None:
     data = json.loads(hooks.render_mcp_config(remote="git@h:a/b.git"))
     server = data["mcpServers"]["steersync"]
     assert server["command"] == "uvx"
-    assert server["args"] == ["steersync", "mcp"]
+    assert server["args"] == ["--from", f"steersync[mcp]=={__version__}", "steersync", "mcp"]
+    assert "push_kiro_config" not in server["autoApprove"]
+    assert "validate_kiro_config" in server["autoApprove"]
+    assert hooks.mcp_server_entry(command="steersync")["args"] == ["mcp"]
+    assert hooks.mcp_server_entry(command="/opt/bin/steersync-mcp")["args"] == []
+    assert hooks.mcp_server_entry(command="pipx")["args"] == ["steersync", "mcp"]
     assert server["env"]["STEERSYNC_REMOTE"] == "git@h:a/b.git"
     assert server["env"]["GIT_TERMINAL_PROMPT"] == "0"
     default = json.loads(hooks.render_mcp_config())
@@ -103,3 +106,23 @@ def test_hook_runs_under_sh(
     assert "not on PATH" in completed.stderr
     assert not any(p.name.startswith("steersync-prepush") for p in tmp_path.iterdir())
     assert os.access(result.path, os.X_OK)
+
+
+def test_session_start_hook_command_parses(
+    project: Path, config_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The command written to .kiro/hooks/steersync.json must be accepted by the CLI."""
+    import shlex
+
+    from click.testing import CliRunner
+
+    from steersync.cli import main
+
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
+    command = json.loads(hooks.render_kiro_hook("v3"))["hooks"][0]["action"]["command"]
+    program, *args = shlex.split(command)
+    assert program == "steersync"
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""

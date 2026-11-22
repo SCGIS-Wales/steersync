@@ -1,7 +1,5 @@
 """Rules of the release decision script used by the CI workflow."""
 
-from __future__ import annotations
-
 import datetime as dt
 import importlib.util
 import sys

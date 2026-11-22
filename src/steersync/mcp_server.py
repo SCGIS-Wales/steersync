@@ -1,6 +1,9 @@
 """Optional MCP stdio server exposing steersync operations as tools.
 
-Requires the ``mcp`` extra: ``pip install "steersync[mcp]"``. Every tool calls the
+Requires the ``mcp`` extra: ``uvx --from "steersync[mcp]" steersync mcp`` (or the
+``steersync-mcp`` alias). Built on the official SDK v2 ``MCPServer`` (MCP specification
+2026-07-28): tools return structured JSON, carry titles and read only, destructive and
+idempotent hints, and log to stderr because protocol logging is deprecated. Every tool calls the
 same functions the CLI uses, so behaviour and safety checks are identical. The
 server description and each tool description are written for the agent that
 reads them: they say which tool answers which request ("pull the Kiro config",
@@ -8,27 +11,30 @@ reads them: they say which tool answers which request ("pull the Kiro config",
 so a session in any repository can act on a plain sentence.
 
 Every tool takes an optional ``collections`` list (steering, specs, skills,
-agents, hooks, settings, prompts, agents-md or any configured name); the default
-is every enabled collection.
+agents, hooks, settings, sandbox, workflows, prompts, agents-md, kiroignore or any
+configured name); the default is every enabled collection.
 """
 
-from __future__ import annotations
-
 import os
+import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
-from steersync import gitops, sync
+from steersync import __version__, gitops, kiro_version, sync
 from steersync.config import Config, load_config
 from steersync.errors import SteersyncError
 from steersync.lint import lint_paths, lint_workspace, merge_reports
+from steersync.logging_utils import configure_logging
 from steersync.paths import workspace_collection_dir
 from steersync.steering import FileSpec
 
 SERVER_INSTRUCTIONS = """\
 steersync keeps the Kiro configuration of this workspace (.kiro/: steering, specs, \
-skills, agents, hooks, settings, prompts, AGENTS.md) and of this machine (~/.kiro/) \
-in sync with a central git repository where every change is reviewed as a merge request.
+skills, agents, hooks, settings, sandbox policy, workflow recipes, prompts, AGENTS.md \
+files and .kiroignore) and of this machine (~/.kiro/) in sync with a central git \
+repository where every change is reviewed as a merge request. Per user files such as \
+workspace permissions, memories, sessions and powers are never synced.
 
 Use these tools when the user talks about Kiro configuration, steering, specs, skills, \
 agents, hooks, prompts or settings being pulled, pushed, synced, proposed, validated or \
@@ -47,6 +53,8 @@ proposals". Read only.
 skills" against Kiro's rules and best practices. Errors block a push; warnings are \
 advice from the Kiro documentation.
 - list_kiro_collections: which kinds of content are synced and where they live.
+- kiro_v3_status: "am I on Kiro CLI V3 / do my agents need upgrading". Read only; never \
+starts a chat, so it costs no Kiro credits.
 Reports are JSON; "ok": false carries an "error" the user should see verbatim.
 """
 
@@ -82,15 +90,23 @@ def pull_kiro_config(
     force: bool = False,
     dry_run: bool = False,
     collections: list[str] | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Pull the Kiro configuration from the central repository into this workspace and ~/.kiro.
 
     Use for "pull / sync / refresh / update the kiro config (steering, specs, skills,
     agents, hooks, settings, prompts)". Files edited locally are kept and listed under
-    "conflict" unless force is true. dry_run shows the plan without writing. If the
+    "conflict" unless force is true; force overwrites local edits, so it also needs
+    confirm true after the user agreed. dry_run shows the plan without writing. If the
     central repository is unreachable the last cached copy is applied and "offline"
     is true.
     """
+    if force and not dry_run and not confirm:
+        return {
+            "ok": False,
+            "error": "force overwrites locally modified files; ask the user, then call again "
+            "with confirm=true (or use dry_run=true to preview)",
+        }
     try:
         config, root = _load(cwd)
         result = sync.pull(
@@ -276,6 +292,26 @@ def list_kiro_collections(cwd: str | None = None) -> dict[str, Any]:
     }
 
 
+def kiro_v3_status(cwd: str | None = None) -> dict[str, Any]:
+    """Report whether kiro-cli runs the V3 agent harness and which agents are not V3 ready.
+
+    Use for "am I on Kiro V3", "do my agents need upgrading", "why does my agent not
+    load". Runs only `kiro-cli --version` and `kiro-cli settings`; never starts a chat.
+    "message" holds the reminder to show the user when "needs_reminder" is true.
+    """
+    try:
+        config, root = _load(cwd)
+    except SteersyncError, OSError:
+        config, root = None, None
+    agent_dirs: list[Path] = []
+    if config is not None and root is not None:
+        agents = config.collections.get("agents")
+        if agents is not None and agents.workspace_path is not None:
+            agent_dirs.append(root / agents.workspace_path)
+    status = kiro_version.detect_harness(os.environ, agent_dirs=agent_dirs)
+    return {"ok": True, **status.to_dict()}
+
+
 def _workspace_path(config: Config, name: str, default: str) -> str:
     collection = config.collections.get(name)
     if collection is None or collection.workspace_path is None:
@@ -283,29 +319,76 @@ def _workspace_path(config: Config, name: str, default: str) -> str:
     return collection.workspace_path
 
 
-TOOLS: dict[str, Any] = {
-    "pull_kiro_config": pull_kiro_config,
-    "push_kiro_config": push_kiro_config,
-    "raise_merge_request": raise_merge_request,
-    "diff_kiro_config": diff_kiro_config,
-    "validate_kiro_config": validate_kiro_config,
-    "list_kiro_collections": list_kiro_collections,
+class ToolSpec(NamedTuple):
+    func: Callable[..., dict[str, Any]]
+    title: str
+    read_only: bool
+    destructive: bool = False
+    idempotent: bool = False
+    open_world: bool = True
+
+
+TOOL_SPECS: dict[str, ToolSpec] = {
+    "pull_kiro_config": ToolSpec(
+        pull_kiro_config, "Pull Kiro configuration", read_only=False, idempotent=True
+    ),
+    "push_kiro_config": ToolSpec(push_kiro_config, "Propose Kiro configuration", read_only=False),
+    "raise_merge_request": ToolSpec(
+        raise_merge_request, "Raise merge request", read_only=False, idempotent=True
+    ),
+    "diff_kiro_config": ToolSpec(diff_kiro_config, "Compare Kiro configuration", read_only=True),
+    "validate_kiro_config": ToolSpec(
+        validate_kiro_config, "Validate Kiro configuration", read_only=True, open_world=False
+    ),
+    "list_kiro_collections": ToolSpec(
+        list_kiro_collections, "List synced collections", read_only=True, open_world=False
+    ),
+    "kiro_v3_status": ToolSpec(
+        kiro_v3_status, "Kiro CLI V3 status", read_only=True, open_world=False
+    ),
 }
+TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
+    name: spec.func for name, spec in TOOL_SPECS.items()
+}
+READ_ONLY_TOOLS: tuple[str, ...] = tuple(n for n, s in TOOL_SPECS.items() if s.read_only)
+MISSING_EXTRA = (
+    "the MCP server needs the optional mcp dependency; run it with "
+    "'uvx --from \"steersync[mcp]\" steersync mcp' or install 'steersync[mcp]'"
+)
 
 
 def build_server() -> Any:  # noqa: ANN401
     """Create the MCP server. Imported lazily so the core has no MCP dependency."""
     try:
-        from mcp.server.mcpserver import MCPServer  # noqa: PLC0415
+        from mcp.server import MCPServer  # noqa: PLC0415
+        from mcp.types import ToolAnnotations  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
-        msg = "the MCP server needs the optional dependency: pip install 'steersync[mcp]'"
-        raise SteersyncError(msg) from exc
-    server = MCPServer("steersync", instructions=SERVER_INSTRUCTIONS)
-    for name, func in TOOLS.items():
-        server.tool(name=name)(func)
+        raise SteersyncError(MISSING_EXTRA) from exc
+    server = MCPServer(
+        "steersync", title="steersync", version=__version__, instructions=SERVER_INSTRUCTIONS
+    )
+    for name, spec in TOOL_SPECS.items():
+        annotations = ToolAnnotations(
+            title=spec.title,
+            read_only_hint=spec.read_only,
+            destructive_hint=spec.destructive if not spec.read_only else False,
+            idempotent_hint=spec.idempotent or spec.read_only,
+            open_world_hint=spec.open_world,
+        )
+        server.tool(name=name, title=spec.title, annotations=annotations)(spec.func)
     return server
 
 
 def serve() -> None:
-    """Run the stdio MCP server until the client disconnects."""
+    """Run the stdio MCP server until the client disconnects. Logs go to stderr."""
+    configure_logging(os.environ.get("STEERSYNC_LOG_LEVEL", "WARNING").upper(), "text")
     build_server().run(transport="stdio")
+
+
+def main() -> None:
+    """Console entry point ``steersync-mcp``."""
+    try:
+        serve()
+    except SteersyncError as exc:
+        print(f"steersync: error: {exc}", file=sys.stderr)
+        sys.exit(exc.exit_code)

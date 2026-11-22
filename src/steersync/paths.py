@@ -1,7 +1,5 @@
 """Path resolution for Kiro directories, collection targets, locks and the clone cache."""
 
-from __future__ import annotations
-
 import hashlib
 from collections.abc import Mapping
 from pathlib import Path

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from pathlib import Path
 
@@ -30,7 +28,9 @@ def test_pull_applies_global_and_workspace(
         "skills",
         "agents",
         "hooks",
+        "workflows",
         "prompts",
+        "kiroignore",
     }
     assert (global_steering_dir(config, env) / "rules.md").read_text() == GLOBAL_DOC
     assert (project / ".kiro" / "steering" / "python.md").read_text() == PROJECT_DOC
@@ -203,8 +203,11 @@ def test_push_creates_branch_then_dedupes(
         "agents",
         "hooks",
         "settings",
+        "sandbox",
+        "workflows",
         "prompts",
         "agents-md",
+        "kiroignore",
     )
     assert pushed.plan is not None
     assert pushed.plan.add == ("steering/api.md",)

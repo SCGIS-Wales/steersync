@@ -1,14 +1,12 @@
 """Generation and installation of git hooks, Kiro hooks and MCP configuration."""
 
-from __future__ import annotations
-
 import json
 import stat
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from steersync import gitops
+from steersync import __version__, gitops
 from steersync.config import Config
 
 HOOK_MARKER = "# managed by steersync"
@@ -114,12 +112,34 @@ MCP_SERVER_NAME = "steersync"
 KIRO_HOOK_FILE = "steersync.json"
 # Name of the environment variable (not a secret) that carries the GitLab token.
 DEFAULT_TOKEN_ENV = "GITLAB_TOKEN"  # noqa: S105
+# uvx needs the mcp extra; pinning the version keeps every machine on the same server.
+DEFAULT_MCP_ARGS: tuple[str, ...] = ("--from", f"steersync[mcp]=={__version__}", "steersync", "mcp")
+# Read only tools Kiro may run without asking (mutating tools always ask).
+AUTO_APPROVE_TOOLS: tuple[str, ...] = (
+    "diff_kiro_config",
+    "validate_kiro_config",
+    "list_kiro_collections",
+    "kiro_v3_status",
+)
+
+
+def mcp_args_for(command: str) -> tuple[str, ...]:
+    """Arguments that start the server with ``command``: uvx, steersync or steersync-mcp."""
+    match Path(command).name:
+        case "uvx":
+            return DEFAULT_MCP_ARGS
+        case "steersync":
+            return ("mcp",)
+        case "steersync-mcp":
+            return ()
+        case _:
+            return ("steersync", "mcp")
 
 
 def mcp_server_entry(
     *,
     command: str = "uvx",
-    args: tuple[str, ...] = ("steersync", "mcp"),
+    args: tuple[str, ...] | None = None,
     remote: str | None = None,
     token_env: str = DEFAULT_TOKEN_ENV,
 ) -> dict[str, object]:
@@ -137,18 +157,20 @@ def mcp_server_entry(
     }
     return {
         "command": command,
-        "args": list(args),
+        "args": list(mcp_args_for(command) if args is None else args),
         "env": env,
         "timeout": 60000,
         "requestTimeout": 180000,
         "disabled": False,
+        "autoApprove": list(AUTO_APPROVE_TOOLS),
+        "disabledTools": [],
     }
 
 
 def render_mcp_config(
     *,
     command: str = "uvx",
-    args: tuple[str, ...] = ("steersync", "mcp"),
+    args: tuple[str, ...] | None = None,
     remote: str | None = None,
     token_env: str = DEFAULT_TOKEN_ENV,
 ) -> str:

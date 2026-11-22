@@ -4,8 +4,6 @@ The module is named after steering, its first use, but every function works on
 any collection of files described by a :class:`FileSpec`.
 """
 
-from __future__ import annotations
-
 import functools
 import glob
 import hashlib
@@ -49,6 +47,23 @@ class FileSpec(NamedTuple):
     exclude: tuple[str, ...] = ()
     max_depth: int | None = None
 
+    def literal_names(self) -> frozenset[str]:
+        """File names spelled out literally at the end of include patterns.
+
+        A hidden file is only synced when an include pattern names it exactly
+        (``**/.kiroignore``), never through a wildcard.
+        """
+        return frozenset(
+            name
+            for pattern in self.include
+            if not any(c in (name := PurePosixPath(pattern).name) for c in "*?[")
+        )
+
+    def excludes_directory(self) -> Callable[[str], bool]:
+        """Return a predicate telling whether everything under a directory is excluded."""
+        excludes = [_glob_regex(p) for p in self.exclude]
+        return lambda relative: any(r.match(f"{relative}/{_PROBE}") for r in excludes)
+
     def matcher(self) -> Callable[[str], bool]:
         """Return a predicate over posix relative paths."""
         includes = [_glob_regex(p) for p in self.include]
@@ -60,6 +75,8 @@ class FileSpec(NamedTuple):
 
 
 STEERING_SPEC = FileSpec(include=(f"**/*{STEERING_SUFFIX}",))
+# A file name no real file has, used to test whether a directory pattern excludes a tree.
+_PROBE = "\0steersync-probe"
 
 
 @functools.cache
@@ -120,8 +137,11 @@ def discover_files(
 ) -> list[Path]:
     """Return the files under ``directory`` selected by ``spec`` sorted by relative path.
 
-    Hidden files and directories are skipped and symlinked directories are never
-    entered, to match the Kiro IDE. Symlinked files are included when
+    Hidden directories are skipped, and so are hidden files unless an include
+    pattern names them literally (``**/.kiroignore``). Directories whose whole tree
+    is excluded (``**/node_modules/**``) are not entered, so a workspace wide
+    collection such as nested ``AGENTS.md`` stays fast. Symlinked directories are
+    never entered, to match the Kiro IDE. Symlinked files are included when
     ``follow_symlinks`` is true (kiro-cli follows them). Content from the central
     repository is read with ``follow_symlinks=False`` so a malicious link such as
     ``global/x.md -> ~/.ssh/id_rsa`` cannot copy local secrets into the sync.
@@ -129,15 +149,20 @@ def discover_files(
     if not directory.is_dir():
         return []
     matches = spec.matcher()
+    pruned = spec.excludes_directory()
+    hidden_ok = spec.literal_names()
     found: list[Path] = []
     for root, dirs, files in os.walk(directory, followlinks=False):
-        depth = len(Path(root).relative_to(directory).parts)
+        here = Path(root).relative_to(directory)
+        depth = len(here.parts)
         if spec.max_depth is not None and depth + 1 >= spec.max_depth:
             dirs[:] = []
         else:
-            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+            dirs[:] = sorted(
+                d for d in dirs if not d.startswith(".") and not pruned((here / d).as_posix())
+            )
         for name in sorted(files):
-            if name.startswith("."):
+            if name.startswith(".") and name not in hidden_ok:
                 continue
             path = Path(root) / name
             if not matches(path.relative_to(directory).as_posix()):

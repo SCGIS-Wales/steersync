@@ -1,7 +1,5 @@
 """GitLab merge request client, exercised against a fake urlopen."""
 
-from __future__ import annotations
-
 import io
 import json
 import urllib.error
