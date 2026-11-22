@@ -82,6 +82,10 @@ files that the GitHub release carries.
 
 ## Quick start
 
+Setting up a new central repository from scratch. Adopting steersync where projects already
+have Kiro files on GitLab is covered step by step in
+[Getting started with existing GitLab repositories](#getting-started-with-existing-gitlab-repositories).
+
 1. Point steersync at the central repository, once per machine:
 
    ```bash
@@ -114,6 +118,160 @@ files that the GitHub release carries.
 
 Run `steersync doctor` at any time to see what steersync has resolved, and `steersync lint`
 to validate the configuration against Kiro's rules and best practices.
+
+## Getting started with existing GitLab repositories
+
+Use this when your projects already live on GitLab and already have Kiro files: a committed
+`.kiro/` directory, an `AGENTS.md`, or files that exist only on your machine. Nothing is
+deleted or overwritten along the way: steersync proposes what you have, you review it as a
+merge request, and only merged content flows back to everyone.
+
+The examples use a project at `gitlab.example.com/acme/svc` and a central repository at
+`gitlab.example.com/platform/kiro-config`; replace both with yours.
+
+### 1. Create the central repository (once per organisation)
+
+In GitLab, create a project for the shared configuration, for example `platform/kiro-config`.
+
+- Tick **Initialize repository with a README**. steersync works from the default branch
+  (`main`), and a new GitLab project has no branch until its first commit; without one every
+  command stops with "the central repository ... has no branch 'main'".
+- Protect `main` and require merge request approval. Developers need the Developer role so
+  they can push proposal branches (`kiro-config/<group>/<project>/<user>-<hash>`); nobody
+  pushes to `main` directly.
+- Leave it otherwise empty: the first push creates the layout (see
+  [Central repository layout](#central-repository-layout)). If you adopt a repository that
+  already has Kiro files, they must follow that layout: `global/<collection>/` and
+  `projects/<group>/<project>/<collection>/`.
+
+### 2. Install steersync (every developer)
+
+```bash
+uv tool install --python 3.14 "steersync[mcp]"
+steersync --version
+```
+
+uv installs Python 3.14 when it is missing. Authentication uses your existing git setup (SSH
+key or credential helper); steersync never asks for or stores a password.
+
+### 3. Point projects at the central repository
+
+Commit a small configuration file to each project, so teammates need no setup of their own:
+
+```bash
+cd ~/code/svc
+mkdir -p .kiro
+cat > .kiro/steersync.yaml <<'YAML'
+remote:
+  url: git@gitlab.example.com:platform/kiro-config.git
+  allowed_hosts: [gitlab.example.com]
+YAML
+steersync config validate
+```
+
+(For a single setting on your machine instead, put the same YAML in
+`~/.config/steersync/config.yaml`.) For merge request links and `steersync mr`, export a
+GitLab token with the `api` scope as `GITLAB_TOKEN`; without one, the merge request is still
+opened through git push options.
+
+### 4. Check what you already have
+
+```bash
+steersync doctor     # look for "project slug: acme/svc", taken from the origin URL
+steersync lint       # errors block a push; warnings are advice
+steersync status     # what would be proposed: one "+" line per file
+```
+
+The project slug decides where the project lives centrally (`projects/acme/svc/`). It comes
+from the `origin` URL you configured, including subgroups, and is not affected by
+`insteadOf` rewrites. Fix lint errors before the first push: `steersync migrate-hooks
+--write` converts old `*.kiro.hook` files, and `kiro-cli agent upgrade .kiro/agents`
+rewrites CLI 2.x agents in place into the universal format that Kiro CLI 2 and 3 both load
+(it keeps each original as `<name>.json.bak`, which steersync never syncs).
+
+### 5. Set up the project
+
+```bash
+steersync init --hook
+```
+
+This adds the synced directories to `.git/info/exclude` (new files there are no longer
+offered to the project repository; files you already committed stay tracked), installs the
+pre-push hook, writes the Kiro session hook `.kiro/hooks/steersync.json` and registers the
+MCP server in `.kiro/settings/mcp.json`, keeping any servers already there.
+
+### 6. Seed the central repository
+
+```bash
+steersync push
+```
+
+Every collection is proposed as one branch, and GitLab opens a merge request for it (the
+URL is printed when `GITLAB_TOKEN` is set). Review it like code and merge it. Then:
+
+```bash
+steersync pull       # "applied 0 change(s)": you and the central repository now agree
+```
+
+Pulling before the merge is safe too. A first pull never overwrites a file you already
+have: one that differs from the central copy is reported as locally modified and kept, and
+one the central repository lacks is reported as local only. Repeat steps 3 to 6 in every
+project; each lands in its own `projects/<group>/<project>/` directory.
+
+### 7. Decide where the files live in the project repository
+
+The Kiro files you had committed are still tracked by the project. Pick one model:
+
+- **The central repository is the source of truth** (recommended when several projects
+  share configuration). Stop tracking the synced directories in the project. The files stay
+  on disk; Kiro keeps loading them, and every session refreshes them:
+
+  ```bash
+  git ls-files .kiro              # check: only directories steersync syncs
+  git rm -r --cached .kiro/steering .kiro/agents .kiro/hooks   # the ones you had
+  git add .kiro/steersync.yaml
+  git commit -m "Kiro configuration comes from the central repository (steersync)"
+  ```
+
+  Only untrack directories whose files steersync syncs (see
+  [Collections](#collections)); `AGENTS.md` and `.kiroignore` are synced and also stay
+  committed, because other tools read them.
+- **Keep committing the files in the project too.** Run `steersync init --hook
+  --no-exclude` instead of step 5, and commit what a pull changes like any other change.
+
+### 8. Teammates
+
+```bash
+git clone git@gitlab.example.com:acme/svc.git && cd svc
+uv tool install --python 3.14 "steersync[mcp]"    # once per machine
+steersync init --hook
+steersync pull
+```
+
+From then on every Kiro session starts with a pull, and every `git push` of the project
+proposes their Kiro changes.
+
+### 9. Files in your home directory (`~/.kiro`)
+
+`steersync pull` also syncs `global/` with `~/.kiro` (steering, skills, agents, hooks,
+prompts and workflows that apply to every project). The first pull keeps your existing
+personal files. To share some of them with everyone, propose them with
+`steersync push --scope global`; to leave your home directory out entirely, use
+`steersync pull --no-global`. Per user files such as workspace permissions, memories and
+sessions are never synced.
+
+### 10. Day to day
+
+| You want to | Do |
+|---|---|
+| Get the latest merged configuration | Nothing: each Kiro session pulls. Or `steersync pull`, or ask Kiro to "pull the kiro config". |
+| Share a change | Edit under `.kiro/`, then `git push` the project, or `steersync push`, or ask Kiro to "push my kiro config". |
+| Find the merge request | `steersync mr` (needs `GITLAB_TOKEN`). |
+| See what differs | `steersync status`. |
+| Overwrite your local edits with the central copy | `steersync pull --force`. |
+
+If something looks wrong, `steersync doctor` shows the configuration, the remote, the
+project slug, every directory and the Kiro CLI harness.
 
 ## Starting Kiro in any repository
 

@@ -310,3 +310,18 @@ def test_push_options_accepted_when_advertised(
         env=git_env,
     )
     assert delivered is True
+
+
+def test_empty_central_repository_explains_the_fix(
+    config: Config, env: dict[str, str], tmp_path: Path
+) -> None:
+    """A new GitLab project without a README has no default branch yet."""
+    from steersync.errors import GitError
+    from tests.conftest import git
+
+    empty = tmp_path / "empty.git"
+    git("init", "-q", "--bare", str(empty), cwd=tmp_path, env=env)
+    with pytest.raises(GitError, match="Initialize repository with a README"):
+        gitops.ensure_cache_clone(
+            config, url=str(empty), cache_dir=tmp_path / "cache-empty", env=env
+        )
