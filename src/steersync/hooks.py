@@ -244,7 +244,7 @@ def write_kiro_hook(
     return action
 
 
-def render_pre_commit_config(rev: str = "v0.6.1") -> str:
+def render_pre_commit_config(rev: str = "v0.7.0") -> str:
     """Render the ``.pre-commit-config.yaml`` snippet consumers add to their projects."""
     return (
         "repos:\n"

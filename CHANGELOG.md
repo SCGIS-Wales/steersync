@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-22
+
 ### Added
 
 - `steersync fleet`: every repository on the machine at once. `fleet status` shows, per
