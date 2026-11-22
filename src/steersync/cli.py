@@ -11,6 +11,7 @@ from typing import Any, cast
 import click
 
 from steersync import __version__, gitlab, gitops, hooks, kiro_version, migrate, sync
+from steersync import setup as setup_steps
 from steersync.config import (
     LINT_PROFILES,
     CollectionConfig,
@@ -28,6 +29,7 @@ from steersync.mcp_tools import MISSING_MCP_EXTRA
 from steersync.paths import (
     cache_root,
     global_collection_dir,
+    kiro_home,
     workspace_collection_dir,
     workspace_steering_dir,
 )
@@ -695,21 +697,39 @@ def init(
         result = hooks.install_pre_push_hook(config, root, force=False)
         click.echo(f"{result.action}: {result.path}")
     if kiro:
-        hooks_dir = root / (_collection_path(config, "hooks") or ".kiro/hooks")
-        hook_action = hooks.write_kiro_hook(hooks_dir)
-        click.echo(f"{hook_action}: {hooks_dir / hooks.KIRO_HOOK_FILE} (Kiro SessionStart hook)")
-        mcp_path = root / (_collection_path(config, "settings") or ".kiro/settings") / "mcp.json"
-        entry = hooks.mcp_server_entry(command=mcp_command, token_env=config.gitlab.token_env)
-        try:
-            mcp_action = hooks.merge_mcp_config(mcp_path, entry)
-        except ValueError as exc:
-            _fail(SteersyncError(str(exc)))
-            return
-        click.echo(f"{mcp_action}: {mcp_path} (steersync MCP server)")
+        _init_kiro_pieces(config, root, mcp_command)
     steering_dir = workspace_steering_dir(config, root)
     steering_dir.mkdir(parents=True, exist_ok=True)
     click.echo(f"ready: {steering_dir}")
     click.echo(f"collections: {', '.join(config.enabled_collections()) or '(none)'}")
+
+
+def _init_kiro_pieces(config: Config, root: Path, mcp_command: str) -> None:
+    """Session hook and MCP entry for the workspace, unless ~/.kiro already provides them.
+
+    `steersync setup` registers both once for the whole machine; repeating them per
+    repository would pull twice per session and list the server twice.
+    """
+    home = kiro_home(os.environ)
+    hooks_dir = root / (_collection_path(config, "hooks") or ".kiro/hooks")
+    if hooks.session_hook_present(home / "hooks"):
+        click.echo(f"skipped: session hook ({home / 'hooks'} already pulls for every workspace)")
+    else:
+        hook_action = hooks.write_kiro_hook(hooks_dir)
+        click.echo(f"{hook_action}: {hooks_dir / hooks.KIRO_HOOK_FILE} (Kiro SessionStart hook)")
+    global_mcp = home / "settings" / "mcp.json"
+    if present := hooks.find_steersync_server(global_mcp):
+        click.echo(f"skipped: MCP server ({global_mcp} already runs it as {present!r})")
+        return
+    mcp_path = root / (_collection_path(config, "settings") or ".kiro/settings") / "mcp.json"
+    entry = hooks.mcp_server_entry(command=mcp_command, token_env=config.gitlab.token_env)
+    try:
+        reg = hooks.register_mcp_server(mcp_path, entry)
+    except ValueError as exc:
+        _fail(SteersyncError(str(exc)))
+        return
+    label = "unchanged" if reg.action == "present" else "written"
+    click.echo(f"{label}: {mcp_path} (steersync MCP server {reg.name!r})")
 
 
 def _hint_tracked_files(config: Config, root: Path, patterns: list[str]) -> None:
@@ -729,6 +749,253 @@ def _hint_tracked_files(config: Config, root: Path, patterns: list[str]) -> None
         "or keep committing them and rerun init with --no-exclude.",
         err=True,
     )
+
+
+@main.command("setup")
+@click.option("--remote", help="Central repository: a GitLab page address, SSH or HTTPS URL.")
+@click.option("--branch", help="Default branch of the central repository (asked when omitted).")
+@click.option("-y", "--yes", is_flag=True, help="Accept every default without asking.")
+@click.option(
+    "--mcp/--no-mcp", default=None, help="Register the MCP server in ~/.kiro/settings/mcp.json."
+)
+@click.option(
+    "--session-hook/--no-session-hook",
+    default=None,
+    help="Add a global Kiro hook that pulls when any session starts.",
+)
+@click.option(
+    "--project/--no-project",
+    default=None,
+    help="Also prepare the git repository in the current directory.",
+)
+@click.pass_context
+def setup(
+    ctx: click.Context,
+    remote: str | None,
+    branch: str | None,
+    yes: bool,
+    mcp: bool | None,
+    session_hook: bool | None,
+    project: bool | None,
+) -> None:
+    """Set steersync up on this machine, step by step. Safe to run again.
+
+    Checks git, finds the central GitLab repository and confirms its branch with git,
+    saves ~/.config/steersync/config.yaml, registers the MCP server in
+    ~/.kiro/settings/mcp.json (only when no server there runs steersync yet; every other
+    server is left exactly as it is), adds a global Kiro session hook and prepares the
+    repository you run it in. Nothing is overwritten without a backup.
+    """
+    env = os.environ
+    params = ctx.find_root().params
+    configure_logging(
+        params.get("log_level") or "INFO", params.get("log_format") or "text", quiet=False
+    )
+
+    def ask(question: str, default: bool) -> bool:
+        return default if yes else click.confirm(question, default=default)
+
+    def step(title: str) -> None:
+        click.echo(click.style(f"\n== {title}", bold=True))
+
+    step("git")
+    git = setup_steps.check_git()
+    if not git.ok:
+        _fail(SteersyncError(git.problem or "git is not usable"))
+        return
+    click.echo(f"ok: {git.version} ({git.path})")
+
+    config_path = setup_steps.user_config_path(env)
+    try:
+        existing = setup_steps.load_yaml_file(config_path)
+        current = load_config(workspace_root=None, env=env)
+    except SteersyncError as exc:
+        _fail(exc)
+        return
+
+    step("central repository")
+    chosen: setup_steps.RemoteCheck | None = None
+    local = False
+    # With --yes, reuse the repository configured by an earlier run.
+    answer = remote or (current.remote.url if yes else None)
+    if yes and not answer:
+        _fail(SteersyncError("pass --remote: no central repository is configured yet"))
+        return
+    for _ in range(3):
+        if answer is None:
+            answer = click.prompt(
+                "GitLab repository that holds the shared Kiro configuration "
+                "(page address or clone URL)",
+                default=current.remote.url or None,
+                show_default=bool(current.remote.url),
+            )
+        candidates = setup_steps.candidate_urls(answer)
+        if not candidates:
+            click.echo("that is not a repository address", err=True)
+        failures: list[setup_steps.RemoteCheck] = []
+        for candidate in candidates:
+            probe_config = current.model_copy(
+                update={
+                    "remote": current.remote.model_copy(update={"allow_local": candidate.local})
+                }
+            )
+            click.echo(f"checking {gitops.redact_url(candidate.url)} ...")
+            check = setup_steps.probe_remote(probe_config, candidate.url, env)
+            if check.reachable:
+                chosen, local = check, candidate.local
+                break
+            failures.append(check)
+        if chosen is not None:
+            break
+        for failure in failures:
+            click.echo(f"  not reachable: {failure.error}", err=True)
+        if failures:
+            hint = setup_steps.explain_unreachable(failures[0].url, failures[0].error or "")
+            click.echo(f"  next step: {hint}", err=True)
+        if remote or yes:
+            _fail(SteersyncError("the central repository is not reachable with git"))
+            return
+        answer = None
+    if chosen is None:
+        _fail(SteersyncError("no reachable central repository after three attempts"))
+        return
+    click.echo(f"ok: {gitops.redact_url(chosen.url)} answers ({len(chosen.branches)} branch(es))")
+
+    step("branch")
+    if not chosen.branches:
+        _fail(
+            SteersyncError(
+                "the repository has no branches yet. In GitLab create it with 'Initialize "
+                "repository with a README' (or push one commit), then run setup again"
+            )
+        )
+        return
+    proposed = branch or (
+        current.remote.default_branch
+        if current.remote.url == chosen.url and current.remote.default_branch in chosen.branches
+        else setup_steps.suggested_branch(chosen)
+    )
+    picked: str | None = None
+    for _ in range(3):
+        candidate_branch = (
+            proposed
+            if yes or branch
+            else click.prompt("Branch that holds the merged configuration", default=proposed)
+        )
+        if candidate_branch in chosen.branches:
+            picked = candidate_branch
+            break
+        click.echo(
+            f"  branch {candidate_branch!r} does not exist there; branches: "
+            f"{', '.join(chosen.branches[:10])}",
+            err=True,
+        )
+        if yes or branch:
+            break
+    if picked is None:
+        _fail(SteersyncError("the branch does not exist in the central repository"))
+        return
+    click.echo(f"ok: {picked} exists (git ls-remote)")
+
+    root = _workspace_root(current, env)
+    extra: dict[str, dict[str, Any]] = {}
+    if root is not None and project is not False:
+        folders = setup_steps.unsynced_kiro_folders(root, current)
+        if folders:
+            step("extra .kiro folders")
+            listed = ", ".join(f".kiro/{f}" for f in folders)
+            if ask(f"{listed} are not synced by default. Sync them too?", default=False):
+                extra = {f"kiro-{f}": setup_steps.extra_collection(f) for f in folders}
+
+    step("configuration")
+    host = None if local else setup_steps.gitops_host(chosen.url)
+    try:
+        data = setup_steps.updated_user_config(
+            existing,
+            url=chosen.url,
+            branch=picked,
+            host=host,
+            local=local,
+            extra_collections=extra,
+        )
+    except (SteersyncError, ValueError) as exc:
+        _fail(SteersyncError(f"the configuration would be invalid: {exc}"))
+        return
+    if existing == data:
+        click.echo(f"unchanged: {config_path}")
+    elif ask(f"Save the central repository to {config_path}?", default=True):
+        backup = setup_steps.write_user_config(config_path, data)
+        click.echo(f"written: {config_path}" + (f" (previous: {backup.name})" if backup else ""))
+    else:
+        click.echo("skipped: nothing was saved")
+        return
+    if root is not None and (project_file := setup_steps.project_config_path(root)):
+        click.echo(
+            f"note: {project_file} also sets the remote and wins inside this repository",
+            err=True,
+        )
+
+    home = kiro_home(env)
+    step("Kiro MCP server")
+    mcp_path = home / "settings" / "mcp.json"
+    try:
+        present = hooks.find_steersync_server(mcp_path)
+        if present:
+            click.echo(f"unchanged: {mcp_path} already runs steersync as {present!r}")
+        elif mcp is False:
+            click.echo("skipped: --no-mcp")
+        elif mcp or ask(
+            f"Register the steersync MCP server in {mcp_path}? Other servers stay unchanged",
+            default=True,
+        ):
+            reg = hooks.register_mcp_server(mcp_path, hooks.setup_mcp_entry())
+            click.echo(
+                f"added: {reg.name!r} to {mcp_path}"
+                + (f" (backup: {reg.backup.name})" if reg.backup else "")
+            )
+    except ValueError as exc:
+        click.echo(f"left unchanged: {exc}", err=True)
+
+    step("Kiro session hook")
+    hooks_dir = home / "hooks"
+    target = hooks_dir / hooks.KIRO_HOOK_FILE
+    if hooks.session_hook_present(hooks_dir):
+        click.echo(f"unchanged: a hook in {hooks_dir} already pulls at session start")
+    elif target.exists():
+        click.echo(f"left unchanged: {target} exists and is not a steersync hook", err=True)
+    elif session_hook is False:
+        click.echo("skipped: --no-session-hook")
+    elif session_hook or ask(
+        f"Add {target} so every Kiro session pulls the latest configuration?", default=True
+    ):
+        hooks.write_kiro_hook(hooks_dir)
+        click.echo(f"written: {target}")
+
+    if root is None or project is False:
+        click.echo(
+            "\nDone. In each repository run `steersync setup --yes` or `steersync init --hook`."
+        )
+        return
+    step(f"this repository ({root})")
+    if project or ask("Prepare this repository (git excludes and the pre-push hook)?", True):
+        ctx.invoke(init, write_config=False, exclude=True, hook=True, kiro=True, mcp_command="uvx")
+        _setup_summary(root, env)
+    click.echo("\nDone. Run `steersync setup` again at any time; it only adds what is missing.")
+
+
+def _setup_summary(root: Path, env: Mapping[str, str]) -> None:
+    """What the first push would propose, so the next step is obvious."""
+    try:
+        config = load_config(workspace_root=root, env=env)
+        result = sync.status(config, workspace_root=root, env=env, run_lint=False)
+    except SteersyncError as exc:
+        click.echo(f"note: could not compare with the central repository: {exc}", err=True)
+        return
+    plans = result.workspace or {}
+    pending = sum(len(p.add) for p in plans.values())
+    click.echo(f"project {result.project}: {pending} file(s) only here", err=False)
+    if pending:
+        click.echo("next: `steersync push` proposes them as one merge request")
 
 
 @main.command("kiro-hook")

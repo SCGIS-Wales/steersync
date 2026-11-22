@@ -5,6 +5,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `steersync setup`: guided setup with no file to edit by hand. It checks git; takes the
+  central repository as a GitLab page address or clone URL and verifies it with
+  `git ls-remote` (SSH first, then HTTPS, with a concrete next step when neither answers);
+  offers the repository's default branch (`master` when it cannot tell) and confirms it
+  exists; offers to sync extra `.kiro` folders such as `notes` and `plan`; saves
+  `~/.config/steersync/config.yaml`; adds the MCP server to `~/.kiro/settings/mcp.json`
+  only when no server there runs steersync under any name, leaving every other server as it
+  is, with a backup and a read back check; adds a global Kiro session hook; and prepares the
+  current repository. Safe to run again; `--yes` and flags make it scriptable.
+- `steersync init` skips the workspace session hook and MCP entry when `~/.kiro` already
+  provides them, so nothing runs twice.
+
 ## [0.5.8] - 2026-11-22
 
 ### Fixed

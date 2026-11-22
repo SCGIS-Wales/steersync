@@ -361,7 +361,8 @@ def test_init_writes_session_hook_and_mcp_entry(runner_project: tuple[CliRunner,
     assert not rules & {"autoload-hook-missing", "autoload-mcp-missing"}
     second = runner.invoke(main, ["init"])
     assert "unchanged: " in second.output
-    assert "kept: " in second.output
+    assert "(steersync MCP server 'steersync')" in second.output
+    assert "written: " not in second.output.split("mcp.json")[0].splitlines()[-1]
     skipped = runner.invoke(main, ["init", "--no-kiro"])
     assert "SessionStart" not in skipped.output
 
