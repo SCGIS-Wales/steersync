@@ -22,8 +22,9 @@ reads them, so a session in any repository can act on a plain sentence.
 import functools
 import logging
 import os
+import re
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Annotated, Any, NamedTuple
 
 import anyio
@@ -352,9 +353,28 @@ def build_server() -> MCPServer:
     return server
 
 
+_PLACEHOLDER = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+
+def drop_unexpanded_placeholders(environ: MutableMapping[str, str]) -> list[str]:
+    """Remove variables whose value is a literal ``${NAME}`` the client did not expand.
+
+    The rendered mcp.json forwards STEERSYNC_REMOTE, GITLAB_TOKEN, SSH_AUTH_SOCK and
+    HTTPS_PROXY as ``${VAR}``. Kiro passes the text through unchanged when the variable is
+    unset or not approved, which would override the configured remote, point git at a
+    proxy called ``${HTTPS_PROXY}`` and present ``${GITLAB_TOKEN}`` as a token.
+    """
+    dropped = [k for k, v in environ.items() if _PLACEHOLDER.fullmatch(v.strip())]
+    for key in dropped:
+        del environ[key]
+    return dropped
+
+
 def serve() -> None:
     """Run the stdio MCP server until the client disconnects. Logs go to stderr."""
     configure_logging(os.environ.get("STEERSYNC_LOG_LEVEL", "WARNING").upper(), "text")
+    for key in drop_unexpanded_placeholders(os.environ):
+        log.info("ignoring %s: the MCP client passed it as an unexpanded placeholder", key)
     build_server().run(transport="stdio")
 
 

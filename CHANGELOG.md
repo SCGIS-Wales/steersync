@@ -5,6 +5,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The MCP server failed with "unsupported remote URL: ${STEERSYNC_REMOTE}" when started by
+  Kiro: the rendered mcp.json forwards `${VAR}` placeholders, and Kiro passes them through
+  literally when the variable is unset or not approved. The server now ignores any variable
+  whose value is still an unexpanded `${NAME}`, so the configured remote, proxy, SSH agent
+  and GitLab token are not replaced by placeholder text. Found by an end to end push from a
+  Kiro chat.
+
 ## [0.5.4] - 2026-11-22
 
 ### Fixed
