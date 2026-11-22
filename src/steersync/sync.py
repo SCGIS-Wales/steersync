@@ -264,9 +264,24 @@ def _project_dir(config: Config, cache_dir: Path, project: str) -> Path:
 
 
 def workspace_lock(config: Config, workspace_root: Path, env: Mapping[str, str]) -> Path:
-    """The workspace's last sync record under its git directory."""
+    """The workspace's last sync record under its git directory.
+
+    A record left in the work tree by steersync 0.6 or earlier is moved here the first time,
+    so upgrading keeps the last sync state: central updates still apply as updates and
+    deletions still prune, instead of every changed file turning into a conflict.
+    """
     git_dir = gitops.git_dir(config, workspace_root, env=gitops.git_environment(env))
-    return paths.workspace_lock_path(git_dir)
+    record = paths.workspace_lock_path(git_dir)
+    legacy = workspace_root / paths.LEGACY_WORKSPACE_LOCK
+    if not record.exists() and legacy.is_file():
+        try:
+            record.parent.mkdir(parents=True, exist_ok=True)
+            legacy.replace(record)
+            log.info("moved the sync record from %s to %s", legacy, record)
+        except OSError as exc:
+            log.warning("could not move the sync record from %s: %s", legacy, exc)
+            return legacy
+    return record
 
 
 def resolve_project(
@@ -337,11 +352,7 @@ def pull(
                 _ScopeTarget(
                     "workspace",
                     _project_dir(config, cache_dir, project),
-                    paths.workspace_lock_path(
-                        gitops.git_dir(
-                            config, workspace_root, env=gitops.git_environment(environment)
-                        )
-                    ),
+                    workspace_lock(config, workspace_root, environment),
                     lambda c: paths.workspace_collection_dir(c, workspace_root),
                 )
             )

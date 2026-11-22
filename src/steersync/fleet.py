@@ -164,7 +164,9 @@ class FleetReport(BaseModel):
     repositories: tuple[RepoStatus, ...]
 
     def needing_attention(self) -> int:
-        return sum(r.state in {"error", "diverged"} for r in self.repositories)
+        """Rows with something to do: fix, resolve, push, pull or prune."""
+        todo = {"error", "diverged", "local-ahead", "central-ahead", "missing"}
+        return sum(r.state in todo for r in self.repositories if not r.is_global())
 
     def document(self) -> dict[str, object]:
         """The stable ``fleet status --json`` document."""
@@ -361,7 +363,7 @@ def collect(
         config = group[0].config if group else machine
         assert config is not None  # noqa: S101 - a remote comes from a repo or the machine
         redacted = gitops.redact_url(url)
-        on_event((redacted, "refreshing", "refreshing the central repository"))
+        on_event((redacted, "reading", "the central repository"))
         try:
             with sync.central_lock(config, env, url):
                 stale = refresh is True or (
@@ -495,7 +497,7 @@ def push_one(row: RepoStatus, env: Mapping[str, str], *, dry_run: bool = False) 
         row,
         "push",
         "dry-run" if dry_run else "done",
-        f"{result.status}: {result.message}",
+        result.message if result.status in result.message else f"{result.status}: {result.message}",
         branch=result.branch,
         merge_request=result.merge_request,
     )

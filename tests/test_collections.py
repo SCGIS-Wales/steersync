@@ -564,3 +564,36 @@ def test_path_helpers(config: Config, env: dict[str, str], tmp_path: Path) -> No
     assert workspace_collection_dir(settings, tmp_path) == tmp_path / ".kiro" / "settings"
     skills = config.collections["skills"]
     assert global_collection_dir(skills, env) == kiro_home(env) / "skills"
+
+
+def test_record_from_before_0_7_is_moved_and_kept(
+    config: Config,
+    env: dict[str, str],
+    project: Path,
+    central: Path,
+    central_commit: CentralCommit,
+) -> None:
+    """Upgrading keeps the last sync state: central edits still apply as updates."""
+    sync.pull(config, workspace_root=project, env=env, include_global=False)
+    legacy = project / ".kiro" / "steersync.lock.json"
+    lock_file(project).replace(legacy)  # where steersync 0.6 kept it
+    central_commit(lambda w: (central_project(w) / "python.md").write_text("# Theirs\n"), "edit")
+    result = sync.pull(config, workspace_root=project, env=env, include_global=False)
+    assert result.conflicts == ()
+    assert (project / ".kiro" / "steering" / "python.md").read_text() == "# Theirs\n"
+    assert not legacy.exists()
+    assert read_lock(lock_file(project))["collections"]["steering"]["files"]
+
+
+def test_removed_workspace_lock_key_still_loads(
+    config_file: Path, env: dict[str, str], tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import yaml
+
+    data = yaml.safe_load(config_file.read_text()) or {}
+    data.setdefault("paths", {})["workspace_lock"] = ".kiro/steersync.lock.json"
+    old = tmp_path / "old.yaml"
+    old.write_text(yaml.safe_dump(data))
+    with caplog.at_level(logging.WARNING):
+        load_config(env=env, explicit=old)
+    assert "paths.workspace_lock is no longer used" in caplog.text

@@ -55,12 +55,18 @@ def typed_overwrite(rows: Sequence[RepoStatus], ask: Callable[[str], str | None]
     click.echo("These local edits will be replaced by the central versions (a verified")
     click.echo("backup is taken first; `steersync fleet restore` puts it back):")
     for row in rows:
-        click.echo(f"  {row.path}")
+        click.echo(f"  {short(row.path)}")
         for name in row.conflicts:
             click.echo(f"    {name}")
     word = expected_word(len(rows))
     answer = ask(f"Type '{word}' to overwrite, anything else keeps your edits")
     return (answer or "").strip() == word
+
+
+def short(path: str) -> str:
+    """``~/code/app`` instead of the full home directory, as in the status table."""
+    home = str(Path.home())
+    return "~" + path[len(home) :] if path.startswith(home + "/") else path
 
 
 def _report(env: dict[str, str] | os._Environ[str], *, refresh: bool | None = None) -> FleetReport:
@@ -104,15 +110,19 @@ def _summary(outcomes: Sequence[Outcome], *, as_json: bool) -> None:
     for outcome in outcomes:
         if outcome.status in {"done", "dry-run"}:
             extra = outcome.merge_request or outcome.branch or ""
-            click.echo(f"{outcome.status:<8} {outcome.path}: {outcome.detail} {extra}".rstrip())
+            if extra and extra in outcome.detail:
+                extra = ""
+            click.echo(
+                f"{outcome.status:<8} {short(outcome.path)}: {outcome.detail} {extra}".rstrip()
+            )
             for backup in outcome.backups:
                 click.echo(f"         backup: {backup}")
     for outcome in outcomes:
         if outcome.status == "skipped":
-            click.echo(f"skipped  {outcome.path}: {outcome.detail}")
+            click.echo(f"skipped  {short(outcome.path)}: {outcome.detail}")
     for outcome in outcomes:
         if outcome.status == "failed":
-            click.echo(f"FAILED   {outcome.path}: {outcome.detail}", err=True)
+            click.echo(f"FAILED   {short(outcome.path)}: {outcome.detail}", err=True)
             if outcome.rerun:
                 click.echo(f"         rerun: {outcome.rerun}", err=True)
 
@@ -129,7 +139,7 @@ def _finish(outcomes: Sequence[Outcome], interrupted: bool, *, as_json: bool) ->
 def _progress(event: tuple[str, str, str]) -> None:
     subject, phase, message = event
     if phase == "running":
-        click.echo(f"{subject}: {message}", err=True)
+        click.echo(f"{short(subject)}: {message}", err=True)
 
 
 def do_push(rows: Sequence[RepoStatus], *, dry_run: bool) -> tuple[list[Outcome], bool]:
@@ -180,7 +190,7 @@ def fleet_push(
         for row in rows:
             reason = fleet.push_reason(row)
             note = f"skip: {reason}" if reason else f"push {row.push.render()}"
-            click.echo(f"  {row.path}  [{row.state}]  {note}")
+            click.echo(f"  {short(row.path)}  [{row.state}]  {note}")
     if not rows:
         click.echo("nothing selected")
         return
@@ -225,7 +235,7 @@ def fleet_pull(
             note = f"skip: {reason}" if reason else f"pull {row.pull.render()}"
             if row.conflicts:
                 note += f", {len(row.conflicts)} file(s) edited locally"
-            click.echo(f"  {row.path}  [{row.state}]  {note}")
+            click.echo(f"  {short(row.path)}  [{row.state}]  {note}")
     conflicted = [r for r in rows if r.conflicts and fleet.pull_reason(r) is None]
     overwrite: set[str] = set()
     if overwrite_local and conflicted and not dry_run:
@@ -338,7 +348,7 @@ def overview(
             wanting: list[RepoStatus] = []
             for row in [r for r in chosen if r.conflicts]:
                 answer = prompts.select(
-                    f"{row.path} has local edits that also changed centrally: "
+                    f"{short(row.path)} has local edits that also changed centrally: "
                     f"{', '.join(row.conflicts)}",
                     [KEEP, OVERWRITE, SKIP],
                 )
@@ -354,7 +364,7 @@ def overview(
         verb = "push" if is_push else "pull"
         click.echo(f"{len(chosen)} repositor{'y' if len(chosen) == 1 else 'ies'} to {verb}:")
         for row in chosen:
-            click.echo(f"  {row.path}" + ("  (overwrite)" if row.path in overwrite else ""))
+            click.echo(f"  {short(row.path)}" + ("  (overwrite)" if row.path in overwrite else ""))
         if not prompts.confirm("Proceed?", False):
             continue
         outcomes, interrupted = push(chosen) if is_push else pull(chosen, overwrite)

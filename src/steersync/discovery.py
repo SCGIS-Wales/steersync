@@ -47,7 +47,9 @@ def is_initialised(work_tree: Path) -> bool:
     git_dir = git_dir_of(work_tree)
     if git_dir is None:
         return False
-    if (git_dir / "steersync" / "lock.json").is_file():
+    if (git_dir / "steersync" / "lock.json").is_file() or (
+        work_tree / ".kiro" / "steersync.lock.json"  # written by steersync 0.6 and earlier
+    ).is_file():
         return True
     if HOOK_MARKER in _read(git_dir / "hooks" / "pre-push"):
         return True

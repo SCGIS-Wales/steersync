@@ -47,7 +47,7 @@ def test_status_table_and_filter(fleet_env: dict[str, Path]) -> None:
     for word in ("local-ahead", "central-ahead", "diverged", "proposed", "in-sync", "missing"):
         assert word in result.output
     assert "1 both" in result.output
-    assert "need attention" in result.output
+    assert "4 need attention" in result.output  # diverged, ahead, behind, missing
     only = json.loads(
         CliRunner().invoke(main, ["fleet", "status", "--json", "--state", "diverged"]).stdout
     )
@@ -93,6 +93,30 @@ def test_error_in_one_repository_does_not_stop_others(
     assert rows["same"]["state"] == "error"
     assert "disk on fire" in rows["same"]["error"]
     assert rows["ahead"]["state"] == "local-ahead"
+
+
+@pytest.mark.parametrize("width", [72, 80, 100, 120, 160])
+def test_table_never_crops_the_note(fleet_env: dict[str, Path], width: int) -> None:
+    import io
+    import os
+
+    from rich.console import Console
+
+    from steersync import fleet_ui, registry
+    from steersync.paths import registry_path
+
+    report = fleet.collect(registry.load(registry_path(os.environ)).paths(), os.environ)
+    console = Console(file=io.StringIO(), width=width, no_color=True)
+    console.print(fleet_ui.table(report, width=width))
+    lines = console.file.getvalue().splitlines()  # type: ignore[attr-defined]
+    assert all(len(line) <= width for line in lines)
+    if width < 120:
+        return  # narrow: rich folds every column, including the headings
+    start = lines[0].index("Note")
+    notes = "".join(line[start:].strip() for line in lines[2:])
+    proposed = next(r for r in report.repositories if r.state == "proposed")
+    assert proposed.proposal
+    assert proposed.proposal in notes
 
 
 @pytest.mark.parametrize(

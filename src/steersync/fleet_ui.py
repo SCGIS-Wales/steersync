@@ -70,43 +70,59 @@ def header(report: FleetReport) -> list[str]:
     return lines
 
 
-def table(report: FleetReport, *, home: str = "") -> Table:
+HEADINGS = ("#", "Repository", "Project", "State", "To push", "To pull", "Note")
+GAP = 3  # SIMPLE_HEAD puts three characters between columns
+NOTE_MIN = 12
+
+
+def _cells(repo: RepoStatus, index: int, home: str) -> tuple[str, ...]:
+    label = "g" if repo.is_global() else str(index)
+    path = f"{repo.path} (global)" if repo.is_global() else short_path(repo.path, home)
+    state = repo.state + (" (offline)" if repo.offline else "")
+    if repo.state in {"error", "missing", "unconfigured"}:
+        return (label, path, repo.project or "none", state, "", "", row_note(repo))
+    pull = repo.pull.render()
+    if repo.conflicts:
+        pull = f"{pull}, {len(repo.conflicts)} both"
+    return (label, path, repo.project or "none", state, repo.push.render(), pull, row_note(repo))
+
+
+def column_widths(rows: Sequence[tuple[str, ...]], width: int) -> list[int] | None:
+    """Exact widths that fill ``width``, or None when the terminal is too narrow.
+
+    States, counts and the row number never wrap; the repository and project keep whole
+    names up to 40 and 30 characters; the note takes what is left and folds.
+    """
+    natural = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(HEADINGS)]
+    natural[1] = min(natural[1], 40)
+    natural[2] = min(natural[2], 30)
+    widths = [*natural[:6], 0]
+    deficit = NOTE_MIN - (width - sum(widths) - GAP * (len(HEADINGS) - 1))
+    for position, floor in ((1, 16), (2, 10)):  # names give way only as far as needed
+        if deficit > 0:
+            give = min(deficit, max(widths[position] - floor, 0))
+            widths[position] -= give
+            deficit -= give
+    if deficit > 0:
+        return None
+    widths[6] = min(natural[6], width - sum(widths) - GAP * (len(HEADINGS) - 1))
+    return widths
+
+
+def table(report: FleetReport, *, home: str = "", width: int | None = None) -> Table:
+    rows = [_cells(repo, index, home) for index, repo in enumerate(report.repositories, 1)]
+    widths = column_widths(rows, width) if width and rows else None
     grid = Table(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False, header_style="bold")
-    # States and counts are read at a glance and never wrap; paths and notes fold.
-    grid.add_column("#", no_wrap=True)
-    grid.add_column("Repository", overflow="fold", min_width=16)
-    grid.add_column("Project", overflow="fold", min_width=10)
-    grid.add_column("State", no_wrap=True)
-    grid.add_column("To push", no_wrap=True)
-    grid.add_column("To pull", overflow="fold", min_width=8)
-    grid.add_column("Note", overflow="fold", min_width=12)
-    for index, repo in enumerate(report.repositories, start=1):
-        label = "g" if repo.is_global() else str(index)
-        path = f"{repo.path} (global)" if repo.is_global() else short_path(repo.path, home)
-        state = repo.state + (" (offline)" if repo.offline else "")
-        pull = repo.pull.render()
-        if repo.conflicts:
-            pull = f"{pull}, {len(repo.conflicts)} both"
-        if repo.state in {"error", "missing", "unconfigured"}:
-            grid.add_row(
-                label,
-                path,
-                repo.project or "none",
-                Text(state, STATE_STYLE[repo.state]),
-                "",
-                "",
-                row_note(repo),
-            )
-            continue
-        grid.add_row(
-            label,
-            path,
-            repo.project or "none",
-            Text(state, STATE_STYLE[repo.state]),
-            repo.push.render(),
-            pull,
-            row_note(repo),
+    for position, heading in enumerate(HEADINGS):
+        wraps = position in {1, 2, 5, 6}
+        grid.add_column(
+            heading,
+            no_wrap=not wraps,
+            overflow="fold" if wraps else "ellipsis",
+            width=widths[position] if widths else None,
         )
+    for repo, cells in zip(report.repositories, rows, strict=True):
+        grid.add_row(*cells[:3], Text(cells[3], STATE_STYLE[repo.state]), *cells[4:])
     return grid
 
 
@@ -117,7 +133,7 @@ def render(report: FleetReport, console: Console, *, home: str = "") -> None:
     if not report.repositories:
         console.print("no repositories registered yet; run `steersync fleet scan ~/code`")
         return
-    console.print(table(report, home=home))
+    console.print(table(report, home=home, width=console.width))
 
 
 def details(repo: RepoStatus, console: Console) -> None:

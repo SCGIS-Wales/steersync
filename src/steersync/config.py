@@ -626,6 +626,14 @@ def _migrate_legacy_paths(data: dict[str, Any], origin: str) -> dict[str, Any]:
     paths_section = data.get("paths")
     if not isinstance(paths_section, dict):
         return data
+    if "workspace_lock" in paths_section:
+        log.warning(
+            "%s: paths.workspace_lock is no longer used; the workspace sync record is kept "
+            "at <git dir>/steersync/lock.json. Remove the key.",
+            origin,
+        )
+        paths_section = {k: v for k, v in paths_section.items() if k != "workspace_lock"}
+        data = {**data, "paths": paths_section}
     legacy = {k: v for k, v in paths_section.items() if k in _LEGACY_PATH_KEYS}
     if not legacy:
         return data

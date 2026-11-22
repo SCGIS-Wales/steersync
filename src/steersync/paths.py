@@ -65,6 +65,10 @@ def global_lock_path(config: Config, env: Mapping[str, str]) -> Path:
     return kiro_home(env) / config.paths.global_lock
 
 
+# Where steersync 0.6 and earlier kept the workspace record, inside the work tree.
+LEGACY_WORKSPACE_LOCK = Path(".kiro") / "steersync.lock.json"
+
+
 def workspace_lock_path(git_dir: Path) -> Path:
     """The workspace's last sync record, kept under the git directory, never in the work
     tree. A linked worktree has its own git directory, so it gets its own record."""

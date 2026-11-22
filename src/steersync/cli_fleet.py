@@ -100,7 +100,7 @@ def fleet_prune() -> None:
 @click.option("--max-depth", type=click.IntRange(1, 12), help="Folder levels to search.")
 @click.option("--add/--no-add", default=True, show_default=True, help="Register what is found.")
 def fleet_scan(roots: tuple[Path, ...], max_depth: int | None, add: bool) -> None:
-    """Find repositories set up for steersync below ROOTS (read only unless --add)."""
+    """Find and register repositories set up for steersync below ROOTS (--no-add only lists)."""
     env = os.environ
     try:
         config = load_config(workspace_root=None, env=env)
