@@ -43,7 +43,7 @@ my-service/
     │   ├── lsp.json                            committed: /code init drops custom entries
     │   ├── mcp.json
     │   └── groovy-classpath.txt                generated, not synced
-    └── steersync.lock.json                     written by steersync, never committed
+    (the last sync record lives in .git/steersync/lock.json, outside the work tree)
 ```
 
 ## The same tree in the central repository

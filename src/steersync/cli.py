@@ -644,9 +644,9 @@ def install_hook(ctx: click.Context, force: bool) -> None:
 @click.option("--hook/--no-hook", default=False, help="Also install the pre-push hook.")
 @click.option(
     "--kiro/--no-kiro",
-    default=True,
-    help="Write the Kiro SessionStart hook and register the MCP server so a session "
-    "loads the configuration without being asked.",
+    default=False,
+    help="Also write the Kiro SessionStart hook and MCP server entry into this repository's "
+    ".kiro (for teams that commit them). `steersync setup` installs both once in ~/.kiro.",
 )
 @click.option(
     "--mcp-command",
@@ -685,7 +685,6 @@ def init(
                 if c.workspace_path is not None and c.git_exclude
             )
         )
-        patterns.append(f"/{config.paths.workspace_lock.strip('/')}")
         changed = False
         for pattern in patterns:
             changed |= gitops.write_info_exclude(config, root, pattern)
@@ -978,7 +977,7 @@ def setup(
         return
     step(f"this repository ({root})")
     if project or ask("Prepare this repository (git excludes and the pre-push hook)?", True):
-        ctx.invoke(init, write_config=False, exclude=True, hook=True, kiro=True, mcp_command="uvx")
+        ctx.invoke(init, write_config=False, exclude=True, hook=True, kiro=False, mcp_command="uvx")
         _setup_summary(root, env)
     click.echo("\nDone. Run `steersync setup` again at any time; it only adds what is missing.")
 

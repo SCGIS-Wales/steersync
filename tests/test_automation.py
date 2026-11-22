@@ -347,7 +347,7 @@ def test_init_writes_session_hook_and_mcp_entry(runner_project: tuple[CliRunner,
     before = runner.invoke(main, ["lint", "--json"])
     rules = {f["rule"] for f in json.loads(before.stdout)["findings"]}
     assert {"autoload-hook-missing", "autoload-mcp-missing"} <= rules
-    result = runner.invoke(main, ["init", "--mcp-command", "/usr/local/bin/uvx"])
+    result = runner.invoke(main, ["init", "--kiro", "--mcp-command", "/usr/local/bin/uvx"])
     assert result.exit_code == 0, result.output
     hook = json.loads((project / ".kiro" / "hooks" / "steersync.json").read_text())
     assert hook["hooks"][0]["trigger"] == "SessionStart"
@@ -359,7 +359,7 @@ def test_init_writes_session_hook_and_mcp_entry(runner_project: tuple[CliRunner,
     after = runner.invoke(main, ["lint", "--json"])
     rules = {f["rule"] for f in json.loads(after.stdout)["findings"]}
     assert not rules & {"autoload-hook-missing", "autoload-mcp-missing"}
-    second = runner.invoke(main, ["init"])
+    second = runner.invoke(main, ["init", "--kiro"])
     assert "unchanged: " in second.output
     assert "(steersync MCP server 'steersync')" in second.output
     assert "written: " not in second.output.split("mcp.json")[0].splitlines()[-1]
@@ -399,7 +399,7 @@ def test_init_refuses_broken_mcp_json(runner_project: tuple[CliRunner, Path]) ->
     settings = project / ".kiro" / "settings"
     settings.mkdir(parents=True)
     (settings / "mcp.json").write_text("{broken")
-    result = runner.invoke(main, ["init"])
+    result = runner.invoke(main, ["init", "--kiro"])
     assert result.exit_code == 1
     assert "not valid JSON" in result.output
 

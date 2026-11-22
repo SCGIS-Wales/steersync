@@ -72,7 +72,6 @@ gitlab:
   retry_not_found: true
 
 paths:
-  workspace_lock: .kiro/steersync.lock.json
   # Resolved against KIRO_HOME when set, else ~/.kiro
   global_lock: steersync.lock.json
   cache_dir: ~/.cache/steersync

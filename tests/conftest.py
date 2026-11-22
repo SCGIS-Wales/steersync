@@ -37,6 +37,11 @@ def _no_local_kiro_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STEERSYNC_NO_V3_REMINDER", "1")
 
 
+def lock_file(project: Path) -> Path:
+    """The workspace's last sync record, under the git directory."""
+    return project / ".git" / "steersync" / "lock.json"
+
+
 def central_global(work: Path, collection: str = "steering") -> Path:
     """Directory of a collection under ``global/`` in the central work tree."""
     return work / "global" / collection

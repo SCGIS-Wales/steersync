@@ -100,7 +100,7 @@ def test_init_and_install_hook(runner: CliRunner, in_project: Path) -> None:
     excluded = (in_project / ".git" / "info" / "exclude").read_text()
     assert "/.kiro/steering/" in excluded
     assert "/.kiro/skills/" in excluded
-    assert "/.kiro/steersync.lock.json" in excluded
+    assert "steersync.lock" not in excluded
     assert "collections: steering, specs" in result.output
     assert (in_project / ".git" / "hooks" / "pre-push").exists()
     second = runner.invoke(main, ["init", "--write-config"])
@@ -286,3 +286,18 @@ def test_json_logging_option(
 
 def test_config_fixture_type(config: Config) -> None:
     assert config.remote.allow_local is True
+
+
+def test_init_and_pull_leave_no_steersync_file_in_the_work_tree(
+    runner: CliRunner, in_project: Path, env: dict[str, str]
+) -> None:
+    """Acceptance 1: steersync state lives under .git; the work tree only gains the synced
+    Kiro files themselves (which init excludes from the project repository)."""
+    from tests.conftest import git, lock_file
+
+    assert runner.invoke(main, ["init", "--hook"]).exit_code == 0
+    assert git("status", "--porcelain", "--ignored", cwd=in_project, env=env) == ""
+    assert runner.invoke(main, ["pull", "--no-global"]).exit_code == 0
+    listed = git("status", "--porcelain", "--ignored", cwd=in_project, env=env)
+    assert "steersync" not in listed
+    assert lock_file(in_project).is_file()

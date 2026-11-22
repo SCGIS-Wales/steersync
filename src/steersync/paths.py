@@ -64,8 +64,10 @@ def global_lock_path(config: Config, env: Mapping[str, str]) -> Path:
     return kiro_home(env) / config.paths.global_lock
 
 
-def workspace_lock_path(config: Config, workspace_root: Path) -> Path:
-    return workspace_root / config.paths.workspace_lock
+def workspace_lock_path(git_dir: Path) -> Path:
+    """The workspace's last sync record, kept under the git directory, never in the work
+    tree. A linked worktree has its own git directory, so it gets its own record."""
+    return git_dir / "steersync" / "lock.json"
 
 
 def cache_root(config: Config, env: Mapping[str, str]) -> Path:

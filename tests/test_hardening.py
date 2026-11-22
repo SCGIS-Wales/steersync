@@ -22,9 +22,16 @@ from steersync.errors import (
     UnsafePathError,
 )
 from steersync.locking import exclusive_lock
-from steersync.paths import global_steering_dir, workspace_lock_path
+from steersync.paths import global_steering_dir
 from steersync.steering import snapshot_directory, write_lock
-from tests.conftest import CentralCommit, central_global, central_project, git, posix_only
+from tests.conftest import (
+    CentralCommit,
+    central_global,
+    central_project,
+    git,
+    lock_file,
+    posix_only,
+)
 
 PUSH_OPTIONS_REJECTED = (
     "fatal: the receiving end does not support push options\n"
@@ -408,7 +415,7 @@ def test_pull_lock_records_redacted_remote(
     config: Config, env: dict[str, str], project: Path, central: Path
 ) -> None:
     sync.pull(config, workspace_root=project, env=env)
-    assert json.loads(workspace_lock_path(config, project).read_text())["remote"] == str(central)
+    assert json.loads(lock_file(project).read_text())["remote"] == str(central)
 
 
 # CLI safety

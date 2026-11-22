@@ -6,7 +6,7 @@ import pytest
 from steersync import gitops, paths, sync
 from steersync.config import Config, load_config
 from steersync.errors import ConfigError, LintError, SyncConflictError
-from steersync.paths import global_lock_path, global_steering_dir, workspace_lock_path
+from steersync.paths import global_lock_path, global_steering_dir
 from tests.conftest import (
     GLOBAL_DOC,
     PROJECT_DOC,
@@ -15,6 +15,7 @@ from tests.conftest import (
     central_global,
     central_project,
     git,
+    lock_file,
 )
 
 
@@ -36,7 +37,7 @@ def test_pull_applies_global_and_workspace(
     assert (project / ".kiro" / "steering" / "python.md").read_text() == PROJECT_DOC
     assert result.change_count == 2
     assert not result.conflicts
-    lock = json.loads(workspace_lock_path(config, project).read_text())
+    lock = json.loads(lock_file(project).read_text())
     assert lock["commit"] == result.commit
     assert "python.md" in lock["collections"]["steering"]["files"]
     assert lock["collections"]["specs"]["files"] == {}
@@ -54,7 +55,7 @@ def test_pull_dry_run_and_scopes(
     assert result.results[0].collection == "steering"
     assert result.results[0].plan.add == ("python.md",)
     assert not (project / ".kiro" / "steering").exists()
-    assert not workspace_lock_path(config, project).exists()
+    assert not lock_file(project).exists()
 
 
 def test_pull_without_workspace_or_origin(

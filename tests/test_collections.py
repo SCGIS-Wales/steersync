@@ -17,7 +17,6 @@ from steersync.paths import (
     global_lock_path,
     kiro_home,
     workspace_collection_dir,
-    workspace_lock_path,
 )
 from steersync.steering import FileSpec, discover_files, read_lock
 from tests.conftest import (
@@ -29,6 +28,7 @@ from tests.conftest import (
     central_global,
     central_project,
     git,
+    lock_file,
     posix_only,
 )
 
@@ -100,7 +100,7 @@ def test_pull_applies_every_collection(
     assert (kiro / "skills" / "venafi-tpp-websdk" / "SKILL.md").stat().st_mode & 0o777 == 0o644
     assert (kiro_home(env) / "skills" / "shared-skill" / "SKILL.md").exists()
     assert (kiro_home(env) / "hooks" / "steersync.json").exists()
-    lock = read_lock(workspace_lock_path(config, project))
+    lock = read_lock(lock_file(project))
     assert set(lock["collections"]) == {
         "steering",
         "specs",
@@ -139,7 +139,7 @@ def test_pull_can_be_limited_to_collections(
         ("global", "hooks"),
     }
     assert not (project / ".kiro" / "steering").exists()
-    lock = read_lock(workspace_lock_path(config, project))
+    lock = read_lock(lock_file(project))
     assert set(lock["collections"]) == {"specs", "hooks"}
     with pytest.raises(ConfigError, match="unknown collection"):
         sync.pull(config, workspace_root=project, env=env, collections=["nope"])
@@ -159,7 +159,7 @@ def test_pull_keeps_lock_entries_of_other_collections(
     )
     only_steering = sync.pull(config, workspace_root=project, env=env, collections=["steering"])
     assert only_steering.change_count == 0
-    lock = read_lock(workspace_lock_path(config, project))
+    lock = read_lock(lock_file(project))
     assert "tls-rotation/design.md" in lock["collections"]["specs"]["files"]
     result = sync.pull(config, workspace_root=project, env=env, collections=["specs"])
     assert result.conflicts == ("workspace:specs:tls-rotation/design.md",)
@@ -312,26 +312,38 @@ def test_legacy_flat_layout_is_reported(
     assert any("move them to steering/" in record.message for record in caplog.records)
 
 
-def test_version_one_lock_is_upgraded_on_pull(
-    config: Config, env: dict[str, str], project: Path, central: Path, central_commit: CentralCommit
+@pytest.mark.parametrize(
+    "damage",
+    [
+        '{"schema_version": 2, "collections": {"steer',  # truncated
+        "",  # empty
+        '{"schema_version": 2, "collections": {"steering": {"files": {"a.md": 1}}}}',  # types
+        '{"schema_version": 99, "collections": {}}',  # unknown schema version
+        "[]",
+    ],
+)
+def test_damaged_record_never_overwrites_local_edits(
+    config: Config,
+    env: dict[str, str],
+    project: Path,
+    central: Path,
+    central_commit: CentralCommit,
+    damage: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    first = sync.pull(config, workspace_root=project, env=env, include_global=False)
-    lock_path = workspace_lock_path(config, project)
-    data = json.loads(lock_path.read_text())
-    legacy = {
-        "version": 1,
-        "remote": data["remote"],
-        "commit": data["commit"],
-        "files": data["collections"]["steering"]["files"],
-    }
-    lock_path.write_text(json.dumps(legacy))
+    sync.pull(config, workspace_root=project, env=env, include_global=False)
+    local = project / ".kiro" / "steering" / "python.md"
+    local.write_text("# Mine\n\nLocal edit.\n")
+    lock_file(project).write_text(damage)
     central_commit(lambda w: (central_project(w) / "python.md").write_text("# Theirs\n"), "edit")
     result = sync.pull(config, workspace_root=project, env=env, include_global=False)
-    steering = next(r for r in result.results if r.collection == "steering")
-    assert steering.plan.update == ("python.md",)
-    assert not result.conflicts
-    assert json.loads(lock_path.read_text())["version"] == 2
-    assert first.commit != result.commit
+    assert local.read_text() == "# Mine\n\nLocal edit.\n"
+    assert result.conflicts
+    corrupt = list(lock_file(project).parent.glob("lock.json.corrupt-*"))
+    assert len(corrupt) == 1
+    assert corrupt[0].read_text() == damage
+    assert "damaged" in caplog.text
+    assert json.loads(lock_file(project).read_text())["schema_version"] == 2
 
 
 def test_custom_collection_and_disabled_defaults(

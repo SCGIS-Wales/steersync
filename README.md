@@ -411,7 +411,7 @@ share a directory on either side.
 ## How pull decides what to write
 
 steersync records the hash of every file it wrote, per collection, in a lock file
-(`.kiro/steersync.lock.json` in the workspace, `~/.kiro/steersync.lock.json` globally).
+(`<git dir>/steersync/lock.json` for a workspace, outside the work tree, and `~/.kiro/steersync.lock.json` globally).
 Version 1 lock files written by steersync 0.1 are read as the steering collection. On the
 next pull:
 

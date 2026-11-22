@@ -330,11 +330,11 @@ def _shares_safely(left: CollectionConfig, right: CollectionConfig) -> bool:
 
 
 class PathsConfig(_Strict):
-    workspace_lock: str = ".kiro/steersync.lock.json"
+    # The workspace record lives under the git directory (<git dir>/steersync/lock.json).
     global_lock: str = "steersync.lock.json"
     cache_dir: str = "~/.cache/steersync"
 
-    @field_validator("workspace_lock", "global_lock")
+    @field_validator("global_lock")
     @classmethod
     def _relative(cls, value: str) -> str:
         return _relative_path(value)

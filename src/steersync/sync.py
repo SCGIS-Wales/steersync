@@ -258,6 +258,12 @@ def _project_dir(config: Config, cache_dir: Path, project: str) -> Path:
     return paths.ensure_within(cache_dir, Path(config.remote.projects_dir) / project)
 
 
+def workspace_lock(config: Config, workspace_root: Path, env: Mapping[str, str]) -> Path:
+    """The workspace's last sync record under its git directory."""
+    git_dir = gitops.git_dir(config, workspace_root, env=gitops.git_environment(env))
+    return paths.workspace_lock_path(git_dir)
+
+
 def resolve_project(
     config: Config, *, workspace_root: Path, env: Mapping[str, str], remote_url: str | None
 ) -> str | None:
@@ -324,7 +330,11 @@ def pull(
                 _ScopeTarget(
                     "workspace",
                     _project_dir(config, cache_dir, project),
-                    paths.workspace_lock_path(config, workspace_root),
+                    paths.workspace_lock_path(
+                        gitops.git_dir(
+                            config, workspace_root, env=gitops.git_environment(environment)
+                        )
+                    ),
                     lambda c: paths.workspace_collection_dir(c, workspace_root),
                 )
             )
