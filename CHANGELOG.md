@@ -5,6 +5,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- README: a step by step guide for adopting steersync where projects already have Kiro files
+  on GitLab: creating the central repository, a committed `.kiro/steersync.yaml`, checking
+  what exists, seeding the central repository with the first push, choosing whether the
+  project keeps tracking its `.kiro/` files, onboarding teammates and the `~/.kiro` scope.
+
+### Fixed
+
+- An empty central repository (a new GitLab project without a first commit) stopped every
+  command with git's "Remote branch main not found in upstream origin". The error now says
+  to create the project with a README or push one commit, or to set `remote.default_branch`.
+
 ## [0.5.5] - 2026-11-22
 
 ### Fixed

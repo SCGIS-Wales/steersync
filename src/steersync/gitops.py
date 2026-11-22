@@ -444,24 +444,36 @@ def ensure_cache_clone(
             return cache_dir
     _remove_cache_dir(cache_dir)
     cache_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    run_git(
-        config,
-        [
-            "clone",
-            "--quiet",
-            "--depth",
-            str(config.git.clone_depth),
-            "--single-branch",
-            "--branch",
-            config.remote.default_branch,
-            "--no-tags",
-            "--",
-            url,
-            str(cache_dir),
-        ],
-        env=env,
-        retries=config.git.retries,
-    )
+    try:
+        run_git(
+            config,
+            [
+                "clone",
+                "--quiet",
+                "--depth",
+                str(config.git.clone_depth),
+                "--single-branch",
+                "--branch",
+                config.remote.default_branch,
+                "--no-tags",
+                "--",
+                url,
+                str(cache_dir),
+            ],
+            env=env,
+            retries=config.git.retries,
+        )
+    except GitError as exc:
+        if "not found in upstream" in str(exc):
+            branch = config.remote.default_branch
+            msg = (
+                f"the central repository {redact_url(url)} has no branch {branch!r}. A new "
+                "GitLab project is empty until its first commit: create it with "
+                "'Initialize repository with a README' (or push one commit to "
+                f"{branch!r}), or set remote.default_branch to the branch it uses"
+            )
+            raise GitError(msg) from exc
+        raise
     _reset_to_remote(config, cache_dir=cache_dir, env=env)
     return cache_dir
 
