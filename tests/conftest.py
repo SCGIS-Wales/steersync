@@ -31,6 +31,14 @@ posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX file sema
 
 
 @pytest.fixture(autouse=True)
+def _isolated_state(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never touch the developer's workspace registry or backups."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path_factory.mktemp("state")))
+
+
+@pytest.fixture(autouse=True)
 def _no_local_kiro_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep tests independent of a kiro-cli installed on the developer's machine."""
     monkeypatch.setattr("steersync.kiro_version.CLI_BINARY", "kiro-cli-not-installed-in-tests")
@@ -76,7 +84,13 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         "GIT_CONFIG_NOSYSTEM": "1",
         "USER": "tester",
     }
-    for key in ("KIRO_HOME", "STEERSYNC_CONFIG", "STEERSYNC_REMOTE", "XDG_CONFIG_HOME"):
+    for key in (
+        "KIRO_HOME",
+        "STEERSYNC_CONFIG",
+        "STEERSYNC_REMOTE",
+        "XDG_CONFIG_HOME",
+        "LOCALAPPDATA",
+    ):
         monkeypatch.delenv(key, raising=False)
     for key, value in values.items():
         monkeypatch.setenv(key, value)

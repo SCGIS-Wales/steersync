@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from steersync import gitlab, gitops, kiro_version, sync
+from steersync import gitlab, gitops, kiro_version, registry, sync
 from steersync.config import Config, load_config
 from steersync.errors import SteersyncError
 from steersync.lint import lint_paths, lint_workspace, merge_reports
@@ -180,7 +180,9 @@ def load(cwd: str | None) -> tuple[Config, Path | None]:
     start = Path(cwd).expanduser() if cwd else Path.cwd()
     bootstrap = load_config(workspace_root=None)
     root = gitops.repo_toplevel(bootstrap, start, env=gitops.git_environment(os.environ))
-    return load_config(workspace_root=root), root
+    config = load_config(workspace_root=root)
+    registry.register(os.environ, root, "command")
+    return config, root
 
 
 def _require_repo(root: Path | None) -> Path:

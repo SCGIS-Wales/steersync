@@ -399,6 +399,18 @@ class GitLabConfig(_Strict):
         return candidate
 
 
+class FleetConfig(_Strict):
+    """`steersync fleet`: every initialised repository on this machine."""
+
+    scan_max_depth: int = Field(default=4, ge=1, le=12)
+    # 0 picks min(8, number of CPUs).
+    max_workers: int = Field(default=0, ge=0, le=64)
+    # A central cache younger than this is shown without a network refresh.
+    refresh_max_age_seconds: int = Field(default=300, ge=0, le=86_400)
+    backup_keep_days: int = Field(default=14, ge=1, le=3650)
+    backup_max_bytes: int = Field(default=536_870_912, ge=1_048_576)
+
+
 class HookConfig(_Strict):
     strict: bool = False
     timeout_seconds: int = Field(default=60, ge=5, le=3600)
@@ -419,6 +431,7 @@ class Config(_Strict):
     collections: dict[str, CollectionConfig] = {}
     sync: SyncConfig = SyncConfig()
     gitlab: GitLabConfig = GitLabConfig()
+    fleet: FleetConfig = FleetConfig()
     lint: LintConfig = LintConfig()
     hook: HookConfig = HookConfig()
     logging: LoggingConfig = LoggingConfig()

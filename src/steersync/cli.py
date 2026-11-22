@@ -10,8 +10,20 @@ from typing import Any, cast
 
 import click
 
-from steersync import __version__, gitlab, gitops, hooks, kiro_version, migrate, sync
+from steersync import __version__, gitlab, gitops, hooks, kiro_version, migrate, registry, sync
 from steersync import setup as setup_steps
+from steersync.cli_common import (
+    _bootstrap,
+    _echo,
+    _fail,
+    _is_blank,
+    _plan_json,
+    _plan_lines,
+    _plans_json,
+    _print_lint,
+    _workspace_root,
+)
+from steersync.cli_fleet import fleet
 from steersync.config import (
     LINT_PROFILES,
     CollectionConfig,
@@ -33,92 +45,12 @@ from steersync.paths import (
     workspace_collection_dir,
     workspace_steering_dir,
 )
-from steersync.steering import ChangePlan, FileSpec
+from steersync.steering import FileSpec
 
 log = logging.getLogger("steersync")
 
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 100}
 ENV_FROM_HOOK_URL = "PRE_COMMIT_REMOTE_URL"
-
-
-def _workspace_root(config: Config, env: Mapping[str, str]) -> Path | None:
-    return gitops.repo_toplevel(config, Path.cwd(), env=gitops.git_environment(env))
-
-
-def _bootstrap(ctx: click.Context, *, propagate: bool = False) -> tuple[Config, Path | None]:
-    """Load configuration for the current directory and return it with the workspace root.
-
-    Configuration errors end the command with the error's exit code unless
-    ``propagate`` is set, in which case the caller handles them.
-    """
-    params = ctx.find_root().params
-    env = os.environ
-    try:
-        bootstrap = load_config(workspace_root=None, env=env, explicit=params.get("config_path"))
-        root = _workspace_root(bootstrap, env)
-        config = load_config(workspace_root=root, env=env, explicit=params.get("config_path"))
-    except SteersyncError as exc:
-        if propagate:
-            raise
-        _fail(exc)
-        raise AssertionError from exc  # pragma: no cover - _fail always exits
-    configure_logging(
-        params.get("log_level") or config.logging.level,
-        params.get("log_format") or config.logging.format,
-        quiet=bool(params.get("quiet")),
-    )
-    return config, root
-
-
-def _echo(message: str, *, quiet: bool = False, err: bool = False) -> None:
-    if not quiet:
-        click.echo(message, err=err)
-
-
-def _plan_lines(label: str, plan: ChangePlan) -> list[str]:
-    lines = [f"{label}: {plan.change_count} change(s), {len(plan.unchanged)} unchanged"]
-    lines.extend(f"  + {p}" for p in plan.add)
-    lines.extend(f"  ~ {p}" for p in plan.update)
-    lines.extend(f"  - {p}" for p in plan.delete)
-    lines.extend(f"  ! {p} (locally modified, kept)" for p in plan.conflict)
-    lines.extend(f"  ? {p} (local only)" for p in plan.local_only)
-    return lines
-
-
-def _is_blank(plan: ChangePlan) -> bool:
-    """True when a collection has nothing on either side worth a line of output."""
-    return plan.is_empty and not (plan.unchanged or plan.conflict or plan.local_only)
-
-
-def _plan_json(plan: ChangePlan | None) -> dict[str, Any] | None:
-    if plan is None:
-        return None
-    return {k: list(v) for k, v in plan._asdict().items()}
-
-
-def _print_lint(report: LintReport, *, as_json: bool, quiet: bool) -> None:
-    if as_json:
-        click.echo(report.to_json())
-        return
-    for finding in report.findings:
-        _echo(finding.render(), quiet=quiet and finding.severity != "error", err=True)
-    _echo(
-        f"linted {report.checked} file(s): "
-        f"{len(report.errors)} error(s), {len(report.warnings)} warning(s)",
-        quiet=quiet,
-        err=True,
-    )
-
-
-def _fail(exc: SteersyncError) -> None:
-    log.error("%s", exc)
-    sys.exit(exc.exit_code)
-
-
-def _plans_json(plans: Mapping[str, ChangePlan] | None) -> dict[str, Any] | None:
-    if plans is None:
-        return None
-    return {name: _plan_json(plan) for name, plan in plans.items()}
 
 
 collection_option = click.option(
@@ -193,6 +125,7 @@ def pull(
         _soft_failure(exc, soft=best_effort, label="steering pull skipped")
         return
     quiet = bool(ctx.find_root().params.get("quiet"))
+    registry.register(os.environ, root, "command")
     if best_effort:
         config = _hook_budget(config)
         _maybe_remind_v3(config, root)
@@ -305,6 +238,7 @@ def push(
             label="steering sync skipped",
         )
         return
+    registry.register(env, root, "command")
     try:
         result = sync.push(
             config,
@@ -426,6 +360,7 @@ def status(
 ) -> None:
     """Show how local collections differ from the central repository."""
     config, root = _bootstrap(ctx)
+    registry.register(os.environ, root, "command")
     try:
         result = sync.status(
             config,
@@ -669,6 +604,7 @@ def init(
     if root is None:
         _fail(SteersyncError("not inside a git repository"))
         return
+    registry.register(os.environ, root, "init")
     if write_config:
         target = root / ".kiro" / "steersync.yaml"
         if target.exists():
@@ -897,6 +833,7 @@ def setup(
     click.echo(f"ok: {picked} exists (git ls-remote)")
 
     root = _workspace_root(current, env)
+    registry.register(env, root, "setup")
     extra: dict[str, dict[str, Any]] = {}
     if root is not None and project is not False:
         folders = setup_steps.unsynced_kiro_folders(root, current)
@@ -1327,6 +1264,9 @@ def run() -> None:
         )
         log.debug("unexpected error", exc_info=True)
         sys.exit(1)
+
+
+main.add_command(fleet)
 
 
 if __name__ == "__main__":  # pragma: no cover

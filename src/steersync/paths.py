@@ -1,6 +1,7 @@
 """Path resolution for Kiro directories, collection targets, locks and the clone cache."""
 
 import hashlib
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -68,6 +69,28 @@ def workspace_lock_path(git_dir: Path) -> Path:
     """The workspace's last sync record, kept under the git directory, never in the work
     tree. A linked worktree has its own git directory, so it gets its own record."""
     return git_dir / "steersync" / "lock.json"
+
+
+def state_root(env: Mapping[str, str]) -> Path:
+    """Machine local state that is not configuration and not cache: the workspace registry
+    and pull backups. ``$XDG_STATE_HOME/steersync`` (default ``~/.local/state/steersync``),
+    ``%LOCALAPPDATA%\\steersync`` on Windows."""
+    if sys.platform == "win32" and env.get("LOCALAPPDATA"):  # pragma: no cover - Windows
+        return Path(env["LOCALAPPDATA"]) / "steersync"
+    xdg = env.get("XDG_STATE_HOME")
+    if xdg:
+        return Path(xdg).expanduser() / "steersync"
+    return Path(env.get("HOME", "~")).expanduser() / ".local" / "state" / "steersync"
+
+
+def registry_path(env: Mapping[str, str]) -> Path:
+    """Every workspace steersync has seen on this machine (never inside a repository)."""
+    return state_root(env) / "workspaces.json"
+
+
+def backup_root(env: Mapping[str, str]) -> Path:
+    """Copies of local files taken before a forced pull overwrites them."""
+    return state_root(env) / "backups"
 
 
 def cache_root(config: Config, env: Mapping[str, str]) -> Path:
