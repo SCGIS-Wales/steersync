@@ -369,8 +369,12 @@ def setup_mcp_entry(*, token_env: str = DEFAULT_TOKEN_ENV) -> dict[str, object]:
     per project entry it does not forward STEERSYNC_REMOTE.
     """
     entry = mcp_server_entry(token_env=token_env)
-    env = dict(entry["env"])  # type: ignore[call-overload]
-    env.pop("STEERSYNC_REMOTE", None)
+    forwarded = entry["env"]
+    env = {
+        key: value
+        for key, value in (forwarded.items() if isinstance(forwarded, Mapping) else ())
+        if key != "STEERSYNC_REMOTE"
+    }
     return {**entry, "env": env}
 
 

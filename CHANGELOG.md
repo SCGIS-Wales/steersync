@@ -5,6 +5,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The advisory ty type check flagged `setup_mcp_entry`; the environment map is now built
+  without a type ignore.
+
 ## [0.6.0] - 2026-11-22
 
 ### Added
