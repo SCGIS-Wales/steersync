@@ -4,9 +4,14 @@
 
 ```bash
 uv python install 3.14
-uv sync --all-extras --group dev
+uv sync --all-extras          # the dev group: test, lint and security
 uv run pre-commit install
 ```
+
+The dependency groups are `test` (pytest, coverage, hypothesis, mcp), `lint` (ruff,
+mypy and stubs, plus `test` so the tests type check) and `security` (bandit, pip-audit).
+CI installs only the group a job needs, for example
+`uv sync --all-extras --no-default-groups --group test`.
 
 ## Checks
 

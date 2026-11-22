@@ -40,14 +40,29 @@ HOOK_TRIGGERS: frozenset[str] = frozenset(
         "Manual",
     }
 )
-# CLI 2.x camelCase names and the V3 trigger each one became.
+# Every other spelling the Kiro CLI 3.5 harness accepts and the trigger it maps it to: the
+# CLI 2.x camelCase names, the IDE 0.x ``when.type`` names and the documented aliases.
+# They still load, but the canonical PascalCase name is what Kiro writes.
 HOOK_TRIGGER_ALIASES: Mapping[str, str] = {
     "agentSpawn": "SessionStart",
     "AgentSpawn": "SessionStart",
+    "sessionStart": "SessionStart",
+    "stop": "Stop",
+    "agentStop": "Stop",
     "userPromptSubmit": "UserPromptSubmit",
+    "promptSubmit": "UserPromptSubmit",
     "preToolUse": "PreToolUse",
     "postToolUse": "PostToolUse",
-    "stop": "Stop",
+    "permissionRequest": "PermissionRequest",
+    "preCompact": "PreCompact",
+    "postCompact": "PostCompact",
+    "preTaskExecution": "PreTaskExec",
+    "postTaskExecution": "PostTaskExec",
+    "fileEdited": "PostFileSave",
+    "AfterFileEdit": "PostFileSave",
+    "fileCreated": "PostFileCreate",
+    "fileDeleted": "PostFileDelete",
+    "userTriggered": "Manual",
 }
 HOOK_ACTION_TYPES: frozenset[str] = frozenset({"command", "agent"})
 _NO_MATCHER_TRIGGERS: frozenset[str] = frozenset({"Stop", "SessionStart", "SessionEnd"})
@@ -215,13 +230,16 @@ PERMISSION_CAPABILITIES: frozenset[str] = frozenset(
         "power",
         "context",
         "diagnostics",
+        "workflow",
+        "sessions",
         "sandbox_network",
         "all",
         "builtin",
         "filesystem",
     }
 )
-PERMISSION_EFFECTS: frozenset[str] = frozenset({"allow", "ask", "deny"})
+# ``evaluate`` is the weakest effect, written by the approve-for-me preset.
+PERMISSION_EFFECTS: frozenset[str] = frozenset({"allow", "ask", "deny", "evaluate"})
 # CLI 2.x tool names and the V3 tool tag that replaced each one.
 V2_TOOL_NAMES: Mapping[str, str] = {
     "fs_read": "read",
@@ -339,7 +357,7 @@ def _permission_issues(permissions: object) -> list[Issue]:
                 Issue(
                     "agent-permissions",
                     "error",
-                    f"{label}: effect must be allow, ask or deny; got {effect!r}",
+                    f"{label}: effect must be allow, ask, deny or evaluate; got {effect!r}",
                 )
             )
         for key in ("match", "exclude"):
@@ -542,9 +560,18 @@ def sandbox_issues(data: object) -> list[Issue]:
     return issues
 
 
-# Keys kiro-cli reads only from ~/.kiro/settings/cli.json.
+# Keys kiro-cli reads only from ~/.kiro/settings/cli.json (Kiro settings reference).
 GLOBAL_ONLY_CLI_KEYS: frozenset[str] = frozenset(
-    {"chat.agentEngine", "chat.enableAutoAgentUpgrade", "app.warnOnElevatedPrivileges"}
+    {
+        "chat.agentEngine",
+        "acp.agentEngine",
+        "chat.enableAutoAgentUpgrade",
+        "app.warnOnElevatedPrivileges",
+        "auth.portalUrl",
+        "chat.uiMode",
+        "chat.screenReader",
+        "chat.terminalTitle",
+    }
 )
 
 
@@ -590,6 +617,8 @@ WORKFLOW_KEYS: frozenset[str] = frozenset(
         "planRevision",
     }
 )
+# Documented limits: at most 50 ``step`` nodes and 8 nesting levels per recipe; the
+# repeat ceiling comes from the recipe schema in Kiro CLI 3.5.
 WORKFLOW_MAX_ITERATIONS = 1000
 WORKFLOW_MAX_DEPTH = 8
 WORKFLOW_MAX_STEPS = 50
@@ -644,18 +673,18 @@ def workflow_issues(data: object, file_name: str) -> list[Issue]:
         issues.append(
             Issue(
                 "workflow-depth",
-                "warning",
-                f"nodes nest {state.counts[1]} levels deep; keep recipes within "
-                f"{WORKFLOW_MAX_DEPTH} levels",
+                "error",
+                f"nodes nest {state.counts[1]} levels deep; Kiro allows at most "
+                f"{WORKFLOW_MAX_DEPTH}",
             )
         )
     if state.counts[0] > WORKFLOW_MAX_STEPS:
         issues.append(
             Issue(
                 "workflow-size",
-                "warning",
-                f"{state.counts[0]} static steps; keep recipes within {WORKFLOW_MAX_STEPS} and "
-                "split larger ones",
+                "error",
+                f"{state.counts[0]} step nodes; Kiro allows at most {WORKFLOW_MAX_STEPS} per "
+                "recipe (repeat iterations do not count), so split it",
             )
         )
     return issues
@@ -707,7 +736,6 @@ def _check_node(node: Mapping[str, Any], label: str, depth: int, state: _WalkSta
             need("agent", "needs an agent")
             need("prompt", "needs a prompt")
         case "watch":
-            state.counts[0] += 1
             need("handler", "needs a handler")
         case "sequence" | "repeat":
             _children(node, "steps", label, depth, state)

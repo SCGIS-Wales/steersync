@@ -48,8 +48,8 @@ universal format written by `/upgrade-agent` (both `toolsSettings` and `permissi
 | `json-syntax`, `agent-schema` | error | Valid JSON object. | Configuration reference |
 | `agent-name` | warning | A `name` is expected. | Configuration reference |
 | `agent-v2-format` | error | `toolsSettings` or `allowedTools` without `permissions` is the CLI 2.x format. Kiro rewrites it in place on load (automatic agent upgrade), so a synced copy would turn into a local edit everywhere. Run `/upgrade-agent` or `kiro-cli agent upgrade <dir>` and commit the universal format, which keeps both. | Agent config changes (V3) |
-| `agent-permissions` | error | `permissions.rules[]` objects with a `capability`, an `effect` of `allow`, `ask` or `deny`, and `match`/`exclude` as strings or lists of strings. | Permissions |
-| `agent-permission-capability` | warning | Unknown capability (known: `fs_read`, `fs_write`, `shell`, `web_fetch`, `web_search`, `mcp`, `subagent`, `skill`, `power`, `context`, `diagnostics`, `sandbox_network`, `all`, `builtin`, `filesystem`). | Permissions |
+| `agent-permissions` | error | `permissions.rules[]` objects with a `capability`, an `effect` of `allow`, `ask`, `deny` or `evaluate` (the weakest, written by the approve-for-me preset), and `match`/`exclude` as strings or lists of strings. | Permissions |
+| `agent-permission-capability` | warning | Unknown capability (known: `fs_read`, `fs_write`, `shell`, `web_fetch`, `web_search`, `mcp`, `subagent`, `skill`, `power`, `context`, `diagnostics`, `workflow`, `sessions`, `sandbox_network`, and the meta capabilities `all`, `builtin`, `filesystem`). | Permissions, Kiro CLI 3.5 |
 | `agent-legacy-key` | warning | `toolAliases` and `keyboardShortcut` are not supported by V3. | Agent config changes (V3) |
 | `agent-v2-tool-name` | warning | `fs_read`, `fs_write`, `execute_bash`, `execute_cmd`, `use_subagent` in `tools`; V3 uses `read`, `write`, `shell`, `subagent`. | Agent config changes (V3) |
 | `agent-use-aws` | warning | The built in `use_aws` tool is gone in V3; use the AWS MCP server. | Agent config changes (V3) |
@@ -70,7 +70,7 @@ universal format written by `/upgrade-agent` (both `toolsSettings` and `permissi
 | `json-syntax` | error | Valid JSON. | Hooks |
 | `hook-schema` | error | `"version": "v1"` and `hooks[]` with `name`, `trigger` and `action`; `enabled` is a boolean. | Hooks |
 | `hook-trigger` | warning | Unknown trigger. V3 triggers: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest` (CLI 3.4), `PreCompact`, `PostCompact` (CLI 3.1), `PreTaskExec`, `PostTaskExec`, `PostFileCreate`, `PostFileSave`, `PostFileDelete`, `Stop`, `Manual`. | Hook triggers |
-| `hook-trigger-alias` | warning | CLI 2.x camelCase names (`agentSpawn`, `preToolUse`, ...) and the V3 trigger each became. | Hooks migration |
+| `hook-trigger-alias` | warning | Spellings Kiro still accepts but no longer writes: CLI 2.x camelCase (`agentSpawn`, `preToolUse`, `stop`), IDE 0.x names (`fileEdited`, `promptSubmit`, `agentStop`, `userTriggered`) and `AfterFileEdit`; the message names the canonical trigger. | Hook triggers, Kiro CLI 3.5 |
 | `hook-action` | error | `action.type` is `command` (with `action.command`) or `agent` (with `action.prompt`). | Hooks |
 | `hook-timeout-value` | error | `timeout` is a whole number of seconds, 0 or more (0 disables it). | Hooks |
 | `hook-confirm` | error | `confirm` needs a `question`, options with `id` and `label`, and only works on `Stop` command hooks. | Hooks |
@@ -120,22 +120,22 @@ size limit (1 MiB by default).
 
 | Rule | Severity | Check | Source |
 |---|---|---|---|
-| `cli-settings-global-only` | error | `chat.agentEngine`, `chat.enableAutoAgentUpgrade` and `app.warnOnElevatedPrivileges` are read only from `~/.kiro/settings/cli.json`. Flat (`"chat.agentEngine"`) and nested layouts are both checked. | CLI settings |
+| `cli-settings-global-only` | error | `chat.agentEngine`, `acp.agentEngine`, `chat.enableAutoAgentUpgrade`, `app.warnOnElevatedPrivileges`, `auth.portalUrl`, `chat.uiMode`, `chat.screenReader` and `chat.terminalTitle` are read only from `~/.kiro/settings/cli.json`. Flat (`"chat.agentEngine"`) and nested layouts are both checked. | Settings reference |
 
 ## workflow (`.kiro/workflows`, `~/.kiro/workflows`)
 
-Recipes are `<name>.workflow.json`, `.yaml` or `.yml`. The rules follow the recipe schema
-shipped with Kiro CLI 3.5.
+Recipes are `<name>.workflow.json`, `.yaml` or `.yml`. The rules follow the workflow
+authoring documentation and the recipe schema shipped with Kiro CLI 3.5.
 
-| Rule | Severity | Check |
-|---|---|---|
-| `json-syntax`, `yaml-syntax` | error | The file parses. |
-| `workflow-schema` | error | A `name` and a non empty `steps` list; `inputs` maps names to descriptions; each node has an `id` and a `type` of `step` (`agent`, `prompt`), `sequence` (`steps`), `repeat` (`steps`), `parallel` (`branches`, `joinPolicy` `all`, `allSettled` or `any`) or `watch` (`handler`). |
-| `workflow-duplicate-id` | error | Node ids are unique in the recipe. |
-| `workflow-repeat` | error | `maxIterations` from 1 to 1000, `onMaxIterations` `abort`, `continue` or `pause`, and at most one of `stopCondition` or `stopWhen`. |
-| `workflow-file-name` | warning | Kiro saves a recipe as the kebab case of its `name`. |
-| `workflow-unknown-key` | warning | Top level keys Kiro ignores. |
-| `workflow-depth`, `workflow-size` | warning | More than 8 nesting levels or 50 static steps. |
+| Rule | Severity | Check | Source |
+|---|---|---|---|
+| `json-syntax`, `yaml-syntax` | error | The file parses. | |
+| `workflow-schema` | error | A `name` and a non empty `steps` list; `inputs` maps names to descriptions; each node has an `id` and a `type` of `step` (`agent`, `prompt`), `sequence` (`steps`), `repeat` (`steps`), `parallel` (`branches`, `joinPolicy` `all`, `allSettled` or `any`) or `watch` (`handler`). | Kiro CLI 3.5 |
+| `workflow-duplicate-id` | error | Node ids are unique in the recipe. | Kiro CLI 3.5 |
+| `workflow-repeat` | error | `maxIterations` from 1 to 1000, `onMaxIterations` `abort`, `continue` or `pause`, and at most one of `stopCondition` or `stopWhen`. | Kiro CLI 3.5 |
+| `workflow-file-name` | warning | Kiro saves a recipe as the kebab case of its `name`. | Kiro CLI 3.5 |
+| `workflow-unknown-key` | warning | Top level keys Kiro ignores. | Kiro CLI 3.5 |
+| `workflow-depth`, `workflow-size` | error | More than 8 nesting levels or more than 50 `step` nodes (watch nodes and repeat iterations do not count). | Workflow authoring |
 
 ## kiroignore (`.kiroignore` anywhere, `~/.kiro/settings/kiroignore`)
 

@@ -352,8 +352,9 @@ keep the git hook as the dependable trigger.
 
 **Kiro CLI V3.** Kiro CLI 3.0.0 made V3 the default agent harness; V2 still runs but gets no
 new features. `steersync doctor`, `steersync v3-status`, the `kiro_v3_status` MCP tool and
-the session hook (at most once a day) check `kiro-cli --version`, `chat.agentEngine` and your
-agent files. When a reminder applies, run `kiro-cli settings chat.agentEngine v3`, start
+the session hook (at most once a day) check `kiro-cli --version`, `chat.agentEngine`,
+`acp.agentEngine` (the harness `kiro-cli acp` starts for editor integrations) and your agent
+files. When a reminder applies, run `kiro-cli settings chat.agentEngine v3`, start
 `kiro-cli` and run `/upgrade-agent`; for a shared agent directory run
 `kiro-cli agent upgrade <dir>`. See <https://kiro.dev/docs/cli/v3/>. The probes never start a
 chat, so they use no Kiro credits, and a reminder never fails a sync. Set

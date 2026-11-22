@@ -30,6 +30,7 @@ import anyio
 import anyio.from_thread
 import anyio.to_thread
 from mcp.server import MCPServer
+from mcp.server.caching import CacheableMethod, CacheHint
 from mcp.server.mcpserver import (
     AcceptedElicitation,
     Context,
@@ -320,12 +321,22 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     ),
 }
 READ_ONLY_TOOLS: tuple[str, ...] = tuple(n for n, s in TOOL_SPECS.items() if s.read_only)
+# The tool list and server description never change while the server runs and do not
+# depend on who asks, so clients may cache them for an hour and share the copy.
+CACHE_HINTS: dict[CacheableMethod, CacheHint] = {
+    "tools/list": CacheHint(ttl_ms=3_600_000, scope="public"),
+    "server/discover": CacheHint(ttl_ms=3_600_000, scope="public"),
+}
 
 
 def build_server() -> MCPServer:
     """Create the MCP server with every tool registered."""
     server = MCPServer(
-        "steersync", title="steersync", version=__version__, instructions=SERVER_INSTRUCTIONS
+        "steersync",
+        title="steersync",
+        version=__version__,
+        instructions=SERVER_INSTRUCTIONS,
+        cache_hints=CACHE_HINTS,
     )
     for name, spec in TOOL_SPECS.items():
         annotations = ToolAnnotations(

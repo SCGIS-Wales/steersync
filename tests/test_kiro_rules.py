@@ -339,3 +339,24 @@ def test_kiroignore_rules(config: Config) -> None:
     assert "kiroignore-secrets" in lint_rules(config, ".kiroignore", "kiroignore", "docs/\n")
     assert "kiroignore-secrets" not in lint_rules(config, "src/.kiroignore", "kiroignore", "x\n")
     assert "encoding-utf8" in lint_rules(config, ".kiroignore", "kiroignore", "a\0b")
+
+
+def test_enums_match_kiro_cli_3_5() -> None:
+    """Values checked against the Kiro docs and the harness bundled with Kiro CLI 3.5."""
+    evaluate = {"capability": "workflow", "effect": "evaluate"}
+    sessions = {"capability": "sessions", "effect": "allow"}
+    assert kiro_rules.agent_issues({"permissions": {"rules": [evaluate, sessions]}}) == []
+    for alias, canonical in (("fileEdited", "PostFileSave"), ("AfterFileEdit", "PostFileSave")):
+        issues = kiro_rules.hook_entry_issues(hook(trigger=alias), "h", standalone=True)
+        assert [i.rule for i in issues] == ["hook-trigger-alias"]
+        assert canonical in issues[0].message
+    for key in ("acp.agentEngine", "auth.portalUrl", "chat.uiMode", "chat.terminalTitle"):
+        assert rules_of(kiro_rules.cli_settings_issues({key: "x"})) == {"cli-settings-global-only"}
+
+
+def test_workflow_limits_count_step_nodes_only() -> None:
+    watches = [{"type": "watch", "id": f"w{i}", "handler": "github-pr"} for i in range(60)]
+    assert kiro_rules.workflow_issues(recipe(name="w", steps=watches), "w.workflow.json") == []
+    steps = [{"type": "step", "id": f"s{i}", "agent": "a", "prompt": "p"} for i in range(51)]
+    (issue,) = kiro_rules.workflow_issues(recipe(name="s", steps=steps), "s.workflow.json")
+    assert (issue.rule, issue.severity) == ("workflow-size", "error")

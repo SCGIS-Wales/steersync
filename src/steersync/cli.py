@@ -847,6 +847,8 @@ def _harness_lines(status: kiro_version.HarnessStatus) -> list[str]:
         cli = f"kiro-cli: {status.cli_version or 'unknown version'} ({status.cli_path})"
     engine = status.engine or ("v3 (default)" if status.engine_source == "default" else "unknown")
     lines = [cli, f"agent engine: {engine} [{status.engine_source}]"]
+    if status.acp_engine is not None:
+        lines.append(f"acp engine: {status.acp_engine}")
     if status.auto_upgrade is not None:
         lines.append(f"automatic agent upgrade: {'on' if status.auto_upgrade else 'off'}")
     lines.extend(f"V2 format agent: {path}" for path in status.v2_agents)

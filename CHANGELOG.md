@@ -5,6 +5,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- V3 detection reads `acp.agentEngine`, the harness `kiro-cli acp` starts for editor and IDE
+  integrations, and reminds when it is still `v1` or `v2`.
+- The MCP server sends cache hints: the tool list and server description may be cached for
+  an hour and shared (`ttlMs`, `cacheScope: public`).
+
+### Changed
+
+- Rule enumerations checked against the Kiro documentation and the harness bundled with Kiro
+  CLI 3.5: the `evaluate` permission effect and the `workflow` and `sessions` capabilities
+  are accepted; every hook trigger alias the harness maps is recognised (`fileEdited`,
+  `promptSubmit`, `agentStop`, `userTriggered`, `AfterFileEdit`, ...) and `migrate-hooks`
+  uses the same map; the documented workflow limits (50 `step` nodes, 8 levels) are errors
+  and count only `step` nodes; `acp.agentEngine`, `auth.portalUrl`, `chat.uiMode`,
+  `chat.screenReader` and `chat.terminalTitle` are rejected in a workspace `cli.json`.
+- Development dependencies are split into the PEP 735 groups `test`, `lint` and `security`
+  (`dev` includes all three); each CI job installs only its group.
+
+### Fixed
+
+- `permissions.rules[].effect: evaluate` was reported as an error.
+
 ## [0.5.0] - 2026-11-22
 
 ### Added

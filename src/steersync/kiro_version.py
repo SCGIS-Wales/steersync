@@ -18,7 +18,7 @@ import shutil
 import subprocess  # nosec B404
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -49,6 +49,9 @@ class HarnessStatus:
     engine: str | None
     engine_source: EngineSource
     auto_upgrade: bool | None
+    # acp.agentEngine: the harness `kiro-cli acp` (IDE and editor integrations) starts;
+    # chat.agentEngine does not apply to it.
+    acp_engine: str | None = None
     v2_agents: tuple[str, ...] = ()
     reasons: tuple[str, ...] = field(default=())
 
@@ -193,6 +196,8 @@ def detect_harness(
         source = "default"
     upgrade_value, _ = _setting(binary, "chat.enableAutoAgentUpgrade", run, file_settings)
     auto_upgrade = upgrade_value if isinstance(upgrade_value, bool) else None
+    acp_value, _ = _setting(binary, "acp.agentEngine", run, file_settings)
+    acp_engine = acp_value.lower() if isinstance(acp_value, str) else None
     dirs = [*agent_dirs, kiro_home(environment) / "agents"]
     status = HarnessStatus(
         cli_path=binary,
@@ -200,6 +205,7 @@ def detect_harness(
         engine=engine,
         engine_source=source,
         auto_upgrade=auto_upgrade,
+        acp_engine=acp_engine,
         v2_agents=find_v2_agents(dict.fromkeys(dirs)),
     )
     reasons = [*_cli_reasons(status)]
@@ -208,15 +214,7 @@ def detect_harness(
             f"{len(status.v2_agents)} agent configuration(s) still use the V2 format"
             + (" and automatic agent upgrade is off" if auto_upgrade is False else "")
         )
-    return HarnessStatus(
-        cli_path=status.cli_path,
-        cli_version=status.cli_version,
-        engine=status.engine,
-        engine_source=status.engine_source,
-        auto_upgrade=status.auto_upgrade,
-        v2_agents=status.v2_agents,
-        reasons=tuple(reasons),
-    )
+    return replace(status, reasons=tuple(reasons))
 
 
 def _cli_reasons(status: HarnessStatus) -> list[str]:
@@ -229,6 +227,11 @@ def _cli_reasons(status: HarnessStatus) -> list[str]:
     if status.engine in {"v1", "v2"}:
         label = "the retired Classic harness" if status.engine == "v1" else "the V2 harness"
         reasons.append(f"chat.agentEngine is {status.engine!r}, so kiro-cli runs {label}")
+    if status.acp_engine in {"v1", "v2"}:
+        reasons.append(
+            f"acp.agentEngine is {status.acp_engine!r}, so `kiro-cli acp` (editor and IDE "
+            "integrations) starts the old harness"
+        )
     return reasons
 
 
@@ -245,6 +248,8 @@ def reminder_text(status: HarnessStatus) -> str:
         "Run `kiro-cli settings chat.agentEngine v3`, start `kiro-cli`, then run "
         "`/upgrade-agent`. For a shared agent directory run `kiro-cli agent upgrade <dir>`."
     )
+    if status.acp_engine in {"v1", "v2"}:
+        lines.append("For editor integrations run `kiro-cli settings acp.agentEngine v3`.")
     lines.append(f"See {DOCS_URL}")
     return "\n".join(lines)
 

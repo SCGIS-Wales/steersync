@@ -20,18 +20,8 @@ from typing import Any, NamedTuple
 
 from steersync.kiro_rules import HOOK_TRIGGER_ALIASES
 
-# IDE 0.x ``when.type`` and the V3 trigger it became.
-LEGACY_WHEN: Mapping[str, str] = {
-    "fileEdited": "PostFileSave",
-    "fileSaved": "PostFileSave",
-    "fileCreated": "PostFileCreate",
-    "fileDeleted": "PostFileDelete",
-    "promptSubmit": "UserPromptSubmit",
-    "userPromptSubmit": "UserPromptSubmit",
-    "agentStop": "Stop",
-    "userTriggered": "Manual",
-    "manual": "Manual",
-}
+# IDE 0.x ``when.type`` and the V3 trigger it became (the harness's own alias map).
+LEGACY_WHEN: Mapping[str, str] = {**HOOK_TRIGGER_ALIASES, "fileSaved": "PostFileSave"}
 LEGACY_THEN_AGENT = frozenset({"askAgent", "agent"})
 LEGACY_THEN_COMMAND = frozenset({"runCommand", "shellCommand", "command"})
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
