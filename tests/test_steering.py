@@ -23,6 +23,7 @@ from steersync.steering import (
     validate_relative_path,
     write_lock,
 )
+from tests.conftest import posix_only
 
 
 def test_parse_front_matter_variants() -> None:
@@ -71,6 +72,7 @@ def test_discover_skips_hidden_and_non_markdown(tmp_path: Path) -> None:
     assert discover_steering_files(tmp_path / "missing") == []
 
 
+@posix_only
 def test_discover_follows_file_symlinks_only(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()

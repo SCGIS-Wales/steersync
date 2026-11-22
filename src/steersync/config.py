@@ -31,6 +31,7 @@ ENV_GITLAB_PROJECT = "STEERSYNC_GITLAB_PROJECT"
 
 CONFIG_FILE_NAMES: tuple[str, ...] = ("steersync.yaml", "steersync.yml")
 
+_WINDOWS_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 _SCP_LIKE = re.compile(r"^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.\-\[\]]+:(?![/\\]{2})[^\s]+$")
 _HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
@@ -640,7 +641,7 @@ def _remote_host(url: str, *, allow_local: bool) -> str | None:
             msg = f"remote URL has no host: {url}"
             raise ConfigError(msg)
         return parts.hostname
-    if parts.scheme == "file" or url.startswith("/"):
+    if parts.scheme == "file" or url.startswith("/") or _WINDOWS_PATH.match(url):
         if not allow_local:
             msg = "local remotes are disabled; set remote.allow_local to true to permit them"
             raise ConfigError(msg)

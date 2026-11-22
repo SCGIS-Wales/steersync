@@ -93,9 +93,11 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python: ["3.14"]
         include:
-          # Newest CPython on one runner only, to keep the run short.
+          # Newest CPython and Windows on one runner each, to keep the run short.
           - os: ubuntu-latest
             python: "3.15"
+          - os: windows-latest
+            python: "3.14"
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

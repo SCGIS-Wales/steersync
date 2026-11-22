@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from steersync import mcp_server, sync
+from steersync import mcp_tools, sync
 from steersync.cli import main
 from steersync.config import Config, load_config
-from steersync.errors import ConfigError, LintError
+from steersync.errors import ConfigError, LintError, SteersyncError
 from steersync.paths import (
     global_collection_dir,
     global_lock_path,
@@ -29,6 +29,7 @@ from tests.conftest import (
     central_global,
     central_project,
     git,
+    posix_only,
 )
 
 
@@ -67,6 +68,7 @@ def seed_collections(work: Path) -> None:
     (global_hooks / "steersync.json").write_text(HOOK_DOC)
 
 
+@posix_only
 def test_pull_applies_every_collection(
     config: Config, env: dict[str, str], project: Path, central: Path, central_commit: CentralCommit
 ) -> None:
@@ -164,6 +166,7 @@ def test_pull_keeps_lock_entries_of_other_collections(
     assert (project / ".kiro" / "specs" / "tls-rotation" / "design.md").read_text() == "# Mine\n"
 
 
+@posix_only
 def test_push_proposes_every_collection_in_one_branch(
     config: Config, env: dict[str, str], project: Path, central: Path
 ) -> None:
@@ -526,22 +529,21 @@ def test_mcp_tools_accept_collections(
     monkeypatch.chdir(project)
     monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
     central_commit(seed_collections, "seed collections")
-    pulled = mcp_server.pull_kiro_config(collections=["skills"])
-    assert pulled["ok"], pulled
-    assert list(pulled["scopes"]["workspace"]) == ["skills"]
-    assert list(pulled["scopes"]["global"]) == ["skills"]
-    diff = mcp_server.diff_kiro_config(collections=["specs"])
-    assert diff["ok"]
-    assert list(diff["workspace"]) == ["specs"]
-    assert diff["global"] == {}
-    lint = mcp_server.validate_kiro_config(collections=["skills"])
-    assert lint["ok"]
-    assert lint["checked"] == 3
-    assert mcp_server.validate_kiro_config(collections=["nope"])["ok"] is False
-    pushed = mcp_server.push_kiro_config(dry_run=True, collections=["skills"])
-    assert pushed["ok"]
-    assert pushed["status"] == "up-to-date"
-    assert pushed["collections"] == ["skills"]
+    pulled = mcp_tools.pull(collections=["skills"])
+    assert list(pulled.scopes["workspace"]) == ["skills"]
+    assert list(pulled.scopes["global"]) == ["skills"]
+    diff = mcp_tools.diff(collections=["specs"])
+    assert list(diff.workspace) == ["specs"]
+    assert diff.global_ == {}
+    assert "global" in diff.model_dump()
+    lint = mcp_tools.validate(collections=["skills"])
+    assert lint.ok
+    assert lint.checked == 3
+    with pytest.raises(SteersyncError, match="unknown collection"):
+        mcp_tools.validate(collections=["nope"])
+    pushed = mcp_tools.push(dry_run=True, collections=["skills"])
+    assert pushed.status == "up-to-date"
+    assert pushed.collections == ["skills"]
 
 
 def test_path_helpers(config: Config, env: dict[str, str], tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -22,6 +23,11 @@ HOOK_DOC = (
     '"action": {"type": "command", "command": "./gradlew test"}}]}\n'
 )
 AGENT_DOC = '{"name": "entra", "description": "Entra agent", "tools": ["read"]}\n'
+
+
+# File modes, execute bits, POSIX shell hooks and unprivileged symlinks do not exist on
+# Windows; the behaviour they cover is exercised on Linux and macOS.
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX file semantics")
 
 
 @pytest.fixture(autouse=True)

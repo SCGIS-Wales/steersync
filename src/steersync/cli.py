@@ -24,6 +24,7 @@ from steersync.errors import SteersyncError
 from steersync.hooks import DEFAULT_TOKEN_ENV
 from steersync.lint import LintReport, lint_paths, lint_workspace, merge_reports
 from steersync.logging_utils import configure_logging
+from steersync.mcp_tools import MISSING_MCP_EXTRA
 from steersync.paths import (
     cache_root,
     global_collection_dir,
@@ -805,8 +806,11 @@ def merge_request(
 @main.command()
 def mcp() -> None:
     """Run the MCP stdio server (requires the `mcp` extra)."""
-    from steersync.mcp_server import serve  # noqa: PLC0415  (optional dependency)
-
+    try:
+        from steersync.mcp_server import serve  # noqa: PLC0415  (optional dependency)
+    except ImportError:
+        _fail(SteersyncError(MISSING_MCP_EXTRA))
+        return
     try:
         serve()
     except SteersyncError as exc:

@@ -176,12 +176,15 @@ def test_pull_hook_prints_reminder_once(
 
 
 def test_mcp_tool(project: Path, config_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from steersync import mcp_server
+    from steersync import mcp_tools
 
     monkeypatch.chdir(project)
     monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
-    status = mcp_server.kiro_v3_status()
-    assert status["ok"]
-    assert status["cli_path"] is None
+    agents = project / ".kiro" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "old.json").write_text(json.dumps({"name": "old", "allowedTools": ["read"]}))
+    status = mcp_tools.v3_status()
+    assert status.cli_path is None
+    assert status.v2_agents[0].endswith("old.json")
     monkeypatch.setenv("STEERSYNC_CONFIG", str(project / "missing.yaml"))
-    assert mcp_server.kiro_v3_status()["ok"]
+    assert mcp_tools.v3_status().v2_agents == []
