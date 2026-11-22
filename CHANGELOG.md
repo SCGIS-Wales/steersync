@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-22
+
 ### Fixed
 
 - The MCP server failed with "unsupported remote URL: ${STEERSYNC_REMOTE}" when started by
