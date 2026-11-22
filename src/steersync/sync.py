@@ -51,6 +51,9 @@ R = TypeVar("R")
 Progress = Callable[[int, int, str], None]
 
 
+_LINT_ERRORS_SHOWN = 10
+
+
 def _no_progress(done: int, total: int, message: str) -> None:
     del done, total, message
 
@@ -258,8 +261,19 @@ def _project_dir(config: Config, cache_dir: Path, project: str) -> Path:
 def resolve_project(
     config: Config, *, workspace_root: Path, env: Mapping[str, str], remote_url: str | None
 ) -> str | None:
-    """Return the project slug for the workspace, or ``None`` when it cannot be determined."""
-    url = remote_url or gitops.remote_url(config, workspace_root, env=gitops.git_environment(env))
+    """Return the project slug for the workspace, or ``None`` when it cannot be determined.
+
+    ``remote_url`` (from a pre-push hook) may already be rewritten by ``insteadOf``; when it
+    belongs to a remote of the workspace, that remote's configured URL is used instead.
+    """
+    git_env = gitops.git_environment(env)
+    url = remote_url
+    if url:
+        name = gitops.remote_for_url(config, workspace_root, url, env=git_env)
+        if name is not None:
+            url = gitops.remote_url(config, workspace_root, name, env=git_env) or url
+    else:
+        url = gitops.remote_url(config, workspace_root, env=git_env)
     if not url:
         return None
     return gitops.project_slug(url)
@@ -546,9 +560,13 @@ def _push_unlocked(
             for item in locals_
         )
         if not report.ok:
+            shown = report.errors[:_LINT_ERRORS_SHOWN]
+            more = len(report.errors) - len(shown)
+            details = "\n".join(f"  {finding.render()}" for finding in shown)
             raise LintError(
                 f"{len(report.errors)} lint error(s) in {scope} collections; "
-                "fix them or pass --no-lint"
+                f"fix them or pass --no-lint\n{details}"
+                + (f"\n  ... and {more} more (steersync lint)" if more else "")
             )
 
     step(1, 4, "refreshing the central repository")

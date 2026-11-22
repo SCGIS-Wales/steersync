@@ -5,6 +5,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The project slug came from the URL after `url.<base>.insteadOf` rewriting, so a mirror or
+  protocol rewrite in git configuration made steersync sync the wrong project directory
+  (`kiro-config/demo/...` instead of `kiro-config/acme/demo/...`). The slug now comes from
+  the configured remote URL, and the rewritten URL a pre-push hook receives is mapped back to
+  its remote. Found by an end to end lifecycle test.
+- A push refused for lint errors now lists the files and rules (up to ten) instead of only
+  the count.
+- The release workflow retries the provenance attestation once when Sigstore's transparency
+  log returns a transient error.
+
 ## [0.5.3] - 2026-11-22
 
 ### Fixed

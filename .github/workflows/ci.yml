@@ -395,7 +395,21 @@ jobs:
       - name: Write checksums
         working-directory: dist
         run: sha256sum -- * > SHA256SUMS
+      # Sigstore's transparency log occasionally answers 404 for an entry it has just
+      # accepted ("error fetching tlog entry"); wait and try again before failing.
       - name: Attest build provenance
+        id: attest
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+      - name: Wait before retrying the attestation
+        if: steps.attest.outcome == 'failure'
+        run: sleep 90
+      - name: Attest build provenance (retry)
+        if: steps.attest.outcome == 'failure'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
