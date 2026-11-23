@@ -5,6 +5,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Merge requests read as a summary: the commit message, which GitLab shows as the
+  description, is Markdown with a table of added, updated and deleted files per
+  collection, the lint errors that were proposed anyway, every file folded away under
+  "All N files", and the source repository, base commit and steersync version. The API
+  path and `steersync mr` use the same text.
+- The title is `Kiro config: <group>/<project> (<N> files, <user>)`; push options use the
+  new `{title}` placeholder (`merge_request.title={title}`).
+- **Breaking:** `push -m` is now the reason shown above the summary, instead of replacing
+  the whole commit message.
+
+### Fixed
+
+- A domain joined login (`jdoe@corp.example.com`, `CORP\jdoe`) gives the user `jdoe` in
+  branch names and titles, instead of `jdoe-corp-example-com`.
+
 ## [0.8.0] - 2026-11-23
 
 ### Changed

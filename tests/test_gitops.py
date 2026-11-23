@@ -71,11 +71,15 @@ def test_build_branch_name_rejects_empty(env: dict[str, str], tmp_path: Path) ->
 
 def test_render_push_options(config: Config) -> None:
     options = gitops.render_push_options(
-        config, project="acme/api", user="dejan", content_hash="abcdef0123"
+        config,
+        project="acme/api",
+        user="jdoe",
+        content_hash="abcdef0123",
+        title="Kiro config: acme/api (2 files, jdoe)",
     )
     assert options[0] == "merge_request.create"
     assert "merge_request.target=main" in options
-    assert "merge_request.title=kiro-config: update acme/api from dejan" in options
+    assert "merge_request.title=Kiro config: acme/api (2 files, jdoe)" in options
 
 
 def test_parse_pre_push_stdin() -> None:

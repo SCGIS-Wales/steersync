@@ -185,7 +185,7 @@ def test_push_creates_branch_then_dedupes(
     assert "push options not accepted" in pushed.message
     show = git("show", "--stat", "--format=%an <%ae>%n%s", pushed.branch, cwd=central, env=env)
     assert "Test User <test.user@example.com>" in show
-    assert f"kiro-config: update {PROJECT_SLUG} from tester" in show
+    assert f"Kiro config: {PROJECT_SLUG} (2 files, tester)" in show
     assert f"projects/{PROJECT_SLUG}/steering/api.md" in show
     assert "python.md" not in git(
         "ls-tree",
@@ -222,7 +222,9 @@ def test_push_creates_branch_then_dedupes(
     assert second.status == "pushed"
     assert second.branch is not None
     assert second.branch != pushed.branch
-    assert git("log", "-1", "--format=%s", second.branch, cwd=central, env=env) == "custom message"
+    # -m is the reason, the first paragraph of the description; the title stays generated.
+    body = git("log", "-1", "--format=%b", second.branch, cwd=central, env=env)
+    assert body.startswith("custom message\n")
     assert (
         git(
             "rev-parse",

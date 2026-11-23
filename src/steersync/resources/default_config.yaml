@@ -20,7 +20,7 @@ remote:
     - merge_request.create
     - merge_request.target={default_branch}
     - merge_request.remove_source_branch
-    - "merge_request.title=kiro-config: update {project} from {user}"
+    - "merge_request.title={title}"
 
 git:
   binary: git

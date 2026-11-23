@@ -377,13 +377,20 @@ def _user_candidate(
     source: str, config: Config, repo: Path | None, env: Mapping[str, str]
 ) -> str | None:
     if source == "os":
-        return env.get("USER") or env.get("LOGNAME") or env.get("USERNAME") or _login_name()
+        login = env.get("USER") or env.get("LOGNAME") or env.get("USERNAME") or _login_name()
+        return account_name(login) if login else None
     if source == "email":
         email = config_value(config, repo, "user.email", env=env)
         return email.split("@", 1)[0] if email else None
     if source == "name":
         return config_value(config, repo, "user.name", env=env)
     return None
+
+
+def account_name(login: str) -> str:
+    """The account without its domain: a domain joined Linux or Windows login
+    (``jdoe@corp.example.com``, ``CORP\\jdoe``) becomes ``jdoe``."""
+    return login.rsplit("\\", 1)[-1].split("@", 1)[0] or login
 
 
 def _login_name() -> str | None:
@@ -397,7 +404,8 @@ def current_user_id(config: Config, repo: Path | None, env: Mapping[str, str]) -
     """Return a short identifier for the current user suitable for branch names.
 
     Sources are tried in the order of ``branch.user_from``: the operating system
-    user name, the local part of the git ``user.email``, the git ``user.name``.
+    user name without any domain, the local part of the git ``user.email``, the git
+    ``user.name``.
     The result is lowercase letters, digits and dashes only.
     """
     for source in config.branch.user_from:
@@ -439,8 +447,11 @@ def check_ref_format(config: Config, name: str, env: Mapping[str, str] | None = 
     return result.returncode == 0
 
 
-def render_push_options(config: Config, *, project: str, user: str, content_hash: str) -> list[str]:
+def render_push_options(
+    config: Config, *, project: str, user: str, content_hash: str, title: str = ""
+) -> list[str]:
     values = {
+        "title": title or f"Kiro config: {project}",
         "default_branch": config.remote.default_branch,
         "project": project,
         "user": user,

@@ -35,7 +35,7 @@ _WINDOWS_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 _SCP_LIKE = re.compile(r"^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.\-\[\]]+:(?![/\\]{2})[^\s]+$")
 _HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
-_ALLOWED_PLACEHOLDERS = frozenset({"default_branch", "project", "user", "hash"})
+_ALLOWED_PLACEHOLDERS = frozenset({"default_branch", "project", "user", "hash", "title"})
 _COLLECTION_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 LintProfile = Literal[
