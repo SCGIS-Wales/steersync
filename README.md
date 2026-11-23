@@ -240,13 +240,13 @@ opened through git push options.
 
 ```bash
 steersync doctor     # look for "project slug: acme/svc", taken from the origin URL
-steersync lint       # errors block a push; warnings are advice
+steersync lint       # errors need fixing; only a possible secret blocks a push
 steersync status     # what would be proposed: one "+" line per file
 ```
 
 The project slug decides where the project lives centrally (`projects/acme/svc/`). It comes
 from the `origin` URL you configured, including subgroups, and is not affected by
-`insteadOf` rewrites. Fix lint errors before the first push: `steersync migrate-hooks
+`insteadOf` rewrites. Fix lint errors when you can (only secrets stop a push): `steersync migrate-hooks
 --write` converts old `*.kiro.hook` files, and `kiro-cli agent upgrade .kiro/agents`
 rewrites CLI 2.x agents in place into the universal format that Kiro CLI 2 and 3 both load
 (it keeps each original as `<name>.json.bak`, which steersync never syncs).
@@ -345,7 +345,7 @@ project slug, every directory and the Kiro CLI harness.
 | git operations time out, `ssh: connect to host gitlab.com port 22` | The network blocks SSH on port 22. GitLab.com also serves SSH on port 443: set `url: ssh://git@altssh.gitlab.com:443/<group>/<project>.git` and add `altssh.gitlab.com` to `allowed_hosts` (accept its host key once with `ssh -T -p 443 git@altssh.gitlab.com`; it is the same key as `gitlab.com`). HTTPS with a credential helper works too. |
 | `remote host ... is not in remote.allowed_hosts` | Add the host of `remote.url` to `allowed_hosts`. |
 | The first pull reports a file as locally modified | Your copy differs from the merged one, for example a file still tracked by the project in an older version. Compare, then `steersync pull --force` to take the central copy or `steersync push` to propose yours. |
-| `push` stops with lint errors | The errors name each file and rule; fix them (`steersync migrate-hooks --write`, `kiro-cli agent upgrade .kiro/agents`) or see [Validation](https://github.com/SCGIS-Wales/steersync#validation). |
+| `push` stops with "possible secret(s)" | A file matches a secret pattern or `mcp.json` holds a literal value. Remove it (use `${VAR}` in `mcp.json`), or pass `--no-lint` if it is not a secret. Other lint errors are reported and never stop a push. |
 
 ## Working across many repositories
 
@@ -670,7 +670,8 @@ Kiro cannot read or would rewrite (front matter after a blank line, an unknown i
 mode, invalid JSON, a `SKILL.md` without `name` and `description`, a hook without
 `version: "v1"`, a workflow `repeat` without `maxIterations`, an unknown sandbox
 `networkAccess`, a V2 format agent) or secrets, including literal tokens in `mcp.json`
-`env`, `headers` and `oauth.clientSecret`; they stop a push. **Warnings** are best practices from
+`env`, `headers` and `oauth.clientSecret`. Only secrets stop a push; every other error is
+printed and the files are synced as they are. **Warnings** are best practices from
 the Kiro documentation, reported objectively and never blocking: a steering file with a
 numeric prefix, an `auto` description that is not written as a trigger, a `globs` key where
 Kiro reads `fileMatchPattern`, an agent with `tools: ["*"]` or a `file://.kiro/steering/**`

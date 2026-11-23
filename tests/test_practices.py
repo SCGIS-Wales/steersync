@@ -211,3 +211,45 @@ def test_lint_paths_reports_collection_practices(config: Config, tmp_path: Path)
     assert finding.path == ".kiro/steering"
     ad_hoc = lint_paths([steering], config.lint, tmp_path, profile="steering")
     assert "steering-foundation-missing" not in {f.rule for f in ad_hoc.findings}
+
+
+def test_setup_in_kiro_home_satisfies_the_autoload_checks(config: Config, tmp_path: Path) -> None:
+    """`steersync setup` writes the hook and MCP entry to ~/.kiro, not the repository."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    home = tmp_path / "kiro"
+    (home / "hooks").mkdir(parents=True)
+    (home / "hooks" / "steersync.json").write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "hooks": [
+                    {
+                        "name": "steersync-pull",
+                        "trigger": "SessionStart",
+                        "action": {"type": "command", "command": "uvx steersync pull --quiet"},
+                    }
+                ],
+            }
+        )
+    )
+    (home / "settings").mkdir()
+    # Any server name counts when it runs steersync.
+    (home / "settings" / "mcp.json").write_text(
+        json.dumps(
+            {"mcpServers": {"kiro-config": {"command": "uvx", "args": ["steersync", "mcp"]}}}
+        )
+    )
+    found = lint_workspace(
+        repo, config.lint, hooks_dir=".kiro/hooks", settings_dir=".kiro/settings", kiro_home=home
+    )
+    assert found.findings == ()
+    missing = lint_workspace(
+        repo,
+        config.lint,
+        hooks_dir=".kiro/hooks",
+        settings_dir=".kiro/settings",
+        kiro_home=tmp_path / "empty",
+    )
+    assert {f.rule for f in missing.findings} == {"autoload-hook-missing", "autoload-mcp-missing"}
+    assert all("steersync setup" in f.message for f in missing.findings)

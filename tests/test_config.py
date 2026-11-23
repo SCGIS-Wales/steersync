@@ -26,12 +26,12 @@ def test_defaults_load_without_file(env: dict[str, str]) -> None:
 def test_file_merges_over_defaults(env: dict[str, str], tmp_path: Path) -> None:
     path = tmp_path / "c.yaml"
     path.write_text(
-        "remote:\n  url: git@gitlab.example.com:acme/steering.git\nlint:\n  max_file_bytes: 2048\n"
+        "remote:\n  url: git@gitlab.example.com:acme/steering.git\nlint:\n  require_h1: false\n"
     )
     config = load_config(env=env, explicit=path)
     assert config.remote.url == "git@gitlab.example.com:acme/steering.git"
-    assert config.lint.max_file_bytes == 2048
-    assert config.lint.require_h1 is True
+    assert config.lint.require_h1 is False
+    assert config.lint.practices is True
     assert config.source_file == path
 
 
@@ -181,7 +181,6 @@ def test_collections_defaults_and_overrides(env: dict[str, str], tmp_path: Path)
     assert "cli-settings" not in default.enabled_collections()
     assert default.collections["steering"].lint == "steering"
     assert default.collections["specs"].global_path is None
-    assert default.collections["skills"].max_file_bytes == 1_048_576
     path = tmp_path / "c.yaml"
     path.write_text(
         "collections:\n"

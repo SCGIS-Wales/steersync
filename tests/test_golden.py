@@ -34,7 +34,6 @@ def findings(config: Config, case: str) -> dict[str, Any]:
         directory,
         profile=collection.lint,
         spec=FileSpec(collection.include, collection.exclude, collection.max_depth),
-        max_file_bytes=collection.max_file_bytes,
     )
     return {
         "checked": report.checked,

@@ -364,18 +364,20 @@ def test_project_slug_ignores_insteadof_rewrites(
     assert other == "team/tool"
 
 
-def test_push_lint_error_names_files_and_rules(
+def test_push_blocks_only_on_secrets_and_names_them(
     config: Config, env: dict[str, str], project: Path
 ) -> None:
     from steersync.errors import LintError
 
-    hooks = project / ".kiro" / "hooks"
-    hooks.mkdir(parents=True)
+    steering = project / ".kiro" / "steering"
+    steering.mkdir(parents=True)
+    token = "glpat-" + "x" * 24  # built at run time so no scanner flags this file
     for index in range(12):
-        (hooks / f"bad{index:02d}.json").write_text('{"hooks": []}\n')
+        (steering / f"leak{index:02d}.md").write_text(f"# Leak\n\nToken {token}.\n")
     with pytest.raises(LintError) as caught:
         sync.push(config, workspace_root=project, env=env)
     message = str(caught.value)
-    assert "hooks/bad00.json" in message
-    assert "[hook-schema]" in message
+    assert "possible secret(s)" in message
+    assert "steering/leak00.md" in message
+    assert "[forbidden-gitlab-token]" in message
     assert "and 2 more" in message

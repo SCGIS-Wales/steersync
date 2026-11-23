@@ -223,7 +223,6 @@ def _lint_collection(
         config.lint,
         workspace_root,
         profile=collection.lint,
-        max_file_bytes=collection.max_file_bytes,
     )
 
 
@@ -661,14 +660,21 @@ def _push_unlocked(
             )
             for item in locals_
         )
-        if not report.ok:
-            shown = report.errors[:_LINT_ERRORS_SHOWN]
-            more = len(report.errors) - len(shown)
+        if report.blocking:
+            shown = report.blocking[:_LINT_ERRORS_SHOWN]
+            more = len(report.blocking) - len(shown)
             details = "\n".join(f"  {finding.render()}" for finding in shown)
             raise LintError(
-                f"{len(report.errors)} lint error(s) in {scope} collections; "
-                f"fix them or pass --no-lint\n{details}"
+                f"{len(report.blocking)} possible secret(s) in {scope} collections; nothing "
+                f"was pushed. Remove them, or pass --no-lint if they are not secrets\n{details}"
                 + (f"\n  ... and {more} more (steersync lint)" if more else "")
+            )
+        for finding in report.errors[:_LINT_ERRORS_SHOWN]:
+            log.warning("pushing anyway: %s", finding.render())
+        if len(report.errors) > _LINT_ERRORS_SHOWN:
+            log.warning(
+                "pushing anyway: %d more lint error(s) (steersync lint)",
+                len(report.errors) - _LINT_ERRORS_SHOWN,
             )
 
     step(1, 4, "refreshing the central repository")

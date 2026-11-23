@@ -58,6 +58,15 @@ class LintFinding(NamedTuple):
         return f"{location}: {self.severity}: [{self.rule}] {self.message}"
 
 
+# Only these stop a push: a secret in the central repository reaches every machine and
+# its history. Every other error is reported and the files are synced as they are.
+SECRET_RULES = frozenset({"mcp-literal-secret"})
+
+
+def is_secret_rule(rule: str) -> bool:
+    return rule in SECRET_RULES or rule.startswith("forbidden-")
+
+
 class LintReport(NamedTuple):
     findings: tuple[LintFinding, ...]
     checked: int
@@ -73,6 +82,11 @@ class LintReport(NamedTuple):
     @property
     def ok(self) -> bool:
         return not self.errors
+
+    @property
+    def blocking(self) -> tuple[LintFinding, ...]:
+        """Errors that must never reach the central repository: secrets."""
+        return tuple(f for f in self.errors if is_secret_rule(f.rule))
 
     def to_json(self) -> str:
         return json.dumps(
@@ -103,7 +117,11 @@ def _front_matter_findings(doc: SteeringDocument, config: LintConfig) -> list[Li
         )
         return findings
     if fm.error:
-        findings.append(LintFinding(doc.relative_path, "front-matter-yaml", "error", fm.error, 1))
+        findings.append(
+            LintFinding(
+                doc.relative_path, "front-matter-yaml", "error", fm.error, fm.error_line or 1
+            )
+        )
         return findings
     if not fm.present:
         return findings
@@ -275,19 +293,6 @@ def _markdown_findings(doc: SteeringDocument, config: LintConfig) -> list[LintFi
     ]
 
 
-def _size_findings(doc: SteeringDocument, max_file_bytes: int) -> list[LintFinding]:
-    if len(doc.raw) <= max_file_bytes:
-        return []
-    return [
-        LintFinding(
-            doc.relative_path,
-            "max-size",
-            "error",
-            f"file is {len(doc.raw)} bytes; limit is {max_file_bytes}",
-        )
-    ]
-
-
 def _text_findings(doc: SteeringDocument) -> list[LintFinding]:
     """Findings for content that must be UTF-8 text without NUL bytes."""
     if doc.text is None:
@@ -356,7 +361,11 @@ def _skill_metadata_findings(doc: SteeringDocument) -> list[LintFinding]:
             )
         ]
     if fm.error:
-        return [LintFinding(doc.relative_path, "front-matter-yaml", "error", fm.error, 1)]
+        return [
+            LintFinding(
+                doc.relative_path, "front-matter-yaml", "error", fm.error, fm.error_line or 1
+            )
+        ]
     findings: list[LintFinding] = []
     for key in ("name", "description"):
         value = fm.metadata.get(key)
@@ -608,12 +617,19 @@ def collection_findings(
 
 
 def lint_workspace(
-    root: Path, config: LintConfig, *, hooks_dir: str, settings_dir: str
+    root: Path,
+    config: LintConfig,
+    *,
+    hooks_dir: str,
+    settings_dir: str,
+    kiro_home: Path | None = None,
 ) -> LintReport:
     """Report whether a Kiro session in ``root`` loads and refreshes the configuration."""
     if not config.practices:
         return LintReport((), 0)
-    found = practices.workspace_findings(root, hooks_dir=hooks_dir, settings_dir=settings_dir)
+    found = practices.workspace_findings(
+        root, hooks_dir=hooks_dir, settings_dir=settings_dir, kiro_home=kiro_home
+    )
     return LintReport(tuple(_warnings(found)), 0)
 
 
@@ -640,12 +656,10 @@ def lint_document(
     workspace_root: Path | None = None,
     *,
     profile: LintProfile = "steering",
-    max_file_bytes: int | None = None,
     directory: Path | None = None,
 ) -> list[LintFinding]:
     """Lint one document with the given profile and return its findings."""
-    findings = _size_findings(doc, max_file_bytes or config.max_file_bytes)
-    findings.extend(PROFILES[profile](doc, config, LintContext(workspace_root, directory)))
+    findings = PROFILES[profile](doc, config, LintContext(workspace_root, directory))
     return list(dict.fromkeys(findings))
 
 
@@ -655,7 +669,6 @@ def lint_snapshot(
     workspace_root: Path | None = None,
     *,
     profile: LintProfile = "steering",
-    max_file_bytes: int | None = None,
     directory: Path | None = None,
     collection_level: bool = True,
 ) -> LintReport:
@@ -672,7 +685,6 @@ def lint_snapshot(
                 config,
                 workspace_root,
                 profile=profile,
-                max_file_bytes=max_file_bytes,
                 directory=directory,
             )
         )
@@ -688,7 +700,6 @@ def lint_paths(
     *,
     profile: LintProfile = "steering",
     spec: FileSpec | None = None,
-    max_file_bytes: int | None = None,
 ) -> LintReport:
     """Lint files or directories on disk. Directories are expanded with ``spec``.
 
@@ -707,7 +718,6 @@ def lint_paths(
                 config,
                 workspace_root,
                 profile=profile,
-                max_file_bytes=max_file_bytes,
                 directory=path,
                 collection_level=spec is not None,
             )
@@ -720,7 +730,6 @@ def lint_paths(
                     config,
                     workspace_root,
                     profile=profile,
-                    max_file_bytes=max_file_bytes,
                     directory=path.parent,
                 )
             )

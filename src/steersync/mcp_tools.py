@@ -18,7 +18,7 @@ from steersync import gitlab, gitops, kiro_version, registry, sync
 from steersync.config import Config, load_config
 from steersync.errors import SteersyncError
 from steersync.lint import lint_paths, lint_workspace, merge_reports
-from steersync.paths import global_collection_dir, workspace_collection_dir
+from steersync.paths import global_collection_dir, kiro_home, workspace_collection_dir
 from steersync.steering import ChangePlan, FileSpec
 
 Progress = sync.Progress
@@ -304,7 +304,6 @@ def validate(cwd: str | None = None, *, collections: list[str] | None = None) ->
                 workspace,
                 profile=collection.lint,
                 spec=FileSpec(collection.include, collection.exclude, collection.max_depth),
-                max_file_bytes=collection.max_file_bytes,
             )
         )
     if not collections:
@@ -314,6 +313,7 @@ def validate(cwd: str | None = None, *, collections: list[str] | None = None) ->
                 config.lint,
                 hooks_dir=_workspace_path(config, "hooks", ".kiro/hooks"),
                 settings_dir=_workspace_path(config, "settings", ".kiro/settings"),
+                kiro_home=kiro_home(os.environ),
             )
         )
     report = merge_reports(reports)

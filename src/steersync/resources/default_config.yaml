@@ -113,7 +113,6 @@ collections:
     include: ["**/*"]
     exclude: ["**/__pycache__/**", "**/node_modules/**"]
     lint: skill
-    max_file_bytes: 1048576
   agents:
     description: Custom agent definitions and their prompt files
     workspace_path: .kiro/agents
@@ -228,7 +227,6 @@ sync:
   max_total_bytes: 10485760
 
 lint:
-  max_file_bytes: 65536
   # Best practice warnings taken from the Kiro documentation (never errors). The
   # thresholds below back the size based ones; see docs/validation.md.
   practices: true

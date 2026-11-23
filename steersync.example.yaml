@@ -71,7 +71,6 @@ sync:
   max_total_bytes: 10485760
 
 lint:
-  max_file_bytes: 65536
   require_h1: true
   practices: true               # best practice warnings from the Kiro documentation
   practice_limits:
