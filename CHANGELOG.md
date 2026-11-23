@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-23
+
 ### Changed
 
 - Merge requests read as a summary: the commit message, which GitLab shows as the
