@@ -470,7 +470,7 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 |---|---|
 | `steersync setup [--remote URL] [--branch NAME] [--yes] [--no-mcp] [--no-session-hook] [--no-project]` | Guided setup of the machine and the current repository; safe to repeat. |
 | `steersync pull [--force] [--dry-run] [--no-global] [--no-workspace] [--strict] [--best-effort] [-c NAME] [--json]` | Apply central collections locally. `--best-effort` warns and exits 0 on failure. |
-| `steersync push [--dry-run] [--scope global] [--no-lint] [-m MSG] [-c NAME] [--json]` | Propose local collections centrally in one branch. `--from-hook` is used by git hooks and never blocks the push unless strict. |
+| `steersync push [--dry-run] [--scope global] [--no-lint] [-m WHY] [-c NAME] [--json]` | Propose local collections centrally in one branch; `-m` adds your reason to the merge request. `--from-hook` is used by git hooks and never blocks the push unless strict. |
 | `steersync status [-c NAME] [--json]` | Show adds, updates, deletes and local edits per collection in both directions. |
 | `steersync lint [PATHS] [-c NAME] [--profile P] [--json]` | Validate every collection with its profile, or explicit paths. Exit code 4 on errors. |
 | `steersync mr [--branch NAME] [--title T] [-c NAME] [--json]` | Open, or find, the GitLab merge request for the pushed proposal branch. Needs the token in `GITLAB_TOKEN` (configurable). |
@@ -634,12 +634,14 @@ you are working in:
 
 ```text
 kiro-config/{project}/{user}-{hash}
-kiro-config/acme/platform/entra-app-registration/dgregor-3f9a1c2e
+kiro-config/acme/platform/payments-api/jdoe-3f9a1c2e
 ```
 
 `{project}` is the slug of the project's origin URL, `{user}` comes from the sources listed
-in `branch.user_from` (the operating system user name first, reduced to letters, digits and
-dashes, then the local part of the git `user.email`, then the git `user.name`) and `{hash}`
+in `branch.user_from` (the operating system user name first, without a domain, so a
+domain joined login such as `jdoe@corp.example.com` or `CORP\jdoe` gives `jdoe`, then the
+local part of the git `user.email`, then the git `user.name`; reduced to letters, digits and
+dashes) and `{hash}`
 covers every synced file, so two people proposing identical content share one branch and a
 second identical push is reported as `already-proposed`. The template is configurable; it
 must keep `{project}` and `{hash}`.
@@ -648,10 +650,38 @@ Before pushing, steersync lists the other proposal branches of the same project 
 the remote and warns about them, so unmerged work is reviewed before more is added
 (`branch.warn_existing`). `steersync status` prints the same list.
 
+Every proposal is one commit whose message is a short Markdown summary, and GitLab shows
+it as the merge request description:
+
+```text
+Kiro config: acme/payments-api (7 files, jdoe)
+
+Kiro configuration for **acme/payments-api**, proposed by **jdoe**.
+
+| Collection | Added | Updated | Deleted |
+|---|---:|---:|---:|
+| steering | 4 | 0 | 0 |
+| specs | 1 | 0 | 0 |
+| settings | 0 | 1 | 0 |
+
+**Note:** 1 file with lint errors proposed anyway (`steersync lint` shows them):
+- `steering/product.md`: the value of `status` contains ': ', ...
+
+<details><summary>All 7 files</summary> ...every file, by collection... </details>
+
+Source: gitlab.example.com/acme/payments-api · base `main` @ d52d9192 · steersync 0.9.0
+```
+
+`steersync push -m "why"` puts your reason above the summary. The same title and
+description are used when the merge request is created through the API and by
+`steersync mr`.
+
 The merge request is opened in two ways:
 
 1. **Push options.** The default `remote.push_options` ask GitLab to create a merge request
-   against the default branch, remove the source branch on merge and set a title. Servers
+   against the default branch, remove the source branch on merge and set the title
+(`merge_request.title={title}`; `{project}`, `{user}`, `{hash}` and `{default_branch}`
+also work). Servers
    that do not advertise push options (GitHub, plain bare repositories) make git fail, so
    steersync retries once without them and says so.
 2. **GitLab API.** When the token variable is set (`GITLAB_TOKEN`, name configurable with

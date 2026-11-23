@@ -15,11 +15,12 @@ from pathlib import Path
 from typing import Literal, NamedTuple, ParamSpec, TypeVar, cast
 from urllib.parse import urlsplit
 
-from steersync import backups, gitlab, gitops, paths
+from steersync import backups, gitlab, gitops, paths, proposal
 from steersync.config import CollectionConfig, Config, remote_host, validate_remote_url
 from steersync.errors import ConfigError, GitError, GitLabError, LintError, SyncConflictError
 from steersync.lint import LintReport, lint_snapshot, merge_reports, prefix_report
 from steersync.locking import exclusive_lock
+from steersync.proposal import ProposalText
 from steersync.retry import RetryEvent
 from steersync.steering import (
     ChangePlan,
@@ -110,6 +111,8 @@ class PushResult(NamedTuple):
     # created it, and a short note on how it was obtained.
     merge_request: str | None = None
     merge_request_note: str = ""
+    # Title and description of the commit and merge request.
+    proposal: ProposalText | None = None
 
 
 class StatusResult(NamedTuple):
@@ -625,6 +628,7 @@ def _push_unlocked(
         )
     else:
         project = "global"
+        project_remote = ""
         locals_ = _local_collections(
             config, selected, lambda c: paths.global_collection_dir(c, environment)
         )
@@ -710,6 +714,17 @@ def _push_unlocked(
     branch = gitops.build_branch_name(config, project=project, user=user, content_hash=digest)
     if not gitops.check_ref_format(config, branch, env=git_env):
         raise ConfigError(f"generated branch name is not a valid git ref: {branch}")
+    text = proposal.describe(
+        project=project,
+        user=user,
+        plan=plan,
+        prefixes={item.collection.central_dir or "": item.name for item in locals_},
+        lint_errors=report.errors if report else (),
+        source=_source_label(project_remote),
+        base=base_commit,
+        default_branch=config.remote.default_branch,
+        reason=message,
+    )
     existing = _other_proposals(config, url, project, branch, git_env)
     if dry_run:
         return PushResult(
@@ -723,9 +738,10 @@ def _push_unlocked(
             report,
             f"would push {plan.change_count} change(s)",
             existing,
+            proposal=text,
         )
     if gitops.remote_branch_exists(config, url, branch, env=git_env):
-        mr_url, mr_note = _merge_request_for(config, environment, url, branch, project, plan)
+        mr_url, mr_note = _merge_request_for(config, environment, url, branch, text)
         return PushResult(
             "already-proposed",
             project,
@@ -739,6 +755,7 @@ def _push_unlocked(
             existing,
             mr_url,
             mr_note,
+            text,
         )
 
     cache_env = _cache_git_env(config, environment)
@@ -749,7 +766,9 @@ def _push_unlocked(
         gitops.config_value(config, workspace_root, "user.email", env=git_env)
         or "steersync@localhost"
     )
-    options = gitops.render_push_options(config, project=project, user=user, content_hash=digest)
+    options = gitops.render_push_options(
+        config, project=project, user=user, content_hash=digest, title=text.title
+    )
     try:
         gitops.create_branch(
             config, cache_dir, branch, f"origin/{config.remote.default_branch}", env=cache_env
@@ -771,7 +790,7 @@ def _push_unlocked(
             config,
             cache_dir,
             paths=commit_paths,
-            message=message or _commit_message(project, user, plan),
+            message=text.commit_message(),
             author_name=author_name,
             author_email=author_email,
             env=cache_env,
@@ -801,7 +820,7 @@ def _push_unlocked(
             f"origin/{config.remote.default_branch}",
             env=cache_env,
         )
-    mr_url, mr_note = _merge_request_for(config, environment, url, branch, project, plan)
+    mr_url, mr_note = _merge_request_for(config, environment, url, branch, text)
     step(4, 4, f"pushed {branch}")
     return PushResult(
         "pushed",
@@ -817,6 +836,7 @@ def _push_unlocked(
         existing,
         mr_url,
         mr_note,
+        text,
     )
 
 
@@ -852,8 +872,7 @@ def _merge_request_for(
     env: Mapping[str, str],
     url: str,
     branch: str,
-    project: str,
-    plan: ChangePlan,
+    text: ProposalText,
 ) -> tuple[str | None, str]:
     """Confirm or open the merge request for ``branch`` through the API when a token exists."""
     if not config.gitlab.auto_merge_request or not gitlab.token_available(config, env):
@@ -864,8 +883,8 @@ def _merge_request_for(
             client,
             config,
             source_branch=branch,
-            title=_merge_request_title(project),
-            description=_commit_message(project, gitops.current_user_id(config, None, env), plan),
+            title=text.title,
+            description=text.body,
         )
     except (GitLabError, ConfigError) as exc:
         log.warning("merge request not confirmed: %s", exc)
@@ -873,8 +892,14 @@ def _merge_request_for(
     return mr.url, "merge request created" if created else "merge request already open"
 
 
-def _merge_request_title(project: str) -> str:
-    return f"kiro-config: update {project}"
+def _source_label(url: str) -> str | None:
+    """``gitlab.example.com/group/project`` for the project's remote, without credentials."""
+    if not url:
+        return None
+    try:
+        return f"{remote_host(url)}/{gitops.project_path_from_url(url)}"
+    except ConfigError, GitError:
+        return None
 
 
 @_with_cache_lock
@@ -925,6 +950,9 @@ def merge_request(
                 "edit the collections or pass --branch"
             )
         branch = preview.branch
+        text = preview.proposal or proposal.fallback(project, branch)
+    else:
+        text = proposal.fallback(project, branch)
     if not gitops.remote_branch_exists(config, url, branch, env=git_env):
         raise GitLabError(f"branch {branch} is not on the central remote yet; run steersync push")
     others = _other_proposals(config, url, project, branch, git_env)
@@ -932,22 +960,14 @@ def merge_request(
         client,
         config,
         source_branch=branch,
-        title=title or _merge_request_title(project),
-        description=f"Proposal branch `{branch}` pushed by steersync.",
+        title=title or text.title,
+        description=text.body,
     )
     open_others = tuple(
         f"{item.source_branch}: {item.url}"
         for item in gitlab.open_merge_requests(client, source_branches=others)
     )
     return MergeRequestResult(project, branch, mr.url, created, open_others)
-
-
-def _commit_message(project: str, user: str, plan: ChangePlan) -> str:
-    lines = [f"kiro-config: update {project} from {user}", ""]
-    lines.extend(f"add: {p}" for p in plan.add)
-    lines.extend(f"update: {p}" for p in plan.update)
-    lines.extend(f"delete: {p}" for p in plan.delete)
-    return "\n".join(lines).rstrip() + "\n"
 
 
 def _next_lock(
