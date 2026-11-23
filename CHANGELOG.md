@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-23
+
 ### Changed
 
 - Only a possible secret (a `forbidden-*` pattern, or a literal value in `mcp.json`) stops
