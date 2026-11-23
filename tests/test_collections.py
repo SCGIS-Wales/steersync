@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from steersync import mcp_tools, sync
 from steersync.cli import main
 from steersync.config import Config, load_config
-from steersync.errors import ConfigError, LintError, SteersyncError
+from steersync.errors import ConfigError, SteersyncError
 from steersync.paths import (
     global_collection_dir,
     global_lock_path,
@@ -228,21 +228,23 @@ def test_push_proposes_every_collection_in_one_branch(
 
 
 def test_push_lint_uses_each_collection_profile(
-    config: Config, env: dict[str, str], project: Path, central: Path
+    config: Config,
+    env: dict[str, str],
+    project: Path,
+    central: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     kiro = project / ".kiro"
     (kiro / "hooks").mkdir(parents=True)
     (kiro / "hooks" / "broken.json").write_text("{not json")
-    with pytest.raises(LintError, match="lint error"):
-        sync.push(config, workspace_root=project, env=env)
-    (kiro / "hooks" / "broken.json").write_text(HOOK_DOC)
     (kiro / "skills" / "bad").mkdir(parents=True)
     (kiro / "skills" / "bad" / "SKILL.md").write_text("# No front matter\n")
-    with pytest.raises(LintError):
-        sync.push(config, workspace_root=project, env=env)
-    assert sync.push(config, workspace_root=project, env=env, collections=["hooks"]).status == (
-        "pushed"
-    )
+    with caplog.at_level(logging.WARNING):
+        result = sync.push(config, workspace_root=project, env=env)
+    # Lint errors are reported with each collection's own rules, and never block the sync.
+    assert result.status == "pushed"
+    assert "pushing anyway: hooks/broken.json" in caplog.text
+    assert "pushing anyway: skills/bad/SKILL.md" in caplog.text
 
 
 def test_push_reports_nothing_for_empty_collections(

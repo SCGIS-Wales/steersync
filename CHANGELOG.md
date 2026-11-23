@@ -5,6 +5,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Only a possible secret (a `forbidden-*` pattern, or a literal value in `mcp.json`) stops
+  a push. Every other lint error, such as invalid front matter or an invalid hook, is
+  printed as "pushing anyway" and the files are synced as they are. `steersync lint` still
+  exits 4 on any error.
+- **Breaking:** the per file size limit is removed, with `lint.max_file_bytes` and the
+  collection `max_file_bytes` setting: a large spec or plan is synced like any other file.
+  `sync.max_total_bytes` still caps a whole sync.
+
+### Fixed
+
+- `steersync lint` no longer warns that the session hook and MCP server are missing when
+  `steersync setup` installed them in `~/.kiro` (also when the MCP server has another name
+  but runs steersync); the advice now points at `steersync setup`.
+- Invalid front matter caused by a value containing `: ` names the key and file line and
+  shows the quoted fix, instead of PyYAML's "mapping values are not allowed in this context".
+- The fleet table keeps repository and project names on one line whenever the terminal is
+  wide enough; they used to fold at 40 and 30 characters.
+
 ## [0.7.1] - 2026-11-22
 
 ### Fixed

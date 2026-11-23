@@ -65,8 +65,9 @@ errors.py       exception types carrying exit codes
 
 ## Push
 
-1. Snapshot every selected collection of the scope and lint each with its profile; refuse on
-   lint errors unless `--no-lint`. The snapshots are combined into one, keyed by
+1. Snapshot every selected collection of the scope and lint each with its profile; refuse
+   only when a possible secret is found (unless `--no-lint`), and report every other error
+   as a warning. The snapshots are combined into one, keyed by
    `<central_dir>/<path>`.
 2. Refresh the cache clone and compare with the matching central directories. Identical
    content ends with `up-to-date`.

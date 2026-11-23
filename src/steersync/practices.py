@@ -461,32 +461,41 @@ def prompt_findings(
 # --- workspace: does Kiro load everything automatically? ------------------------
 
 
-def workspace_findings(root: Path, *, hooks_dir: str, settings_dir: str) -> list[Finding]:
+def workspace_findings(
+    root: Path, *, hooks_dir: str, settings_dir: str, kiro_home: Path | None = None
+) -> list[Finding]:
     """Check that a Kiro session in this workspace refreshes and loads the configuration.
 
     The steersync SessionStart hook keeps the collections current without anyone
     asking, and the MCP server entry lets the agent pull, push and validate on
-    request. Both are written by ``steersync init``.
+    request. ``steersync setup`` writes both once in ``~/.kiro`` (``kiro_home``), which
+    covers every workspace; ``steersync init --kiro`` writes them into the workspace.
     """
     findings: list[Finding] = []
     hooks = root / hooks_dir
-    if not _has_session_start_pull(hooks):
+    has_hook = _has_session_start_pull(hooks) or (
+        kiro_home is not None and _has_session_start_pull(kiro_home / "hooks")
+    )
+    has_mcp = _has_steersync_mcp(root / settings_dir / "mcp.json") or (
+        kiro_home is not None and _has_steersync_mcp(kiro_home / "settings" / "mcp.json")
+    )
+    if not has_hook:
         findings.append(
             Finding(
                 hooks_dir,
                 "autoload-hook-missing",
                 "no SessionStart hook runs 'steersync pull'; Kiro will start with whatever "
-                "is on disk. Run 'steersync init' to write .kiro/hooks/steersync.json",
+                "is on disk. Run 'steersync setup' to add it to ~/.kiro for every repository",
             )
         )
-    mcp = root / settings_dir / "mcp.json"
-    if not _has_steersync_mcp(mcp):
+    if not has_mcp:
         findings.append(
             Finding(
                 f"{settings_dir}/mcp.json",
                 "autoload-mcp-missing",
                 "the steersync MCP server is not registered, so 'pull kiro config' or "
-                "'raise an MR for kiro config' are not available in chat. Run 'steersync init'",
+                "'raise an MR for kiro config' are not available in chat. Run 'steersync setup' "
+                "to add it to ~/.kiro/settings/mcp.json",
             )
         )
     return findings
@@ -520,4 +529,14 @@ def _has_steersync_mcp(mcp: Path) -> bool:
     except OSError, json.JSONDecodeError, UnicodeDecodeError:
         return False
     servers = data.get("mcpServers") if isinstance(data, Mapping) else None
-    return isinstance(servers, Mapping) and "steersync" in servers
+    if not isinstance(servers, Mapping):
+        return False
+    # Registered under any name, as long as it runs steersync (setup never adds a second).
+    return "steersync" in servers or any(_runs_steersync(spec) for spec in servers.values())
+
+
+def _runs_steersync(spec: object) -> bool:
+    if not isinstance(spec, Mapping):
+        return False
+    words = [str(spec.get("command", "")), *map(str, _as_list(spec.get("args")))]
+    return any("steersync" in word for word in words)

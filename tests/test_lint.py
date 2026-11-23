@@ -85,8 +85,8 @@ def test_binary_size_and_nul(config: Config) -> None:
     assert rules(lint_document(document_from_bytes("n.md", b"# T\0\n"), config.lint)) == {
         "encoding-utf8"
     }
-    big = b"# T\n\n" + b"x" * (config.lint.max_file_bytes + 1)
-    assert "max-size" in rules(lint_document(document_from_bytes("big.md", big), config.lint))
+    big = b"# T\n\n" + b"x" * 200_000  # no size limit: large specs and plans are fine
+    assert "max-size" not in rules(lint_document(document_from_bytes("big.md", big), config.lint))
 
 
 def test_markdown_rules_and_severity(env: dict[str, str], tmp_path: Path) -> None:
@@ -133,7 +133,7 @@ def test_lint_paths_and_report(config: Config, tmp_path: Path) -> None:
 
 
 def test_lint_config_defaults() -> None:
-    assert LintConfig().max_file_bytes == 65536
+    assert LintConfig().practices is True
 
 
 def profile_rules(config: Config, name: str, profile: str, text: str | bytes) -> set[str]:
@@ -223,18 +223,9 @@ def test_agent_and_generic_profiles(config: Config) -> None:
     )
 
 
-def test_size_limit_override_and_report_helpers(config: Config) -> None:
+def test_report_helpers(config: Config) -> None:
     from steersync.lint import LintReport, merge_reports, prefix_report
 
-    big = b"x" * 2048
-    assert "max-size" in rules(
-        lint_document(
-            document_from_bytes("a.bin", big), config.lint, profile="generic", max_file_bytes=1024
-        )
-    )
-    assert "max-size" not in rules(
-        lint_document(document_from_bytes("a.bin", big), config.lint, profile="generic")
-    )
     report = lint_snapshot({"x.md": b"no heading\n"}, config.lint, profile="steering")
     prefixed = prefix_report(report, ".kiro/steering/")
     assert prefixed.findings[0].path == ".kiro/steering/x.md"
@@ -250,3 +241,27 @@ def test_crlf_documents_lint_like_lf(config: Config) -> None:
     assert profile_rules(config, "a.md", "steering", crlf) == profile_rules(
         config, "a.md", "steering", lf
     )
+
+
+def test_front_matter_colon_in_value_says_how_to_fix(config: Config) -> None:
+    doc = (
+        b"---\ninclusion: manual\nname: plan\n"
+        b"status: IMPLEMENTED (2026-10-06). Decisions: non-fatal WARNING\n---\n\n# Plan\n"
+    )
+    (finding,) = [
+        f
+        for f in lint_document(document_from_bytes("plan.md", doc), config.lint)
+        if f.rule == "front-matter-yaml"
+    ]
+    assert finding.line == 4
+    assert "value of `status` contains ': '" in finding.message
+    assert 'status: "IMPLEMENTED (2026-10-06). Decisions: non-fatal WARNING"' in finding.message
+
+
+def test_only_secrets_block(config: Config) -> None:
+    from steersync.lint import is_secret_rule
+
+    assert is_secret_rule("forbidden-gitlab-token")
+    assert is_secret_rule("mcp-literal-secret")
+    assert not is_secret_rule("front-matter-yaml")
+    assert not is_secret_rule("hook-schema")

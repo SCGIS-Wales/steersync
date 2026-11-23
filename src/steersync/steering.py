@@ -92,6 +92,7 @@ class FrontMatter(NamedTuple):
     metadata: dict[str, Any]
     body: str
     error: str | None
+    error_line: int | None = None  # line in the file, when the error can be placed
 
 
 class SteeringDocument(NamedTuple):
@@ -249,6 +250,35 @@ def snapshot_hashes(snapshot: Mapping[str, bytes]) -> dict[str, str]:
     return {relative: file_digest(data) for relative, data in snapshot.items()}
 
 
+_PLAIN_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):[ \t]+(\S.*)$")
+
+
+def explain_yaml_error(header: str, exc: Exception) -> tuple[str, int | None]:
+    """A message saying what to change, and the line of the header it is on (1 based).
+
+    The common mistake is a plain value containing ``": "`` (``status: Done. Decisions:
+    none``), which YAML reads as a second key; the fix is to quote the value.
+    """
+    for index, line in enumerate(header.splitlines(), start=1):
+        found = _PLAIN_KEY_RE.match(line)
+        if not found:
+            continue
+        key, value = found.groups()
+        if value[:1] in {'"', "'", "|", ">", "[", "{"} or ": " not in value:
+            continue
+        quoted = value.replace("\\", "\\\\").replace('"', '\\"')
+        shown = quoted[:60] + ("..." if len(quoted) > 60 else "")
+        message = (
+            f"the value of `{key}` contains ': ', which YAML reads as another key; "
+            f'put the value in quotes: {key}: "{shown}"'
+        )
+        return message, index
+    mark = getattr(exc, "problem_mark", None)
+    problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+    where: int | None = mark.line + 1 if mark is not None else None
+    return f"invalid YAML front matter: {problem}", where
+
+
 def parse_front_matter(text: str) -> FrontMatter:
     """Parse YAML front matter the way Kiro reads it.
 
@@ -264,8 +294,10 @@ def parse_front_matter(text: str) -> FrontMatter:
     try:
         post = frontmatter.loads(text)
     except (yaml.YAMLError, ValueError) as exc:
+        message, line = explain_yaml_error(match.group(1), exc)
+        # +1 for the opening --- line, so the number is a line of the file.
         return FrontMatter(
-            True, False, {}, text[match.end() :], f"invalid YAML front matter: {exc}"
+            True, False, {}, text[match.end() :], message, line + 1 if line else None
         )
     metadata = post.metadata if isinstance(post.metadata, dict) else {}
     return FrontMatter(True, False, dict(metadata), post.content, None)

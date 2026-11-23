@@ -90,14 +90,13 @@ def _cells(repo: RepoStatus, index: int, home: str) -> tuple[str, ...]:
 def column_widths(rows: Sequence[tuple[str, ...]], width: int) -> list[int] | None:
     """Exact widths that fill ``width``, or None when the terminal is too narrow.
 
-    States, counts and the row number never wrap; the repository and project keep whole
-    names up to 40 and 30 characters; the note takes what is left and folds.
+    States, counts and the row number never wrap; the repository and project keep their
+    whole names unless the terminal is too narrow; the note takes what is left and folds.
     """
     natural = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(HEADINGS)]
-    natural[1] = min(natural[1], 40)
-    natural[2] = min(natural[2], 30)
     widths = [*natural[:6], 0]
-    deficit = NOTE_MIN - (width - sum(widths) - GAP * (len(HEADINGS) - 1))
+    note_needs = min(NOTE_MIN, natural[6])  # a short note ("none") needs no more
+    deficit = note_needs - (width - sum(widths) - GAP * (len(HEADINGS) - 1))
     for position, floor in ((1, 16), (2, 10)):  # names give way only as far as needed
         if deficit > 0:
             give = min(deficit, max(widths[position] - floor, 0))

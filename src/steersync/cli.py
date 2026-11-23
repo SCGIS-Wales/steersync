@@ -449,7 +449,6 @@ def lint(
                     root,
                     profile=collection.lint,
                     spec=FileSpec(collection.include, collection.exclude, collection.max_depth),
-                    max_file_bytes=collection.max_file_bytes,
                 )
             )
         if not collections:
@@ -464,7 +463,13 @@ def _workspace_report(config: Config, root: Path) -> LintReport:
     """Warn when a Kiro session here would not refresh and expose the configuration."""
     hooks_dir = _collection_path(config, "hooks") or ".kiro/hooks"
     settings_dir = _collection_path(config, "settings") or ".kiro/settings"
-    return lint_workspace(root, config.lint, hooks_dir=hooks_dir, settings_dir=settings_dir)
+    return lint_workspace(
+        root,
+        config.lint,
+        hooks_dir=hooks_dir,
+        settings_dir=settings_dir,
+        kiro_home=kiro_home(os.environ),
+    )
 
 
 def _collection_path(config: Config, name: str) -> str | None:
@@ -499,7 +504,6 @@ def _lint_explicit_paths(
                 root,
                 profile=_profile(profile or (chosen.lint if chosen else "steering")),
                 spec=FileSpec(chosen.include, chosen.exclude, chosen.max_depth) if chosen else None,
-                max_file_bytes=chosen.max_file_bytes if chosen else None,
             )
         )
     return merge_reports(reports)

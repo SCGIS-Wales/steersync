@@ -1,13 +1,17 @@
 # Validation reference
 
 `steersync lint`, `steersync push` and the `validate_kiro_config` MCP tool check every
-collection with the profile configured for it. **Errors** stop a push and exit with code 4.
+collection with the profile configured for it. `steersync lint` exits with code 4 on any
+**error**. A push is stopped only by a possible **secret** (a `forbidden-*` pattern or a
+literal value in `mcp.json`), because a secret in the central repository reaches every
+machine and its history; every other error is printed ("pushing anyway") and the files are
+synced as they are, so a formatting problem never holds up the rest of a sync.
 **Warnings** never block; they are best practices taken from the Kiro documentation, so a
 reviewer sees the trade off before the change reaches the central repository. Set
 `lint.practices: false` to switch the warnings off, or tune the thresholds under
 `lint.practice_limits`.
 
-Each profile applies the common checks (size limit, secret patterns, UTF-8 for text files)
+Each profile applies the common checks (secret patterns, UTF-8 for text files)
 and then its own rules. The source column names the Kiro documentation page the rule comes
 from (Steering, Custom agents configuration reference, Hooks, Agent Skills, MCP
 configuration, Prompts, Code intelligence).
@@ -92,8 +96,8 @@ universal format written by `/upgrade-agent` (both `toolsSettings` and `permissi
 | `skill-body-length` | warning | More than 500 lines; move the full runbook under `references/`. | Agent Skills |
 | `skill-misplaced` | warning (collection) | `SKILL.md` directly in the skills folder is not discovered. | Agent Skills |
 
-Scripts and assets are scanned for secrets; binary assets are allowed up to the collection's
-size limit (1 MiB by default).
+Scripts and assets are scanned for secrets; there is no per file size limit (the
+`sync.max_total_bytes` safety limit on a whole sync still applies).
 
 ## settings (`.kiro/settings`: `mcp.json`, `lsp.json`, `sandbox.json`, `cli.json`)
 
@@ -154,7 +158,7 @@ Plus the markdown profile.
 
 ## markdown (specs, nested `AGENTS.md`, prompt files, references)
 
-Encoding, size, secret patterns and pymarkdown style. No Kiro front matter rules.
+Encoding, secret patterns and pymarkdown style. No Kiro front matter rules.
 
 ## Workspace checks (whole workspace lint only)
 

@@ -115,7 +115,6 @@ class PracticeLimitsConfig(_Strict):
 
 
 class LintConfig(_Strict):
-    max_file_bytes: int = Field(default=65536, ge=1024, le=10_000_000)
     # Best practice warnings from the Kiro documentation. Never errors.
     practices: bool = True
     practice_limits: PracticeLimitsConfig = PracticeLimitsConfig()
@@ -278,8 +277,6 @@ class CollectionConfig(_Strict):
     # Limit discovery to this many directory levels (1 = only the top level).
     max_depth: int | None = Field(default=None, ge=1, le=64)
     lint: LintProfile = "generic"
-    # Overrides ``lint.max_file_bytes`` for this collection.
-    max_file_bytes: int | None = Field(default=None, ge=1024, le=100_000_000)
     # Add the workspace directory to ``.git/info/exclude`` on ``steersync init``.
     git_exclude: bool = True
 
