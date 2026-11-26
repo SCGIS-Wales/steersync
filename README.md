@@ -34,32 +34,35 @@ cd ~/code/my-service            # any git repository you work in
 steersync setup
 ```
 
-`steersync setup` asks a few questions and does the rest. Nothing needs editing by hand, and
-it is safe to run again: it only adds what is missing.
+`steersync setup` detects everything first, shows one plan and asks once. It asks one
+question only when no central repository is configured yet: paste the GitLab page address
+(`https://gitlab.example.com/platform/kiro-config`) or a clone URL. setup tries SSH, then
+HTTPS, with `git ls-remote`, and explains what to fix when neither answers (an unknown host
+key, a refused SSH key, a blocked port 22, no access). The branch is the repository's default
+(`master` when it cannot tell), checked with git. Then one checkbox (space toggles, enter
+applies) covers the plan:
 
-1. **git**: checks that git 2.18 or later is installed.
-2. **Central repository**: paste the GitLab page address
-   (`https://gitlab.example.com/platform/kiro-config`) or a clone URL. setup tries SSH, then
-   HTTPS, with `git ls-remote`, and explains what to fix when neither answers (an unknown
-   host key, a refused SSH key, a blocked port 22, no access).
-3. **Branch**: offers the repository's default branch (`master` when it cannot tell) and
-   confirms it exists. An empty project stops here with how to fix it.
-4. **Extra folders**: offers to sync folders under `.kiro` that are not synced by default,
-   such as `.kiro/notes` or `.kiro/plan`.
-5. **Configuration**: saves `~/.config/steersync/config.yaml` (the previous file is kept as
-   `config.yaml.bak`). It applies to every repository on the machine.
-6. **Kiro MCP server**: adds `steersync` to `~/.kiro/settings/mcp.json` only when no server
-   there runs steersync yet, under any name. Every other server is left exactly as it is; the
-   original is kept as `mcp.json.bak-steersync` and the result is read back before setup
-   reports success. A file that is not valid JSON is never touched.
-7. **Kiro session hook**: adds `~/.kiro/hooks/steersync.json`, so every Kiro session, in any
-   repository, starts by pulling the latest merged configuration.
-8. **This repository**: keeps the synced folders out of `git status`, installs the pre-push
-   hook that proposes your Kiro changes on `git push`, and shows what the first
-   `steersync push` would propose.
+| Step | What it does | Risk |
+|---|---|---|
+| `config.save` | Saves `~/.config/steersync/config.yaml` for every repository on the machine. | safe |
+| `folder:<name>` | Syncs an extra folder such as `.kiro/notes` (off by default). | safe |
+| `mcp.register` | Adds `steersync` to `~/.kiro/settings/mcp.json` only when no server there runs steersync yet, under any name. Every other server stays exactly as it is, and the result is read back before setup reports success. A file that is not valid JSON is never touched. | review |
+| `hook.session` | Adds `~/.kiro/hooks/steersync.json`, so every Kiro session pulls the latest merged configuration. | safe |
+| `repo.exclude`, `repo.hook` | Keeps the synced folders out of `git status` and installs the pre-push hook that proposes your Kiro changes on `git push`. | review |
 
-For scripts: `steersync setup --yes --remote <url> [--branch <name>]` accepts every default;
-`--no-mcp`, `--no-session-hook` and `--no-project` skip a step.
+Every file a run changes is backed up first, and the run ends with
+`Undo with: steersync restore <id>`. Steps already in place show as `already done`;
+running setup again on a configured machine prints `Nothing to do`. Your last selection is
+preselected next time (`ux.remember_selection`).
+
+For scripts and CI: `steersync setup --yes --remote <url> [--branch <name>]` applies the
+default selection without asking; `--plan` (or `--dry-run`, with `--json`) shows the plan and
+exits; `--only` and `--skip` take step ids or kinds (`--skip repo`); `--no-mcp`,
+`--no-session-hook` and `--no-project` leave a step out; `--profile NAME` loads, or saves, a
+named selection. Without a terminal, in CI (`CI=true`), with `--no-input` or
+`STEERSYNC_NO_INPUT=1`, steersync never prompts: it prints the plan and exits 2 with
+`Re-run with --yes to apply N steps, or --plan to inspect.` A destructive step (none in setup
+today) needs `--force` or typing the command name.
 
 Then edit anything under `.kiro/`. On your next `git push`, or with `steersync push`, every
 collection is proposed to the central repository as one merge request. After it is merged,
@@ -468,13 +471,15 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 
 | Command | Purpose |
 |---|---|
-| `steersync setup [--remote URL] [--branch NAME] [--yes] [--no-mcp] [--no-session-hook] [--no-project]` | Guided setup of the machine and the current repository; safe to repeat. |
+| `steersync setup [--remote URL] [--branch NAME] [--no-mcp] [--no-session-hook] [--no-project]` plus the plan options | One plan for the machine and the current repository, one approval; safe to repeat. |
 | `steersync pull [--force] [--dry-run] [--no-global] [--no-workspace] [--strict] [--best-effort] [-c NAME] [--json]` | Apply central collections locally. `--best-effort` warns and exits 0 on failure. |
 | `steersync push [--dry-run] [--scope global] [--no-lint] [-m WHY] [-c NAME] [--json]` | Propose local collections centrally in one branch; `-m` adds your reason to the merge request. `--from-hook` is used by git hooks and never blocks the push unless strict. |
 | `steersync status [-c NAME] [--json]` | Show adds, updates, deletes and local edits per collection in both directions. |
 | `steersync lint [PATHS] [-c NAME] [--profile P] [--json]` | Validate every collection with its profile, or explicit paths. Exit code 4 on errors. |
 | `steersync mr [--branch NAME] [--title T] [-c NAME] [--json]` | Open, or find, the GitLab merge request for the pushed proposal branch. Needs the token in `GITLAB_TOKEN` (configurable). |
-| `steersync init [--write-config] [--hook] [--no-exclude] [--kiro] [--mcp-command PATH]` | Prepare a repository: excludes and git hook; `--kiro` also writes the Kiro session hook and MCP server entry into its `.kiro`. |
+| `steersync init [--write-config] [--hook] [--no-exclude] [--kiro] [--mcp-command PATH]` plus the plan options | Prepare a repository: excludes and git hook; `--kiro` also writes the Kiro session hook and MCP server entry into its `.kiro`. The step flags are answers, so with any of them nothing is asked. |
+| `steersync restore [STAMP] [--list] [--repo PATH] [--yes]` | Undo a run: put back what setup, init or a forced pull changed, and remove what it created. |
+| Plan options | `-y/--yes`, `--no-input`, `-f/--force`, `--plan`/`--dry-run`, `--only ID`, `--skip ID`, `--profile NAME`, `--json`. |
 | `steersync install-hook [--force]` | Install or update the chaining pre-push hook. |
 | `steersync kiro-hook [--write]` | Render the Kiro V3 hook that runs `steersync pull --quiet` at session start. |
 | `steersync mcp-config [--command uvx] [--remote URL]` | Render an `mcp.json` fragment. |
@@ -496,11 +501,11 @@ Global options: `--config PATH`, `--log-level`, `--log-format text|json`, `--qui
 | Code | Meaning |
 |---|---|
 | 0 | Success (also `--best-effort` failures, which only warn). |
-| 1 | Unexpected error. |
-| 2 | Configuration error, or a command line usage error. |
+| 1 | Unexpected error, or a plan the user cancelled. |
+| 2 | Configuration error, a command line usage error, or input needed in a run that cannot prompt (the message names `--yes`). |
 | 3 | git failed. |
 | 4 | Lint errors. |
-| 5 | Conflicting changes, a backup that could not be taken, or a `fleet` command where at least one repository failed. |
+| 5 | Conflicting changes, a backup that could not be taken, a plan step that failed, or a `fleet` command where at least one repository failed. |
 | 6 | A path escaped the directory it must stay in. |
 | 7 | Central content exceeds the safety limits. |
 | 8 | Timed out waiting for another steersync process. |

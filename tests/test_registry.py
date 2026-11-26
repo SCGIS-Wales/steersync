@@ -149,7 +149,8 @@ def test_fleet_cli_commands(
     monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
     runner = CliRunner()
     assert "no repositories registered" in runner.invoke(main, ["fleet", "list"]).output
-    assert runner.invoke(main, ["init"]).exit_code == 0
+    assert runner.invoke(main, ["init"]).exit_code == 2  # no terminal, no flags: asks for --yes
+    assert runner.invoke(main, ["init", "--yes"]).exit_code == 0
     listed = json.loads(runner.invoke(main, ["fleet", "list", "--json"]).output)
     assert [e["path"] for e in listed] == [str(project.resolve())]
     assert listed[0]["source"] == "init"

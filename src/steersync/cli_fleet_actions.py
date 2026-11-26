@@ -256,7 +256,11 @@ def fleet_pull(
 @click.option("--repo", type=click.Path(path_type=Path), help="Only this repository.")
 @click.option("-y", "--yes", is_flag=True, help="Do not ask for confirmation.")
 def fleet_restore(stamp: str | None, list_only: bool, repo: Path | None, yes: bool) -> None:
-    """Put back the files a forced pull replaced, from a verified backup."""
+    """Put back the files a steersync run replaced, from a verified backup.
+
+    Every run that writes (setup, init, fleet pull --overwrite-local, pull --force) takes
+    one backup first and prints its id; this undoes it. Files the run created are removed.
+    """
     found = backups.listing(backup_root(os.environ))
     if repo is not None:
         wanted = str(repo.expanduser().resolve())
@@ -285,6 +289,12 @@ def fleet_restore(stamp: str | None, list_only: bool, repo: Path | None, yes: bo
         except backups.BackupError as exc:
             raise click.ClickException(str(exc)) from exc
         click.echo(f"restored {len(restored)} file(s) into {backup.workspace}")
+
+
+# `steersync restore` (top level) is the same command; `fleet restore` stays as an alias.
+restore_command = click.Command(
+    "restore", callback=fleet_restore.callback, params=fleet_restore.params, help=fleet_restore.help
+)
 
 
 # --- interactive overview -------------------------------------------------------------------

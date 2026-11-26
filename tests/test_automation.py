@@ -360,11 +360,11 @@ def test_init_writes_session_hook_and_mcp_entry(runner_project: tuple[CliRunner,
     rules = {f["rule"] for f in json.loads(after.stdout)["findings"]}
     assert not rules & {"autoload-hook-missing", "autoload-mcp-missing"}
     second = runner.invoke(main, ["init", "--kiro"])
-    assert "unchanged: " in second.output
-    assert "(steersync MCP server 'steersync')" in second.output
-    assert "written: " not in second.output.split("mcp.json")[0].splitlines()[-1]
-    skipped = runner.invoke(main, ["init", "--no-kiro"])
-    assert "SessionStart" not in skipped.output
+    assert second.exit_code == 0
+    assert "Nothing to do" in second.output
+    assert second.output.count("already done") >= 3
+    skipped = runner.invoke(main, ["init", "--no-kiro", "--skip", "kiro"])
+    assert "kiro.hook" not in skipped.output
 
 
 @pytest.fixture
@@ -400,8 +400,10 @@ def test_init_refuses_broken_mcp_json(runner_project: tuple[CliRunner, Path]) ->
     settings.mkdir(parents=True)
     (settings / "mcp.json").write_text("{broken")
     result = runner.invoke(main, ["init", "--kiro"])
-    assert result.exit_code == 1
+    assert result.exit_code == 5  # the step failed; the others still ran
+    assert "FAILED kiro.mcp" in result.output
     assert "not valid JSON" in result.output
+    assert (settings / "mcp.json").read_text() == "{broken"
 
 
 def test_mcp_config_command_uses_configured_token_variable(

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import CliRunner
@@ -247,70 +248,128 @@ def kiro_dir(env: dict[str, str]) -> Path:
     return Path(env["HOME"]) / ".kiro"
 
 
+@pytest.fixture
+def terminal(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """A terminal for CliRunner, and a checkbox that ticks every offered step."""
+    import questionary
+
+    from steersync import cli, interaction
+
+    real = interaction.resolve_interaction
+
+    def on_a_terminal(**kwargs: Any) -> interaction.Interaction:
+        return real(**{**kwargs, "stdin_tty": True, "env": {}})
+
+    monkeypatch.setattr(cli, "resolve_interaction", on_a_terminal)
+    offered: list[list[str]] = []
+
+    class Ticked:
+        def __init__(self, choices: list[Any]) -> None:
+            self.ids = [c.value for c in choices if not c.disabled]
+
+        def ask(self) -> list[str]:
+            offered.append(self.ids)
+            return self.ids
+
+    monkeypatch.setattr(questionary, "checkbox", lambda message, choices: Ticked(choices))
+    return offered
+
+
 def test_setup_interactive_end_to_end(
-    realistic_project: Path, env: dict[str, str], tmp_path: Path
+    realistic_project: Path, env: dict[str, str], tmp_path: Path, terminal: list[list[str]]
 ) -> None:
     central = bare(tmp_path, env, "kiro-config", "master")
     mcp = kiro_dir(env) / "settings" / "mcp.json"
     mcp.parent.mkdir(parents=True)
     mcp.write_text(USER_MCP.read_text())
-    # A typo first, then the repository; default branch (master); sync notes and plan;
-    # save; register the MCP server; add the hook; prepare this repository.
-    answers = "\n".join([str(tmp_path / "nope.git"), str(central), "", "y", "y", "y", "y", "y"])
+    # The only question: the repository (a typo first). Then one checkbox for the plan.
+    answers = "\n".join([str(tmp_path / "nope.git"), str(central)])
     result = CliRunner().invoke(main, ["setup"], input=answers + "\n")
     assert result.exit_code == 0, result.output
     assert "not reachable" in result.output
-    assert "ok: master exists" in result.output
+    assert len(terminal) == 1
+    assert terminal[0] == [
+        "config.save",
+        "folder:notes",
+        "folder:plan",
+        "mcp.register",
+        "hook.session",
+        "repo.exclude",
+        "repo.hook",
+    ]
+    assert "@ master" in result.output
+    assert "Undo with: steersync restore " in result.output
     config_file = Path(env["HOME"]) / ".config" / "steersync" / "config.yaml"
     config = load_config(workspace_root=realistic_project, env=env)
     assert config.source_file == config_file
     assert config.remote.url == str(central)
     assert config.remote.default_branch == "master"
     assert {"kiro-notes", "kiro-plan"} <= set(config.collections)
+    assert config.setup.last == tuple(terminal[0])
     servers = json.loads(mcp.read_text())["mcpServers"]
     assert list(servers)[-1] == "steersync"
     assert len(servers) == len(json.loads(USER_MCP.read_text())["mcpServers"]) + 1
     assert hooks.session_hook_present(kiro_dir(env) / "hooks")
     # The repository: excludes and pre-push hook, but no duplicate hook or MCP entry.
     assert "managed by steersync" in (realistic_project / ".git" / "hooks" / "pre-push").read_text()
+    exclude = (realistic_project / ".git" / "info" / "exclude").read_text()
+    assert "/.kiro/notes/" in exclude
     assert not (realistic_project / ".kiro" / "hooks" / "steersync.json").exists()
     assert not (realistic_project / ".kiro" / "settings" / "mcp.json").exists()
     assert "steersync push" in result.output
 
-    again = CliRunner().invoke(main, ["setup", "--yes"])
+    again = CliRunner().invoke(main, ["setup"])
     assert again.exit_code == 0, again.output
-    assert f"unchanged: {config_file}" in again.output
-    assert "already runs steersync as 'steersync'" in again.output
-    assert "already pulls at session start" in again.output
+    assert "Nothing to do" in again.output
+    assert len(terminal) == 1  # nothing pending: no checkbox
     assert json.loads(mcp.read_text())["mcpServers"] == servers
+
+
+def test_setup_undo_restores_every_file(
+    realistic_project: Path, env: dict[str, str], tmp_path: Path, terminal: list[list[str]]
+) -> None:
+    central = bare(tmp_path, env, "kiro-config", "main")
+    mcp = kiro_dir(env) / "settings" / "mcp.json"
+    mcp.parent.mkdir(parents=True)
+    mcp.write_text(USER_MCP.read_text())
+    result = CliRunner().invoke(main, ["setup", "--remote", str(central)])
+    assert result.exit_code == 0, result.output
+    stamp = result.output.split("Undo with: steersync restore ")[1].split()[0]
+    undo = CliRunner().invoke(main, ["restore", stamp, "--yes"])
+    assert undo.exit_code == 0, undo.output
+    assert mcp.read_text() == USER_MCP.read_text()
+    assert not (Path(env["HOME"]) / ".config" / "steersync" / "config.yaml").exists()
+    assert not (kiro_dir(env) / "hooks" / "steersync.json").exists()
+    assert not (realistic_project / ".git" / "hooks" / "pre-push").exists()
 
 
 def test_setup_non_interactive(
     realistic_project: Path, env: dict[str, str], tmp_path: Path
 ) -> None:
     central = bare(tmp_path, env, "kiro-config", "main")
-    result = CliRunner().invoke(
-        main,
-        [
-            "setup",
-            "--yes",
-            "--remote",
-            str(central),
-            "--no-mcp",
-            "--no-session-hook",
-            "--no-project",
-        ],
-    )
+    base = ["setup", "--remote", str(central), "--no-mcp", "--no-session-hook", "--no-project"]
+    # Without a terminal and without --yes: the plan, and exit 2 naming the flag.
+    asked = CliRunner().invoke(main, base)
+    assert asked.exit_code == 2
+    assert "Re-run with --yes to apply 1 steps, or --plan to inspect." in asked.output
+    planned = CliRunner().invoke(main, [*base, "--plan", "--json"])
+    assert planned.exit_code == 0
+    assert [s["id"] for s in json.loads(planned.stdout)["steps"]] == ["config.save"]
+    result = CliRunner().invoke(main, [*base, "--yes"])
     assert result.exit_code == 0, result.output
-    assert "ok: main exists" in result.output
-    assert "skipped: --no-mcp" in result.output
+    assert "@ main" in result.output
+    assert "mcp.register" not in result.output
     assert not (kiro_dir(env) / "settings" / "mcp.json").exists()
     assert not (realistic_project / ".git" / "hooks" / "pre-push").exists()
+    assert CliRunner().invoke(main, [*base, "--yes"]).output.strip().endswith("Nothing to do")
     wrong = CliRunner().invoke(
         main, ["setup", "--yes", "--remote", str(central), "--branch", "develop"]
     )
-    assert wrong.exit_code != 0
+    assert wrong.exit_code == 2
     assert "does not exist" in wrong.output
+    no_remote = CliRunner().invoke(main, ["setup", "--yes"], env={"HOME": str(tmp_path / "h")})
+    assert no_remote.exit_code == 2
+    assert "pass --remote" in no_remote.output
 
 
 def test_setup_stops_on_an_empty_central_repository(
@@ -347,3 +406,32 @@ def test_setup_without_git(monkeypatch: pytest.MonkeyPatch, env: dict[str, str])
     result = CliRunner().invoke(main, ["setup", "--yes"])
     assert result.exit_code != 0
     assert "no git" in result.output
+
+
+def test_setup_plan_for_fresh_partly_and_fully_configured_machines(
+    realistic_project: Path, env: dict[str, str], tmp_path: Path
+) -> None:
+    central = bare(tmp_path, env, "kiro-config", "main")
+    base = ["setup", "--remote", str(central), "--plan", "--json"]
+
+    def steps() -> dict[str, bool]:
+        result = CliRunner().invoke(main, base)
+        assert result.exit_code == 0, result.output
+        return {s["id"]: s["done"] for s in json.loads(result.stdout)["steps"]}
+
+    fresh = steps()
+    assert not any(fresh.values())
+    assert set(fresh) >= {"config.save", "mcp.register", "hook.session", "repo.exclude"}
+    # Partly configured: everything but the MCP server.
+    assert (
+        CliRunner().invoke(main, ["setup", "--remote", str(central), "--yes", "--no-mcp"]).exit_code
+        == 0
+    )
+    partly = steps()
+    assert partly["mcp.register"] is False
+    # Extra .kiro folders are off by default, so they stay offered until chosen.
+    rest = {k: v for k, v in partly.items() if k != "mcp.register" and not k.startswith("folder")}
+    assert all(rest.values())
+    assert CliRunner().invoke(main, ["setup", "--yes", "--only", "mcp"]).exit_code == 0
+    full = steps()
+    assert all(done for step_id, done in full.items() if not step_id.startswith("folder"))
