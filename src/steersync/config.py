@@ -43,6 +43,7 @@ LintProfile = Literal[
     "steering",
     "markdown",
     "spec",
+    "knowledge",
     "skill",
     "agent",
     "hooks",
@@ -57,6 +58,7 @@ LINT_PROFILES: tuple[str, ...] = (
     "steering",
     "markdown",
     "spec",
+    "knowledge",
     "skill",
     "agent",
     "hooks",
@@ -163,6 +165,15 @@ class SpecConfig(_Strict):
     ears_pattern: str = r"(?i)^(WHEN|IF|WHILE|WHERE|THE)\b.*\bSHALL\b"
 
 
+class KnowledgeLintConfig(_Strict):
+    """Knowledge notes are retrieved in chunks: keep the summary early and sections short."""
+
+    summary_within_lines: int = Field(default=5, ge=1)
+    frontmatter_chars: int = Field(default=600, ge=1)
+    section_words: int = Field(default=250, ge=1)
+    max_age_days: int = Field(default=90, ge=1)
+
+
 class KiroLimitsConfig(_Strict):
     """Documented Kiro limits for file:// agent resources (Kiro CLI 3.1)."""
 
@@ -212,6 +223,7 @@ class LintConfig(_Strict):
     frontmatter: FrontMatterConfig = FrontMatterConfig()
     budgets: BudgetsConfig = BudgetsConfig()
     spec: SpecConfig = SpecConfig()
+    knowledge: KnowledgeLintConfig = KnowledgeLintConfig()
     agent_fields: tuple[str, ...] = _V3_AGENT_FIELDS
     legacy_agent_keys: dict[str, str] = Field(default_factory=lambda: dict(_LEGACY_AGENT_KEYS))
     upgraded_agent_keys: tuple[str, ...] = _UPGRADED_AGENT_KEYS

@@ -167,6 +167,17 @@ collections:
     central_dir: prompts
     include: ["**/*.md"]
     lint: prompt
+  knowledge:
+    # Team knowledge notes retrieved through a Kiro knowledge base (the knowledge tool),
+    # never loaded as steering. Off by default; enable it and choose the folder here, then
+    # `steersync init --only knowledge` adds the routing steering and the agent.
+    description: Team knowledge notes for a Kiro knowledge base
+    enabled: false
+    workspace_path: .kiro/knowledge
+    global_path: null
+    central_dir: knowledge
+    include: ["**/*.md"]
+    lint: knowledge
   agents-md:
     description: AGENTS.md files anywhere in the repository (each one scoped to its directory)
     workspace_path: .
@@ -281,6 +292,12 @@ lint:
     skill_tokens: 5000
     chars_per_token: 4
     dup_rule_min_chars: 24
+  # Knowledge notes (kn-* rules).
+  knowledge:
+    summary_within_lines: 5
+    frontmatter_chars: 600
+    section_words: 250
+    max_age_days: 90
   # spec-ears (info): acceptance criteria in EARS form.
   spec:
     criteria_heading: "(?i)^#+\\s*acceptance criteria"

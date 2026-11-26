@@ -11,6 +11,7 @@ repository) and ``project`` (init).
 """
 
 from collections.abc import Callable, Mapping
+from importlib import resources
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -372,6 +373,55 @@ def _project_steps(
     ]
 
 
+def template(name: str, folder: str) -> str:
+    """A packaged template with the knowledge folder filled in."""
+    text = resources.files("steersync.resources.templates").joinpath(name).read_text("utf-8")
+    return text.replace("{knowledge_folder}", folder.strip("/"))
+
+
+def _knowledge_steps(state: SetupState) -> list[Step]:
+    """Routing steering and a knowledge agent, offered when the collection is enabled."""
+    knowledge = state.current.collections.get("knowledge")
+    repo = state.repo
+    if repo is None or knowledge is None or not knowledge.enabled or not knowledge.workspace_path:
+        return []
+    folder = knowledge.workspace_path
+    steering = repo.root / (_workspace(state.current, "steering") or ".kiro/steering")
+    agents = repo.root / (_workspace(state.current, "agents") or ".kiro/agents")
+    routing = steering / "knowledge-routing.md"
+    agent = agents / "platform-knowledge.json"
+
+    def write(target: Path, name: str, step_id: str) -> StepResult:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(template(name, folder), encoding="utf-8")
+        return StepResult(step_id, True, f"written {target}")
+
+    return [
+        _step(
+            "knowledge.routing",
+            "Knowledge routing steering",
+            detail=f"tells Kiro to search the knowledge base built from {folder}/",
+            target=routing,
+            risk="safe",
+            default=False,
+            done=routing.exists(),
+            apply=lambda: write(routing, "knowledge-routing.md", "knowledge.routing"),
+            paths=(routing,),
+        ),
+        _step(
+            "knowledge.agent",
+            "Knowledge agent",
+            detail=f"platform-knowledge.json with a knowledgeBase on {folder}/",
+            target=agent,
+            risk="safe",
+            default=False,
+            done=agent.exists(),
+            apply=lambda: write(agent, "platform-knowledge.json", "knowledge.agent"),
+            paths=(agent,),
+        ),
+    ]
+
+
 def _workspace(config: Config, name: str) -> str | None:
     collection = config.collections.get(name)
     return collection.workspace_path if collection is not None else None
@@ -394,6 +444,7 @@ def build_setup_plan(
     if scope in {"all", "project"}:
         steps += _repo_steps(state, exclude=exclude, hook=hook)
     if scope == "project":
+        steps += _knowledge_steps(state)
         steps += _project_steps(
             state, write_config=write_config, kiro=kiro, mcp_command=mcp_command
         )

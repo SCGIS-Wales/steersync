@@ -170,6 +170,25 @@ The markdown profile, plus:
 |---|---|---|
 | `spec-ears` | info | An acceptance criterion (a list item under a heading matching `lint.spec.criteria_heading`) not in EARS form (`lint.spec.ears_pattern`: WHEN/IF/WHILE/WHERE ... SHALL). Info never fails lint. |
 
+## knowledge (`collections.knowledge`, off by default)
+
+| Rule | Severity | Check |
+|---|---|---|
+| `kn-schema` | error | The note schema: `title`, `domain`, `type`, `status`, `verified_on` required; `aliases`, `tags`, `related`, `sources`, `relations`, `review_by` optional; nothing else. |
+| `kn-inclusion` | error | `inclusion` or `fileMatchPattern` in a knowledge note: notes are retrieved, never loaded as steering. |
+| `kn-summary` | warning | No level one heading and summary paragraph within `lint.knowledge.summary_within_lines`. |
+| `kn-frontmatter-size` | warning | Front matter over `lint.knowledge.frontmatter_chars` (600), which pushes the summary out of the first chunk. |
+| `kn-section-size` | warning | A section over `lint.knowledge.section_words` (250). |
+| `kn-identifiers-in-body` | warning | An alias, or a CVE id in the title, that the body never mentions. |
+| `kn-stale` | warning | `review_by` has passed, or `verified_on` is older than `lint.knowledge.max_age_days` (90). |
+| `kn-duplicate` | warning (collection) | Two notes share a title or an alias. |
+| `kn-related-unresolved` | warning (collection) | A `related` note that is not in the collection. |
+
+Agents with a `knowledgeBase` resource (`agent-knowledge-base`): the source is a `file://`
+folder that exists in the workspace, a `name` unique within the agent, `indexType` `best` or
+`fast`, `autoUpdate` a boolean, `knowledge` in `tools` (or `*`, `@builtin`) and not in
+`excludedTools`; a Markdown agent gets a warning (kirodotdev/Kiro#9790).
+
 ## Workspace checks (whole workspace lint only)
 
 | Rule | Severity | Check |

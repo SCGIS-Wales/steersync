@@ -276,6 +276,7 @@ def agent_issues(
         )
     issues.extend(_permission_issues(data.get("permissions")))
     issues.extend(_resource_issues(data.get("resources")))
+    issues.extend(_knowledge_agent_issues(data, markdown=markdown))
     hooks = data.get("hooks")
     if isinstance(hooks, list):
         for index, hook in enumerate(hooks):
@@ -292,6 +293,51 @@ def agent_issues(
                 "hooks keyed by trigger is the legacy agent form; V3 agent hooks are a list "
                 'of {"trigger", "action"}, or move them to .kiro/hooks/<id>.json with '
                 '"version": "v1" and "hooks": [{"name", "trigger", "action"}]',
+            )
+        )
+    return issues
+
+
+def _knowledge_agent_issues(data: Mapping[str, Any], *, markdown: bool) -> list[Issue]:
+    """An agent with a knowledgeBase resource must be able to call the knowledge tool."""
+    resources = data.get("resources")
+    bases = (
+        [r for r in resources or [] if isinstance(r, Mapping) and r.get("type") == "knowledgeBase"]
+        if isinstance(resources, list)
+        else []
+    )
+    if not bases:
+        return []
+    issues: list[Issue] = []
+    names = [str(b["name"]) for b in bases if isinstance(b.get("name"), str)]
+    issues.extend(
+        Issue("agent-knowledge-base", "error", f"knowledge base name {name!r} is used twice")
+        for name in sorted({n for n in names if names.count(n) > 1})
+    )
+    tools = _strings(data.get("tools"))
+    if not {"knowledge", "*", "@builtin"} & set(tools):
+        issues.append(
+            Issue(
+                "agent-knowledge-base",
+                "warning",
+                'a knowledgeBase resource needs the knowledge tool: add "knowledge" to tools',
+            )
+        )
+    if "knowledge" in _strings(data.get("excludedTools")):
+        issues.append(
+            Issue(
+                "agent-knowledge-base",
+                "error",
+                "knowledge is in excludedTools, so the knowledge base can never be searched",
+            )
+        )
+    if markdown:
+        issues.append(
+            Issue(
+                "agent-knowledge-base",
+                "warning",
+                "Markdown agents have silently dropped knowledgeBase resources in some Kiro "
+                "builds (kirodotdev/Kiro#9790); declare it in a JSON agent",
             )
         )
     return issues
@@ -372,11 +418,28 @@ def _resource_issues(resources: object) -> list[Issue]:
                 )
         elif isinstance(resource, Mapping):
             if resource.get("type") == "knowledgeBase":
-                if not _non_empty_str(resource.get("source")):
+                source = resource.get("source")
+                if not _non_empty_str(source):
                     issues.append(
                         Issue(
                             "agent-knowledge-base", "error", f"{label}: knowledgeBase needs source"
                         )
+                    )
+                elif not str(source).startswith("file://"):
+                    issues.append(
+                        Issue(
+                            "agent-knowledge-base",
+                            "error",
+                            f"{label}: source must be a file:// folder; got {source!r}",
+                        )
+                    )
+                if not _non_empty_str(resource.get("name")):
+                    issues.append(
+                        Issue("agent-knowledge-base", "error", f"{label}: knowledgeBase needs name")
+                    )
+                if "autoUpdate" in resource and not isinstance(resource["autoUpdate"], bool):
+                    issues.append(
+                        Issue("agent-knowledge-base", "error", f"{label}: autoUpdate is a boolean")
                     )
                 index_type = resource.get("indexType")
                 if index_type is not None and not _one_of(index_type, KNOWLEDGE_INDEX_TYPES):

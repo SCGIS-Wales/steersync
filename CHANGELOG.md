@@ -15,6 +15,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A `knowledge` collection for team knowledge notes retrieved through Kiro knowledge bases,
+  **off by default** and with a configurable folder (default `.kiro/knowledge`). The note
+  schema (`KnowledgeNote`, also in `schema export`), the `knowledge` lint profile with the
+  `kn-*` rules (numbers under `lint.knowledge`), stricter `knowledgeBase` checks for agents,
+  `init` steps `knowledge.routing` and `knowledge.agent` (templates filled in with the
+  folder), and a reminder to run `/knowledge update` after a pull that changed notes.
+- `--only` selects the steps it names, so `init --yes --only knowledge` applies them.
+
 - A front matter schema: Kiro native keys versus one `metadata` map of strings, with
   pydantic models (`steersync.schema`) and `steersync schema export` writing the JSON
   Schemas committed in `schemas/`. New rules: `fm-filematch-comma`,
