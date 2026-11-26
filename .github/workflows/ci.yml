@@ -228,7 +228,7 @@ jobs:
           "${RUNNER_TEMP}/smoke/bin/steersync" --version
           "${RUNNER_TEMP}/smoke/bin/steersync" config default >/dev/null
           "${RUNNER_TEMP}/smoke/bin/steersync" lint docs/examples
-          "${RUNNER_TEMP}/smoke/bin/steersync" v3-status
+          "${RUNNER_TEMP}/smoke/bin/steersync" doctor --kiro
       - name: Smoke test uvx with the mcp extra
         run: |
           wheel="$(ls dist/*.whl)"
