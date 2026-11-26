@@ -51,6 +51,11 @@ def _html(body: str) -> str:
     return re.sub(r"\s+", " ", _MD.render(body)).strip()
 
 
+def renders_same(before: str, after: str) -> bool:
+    """True when the Markdown bodies of both texts render to the same HTML."""
+    return _html(_front_matter(before)[1]) == _html(_front_matter(after)[1])
+
+
 def verify(
     original: str,
     fixed: str,

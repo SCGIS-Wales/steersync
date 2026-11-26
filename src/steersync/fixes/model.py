@@ -24,6 +24,8 @@ class Fixer:
     changes_keys: frozenset[str] = field(default_factory=frozenset)
     # The fixer may change rendered Markdown (verification then skips the HTML check).
     changes_markdown: bool = False
+    # Safe only while the rendered Markdown stays the same; otherwise offered as unsafe.
+    demotable: bool = False
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,11 @@
+--- a/.kiro/steering/refs.md
++++ b/.kiro/steering/refs.md
+@@ -1,6 +1,6 @@
+-# Refs   
++# Refs
+ 
+-See #[[file:README.md:1-2]]   
++See #[[file:README.md:1-2]]  
+ 
+ ```text
+ trailing   

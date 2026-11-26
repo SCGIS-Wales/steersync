@@ -372,3 +372,111 @@ def test_atomic_write_cleans_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         engine._write_atomic(path, "new")
     assert path.read_text(encoding="utf-8") == "old"
     assert [p.name for p in tmp_path.iterdir()] == ["a.md"]
+
+
+# --- Markdown fixers (PyMarkdown bridge and steersync's blank line fixers) ------------------------
+
+
+def test_bridge_uses_only_rules_pymarkdown_can_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    from steersync.fixes import pymarkdown_bridge as bridge
+
+    fixable = bridge.fixable_rules()
+    assert {"MD009", "MD047", "MD010"} <= fixable
+    assert "MD013" not in fixable  # line length is never fixed
+    assert bridge.fix_body("text   \n", frozenset({"MD013"})) == "text   \n"
+    assert bridge.fix_body("", frozenset({"MD009"})) == ""
+
+    from pymarkdown.api import PyMarkdownApi, PyMarkdownApiException
+
+    def broken(self: object, text: str) -> object:
+        raise PyMarkdownApiException("boom")
+
+    monkeypatch.setattr(PyMarkdownApi, "fix_string", broken)
+    assert bridge.fix_body("text   \n", frozenset({"MD009"})) == "text   \n"
+
+
+def test_builtin_engine_leaves_out_the_bridge() -> None:
+    builtin = LINT.fix.model_copy(update={"engine": "builtin"})
+    ids = {f.rule_id for f, _ in registry.catalogue(builtin)}
+    assert "md-trailing-space" not in ids
+    assert "md-blanks-around" in ids
+
+
+def test_blank_line_fixers() -> None:
+    from steersync.fixes import markdown_fixes
+
+    ctx = FileContext("a.md", "steering")
+    assert markdown_fixes.blanks_around("# A\ntext\n", ctx) == "# A\n\ntext\n"
+    assert markdown_fixes.blanks_around("x\n```\ny\n```\nz\n", ctx) == "x\n\n```\ny\n```\n\nz\n"
+    nested = "Intro\n- a\n  continued\n- b\nEnd\n"
+    assert markdown_fixes.blanks_around_lists(nested, ctx) == (
+        "Intro\n\n- a\n  continued\n- b\n\nEnd\n"
+    )
+    assert markdown_fixes.blanks_around("# A\ntext\n", FileContext("a.txt", "steering")) == (
+        "# A\ntext\n"
+    )
+
+
+def test_demoted_fix_is_offered_not_applied(tmp_path: Path) -> None:
+    path = tmp_path / "a.md"
+    path.write_text("# A\n\n* one\n+ two\n")  # unifying the bullets would make one list
+    target = engine.Target(path, "a.md", "steering")
+    relint = cli_fix._relint(CONFIG, tmp_path)
+    plan = engine.plan_fixes(
+        [target],
+        LINT,
+        relint=relint,
+        secret=lambda *_: False,
+        dirty=lambda _: False,
+        select=("md-ul-style",),
+    )
+    assert plan.fixes == ()
+    assert [o.rule for o in plan.offers] == ["md-ul-style"]
+    chosen = engine.plan_fixes(
+        [target],
+        LINT,
+        relint=relint,
+        secret=lambda *_: False,
+        dirty=lambda _: False,
+        select=("md-ul-style",),
+        unsafe={"a.md": frozenset({"md-ul-style"})},
+    )
+    assert chosen.failed == ()
+    assert [f.rules for f in chosen.fixes] == [("md-ul-style",)]
+
+
+MARKDOWN = st.lists(
+    st.sampled_from(
+        [
+            "# H",
+            "## Sub",
+            "text   ",
+            "- item",
+            "* item",
+            "  - nested",
+            "1. one",
+            "> quote",
+            "```",
+            "code\t",
+            "",
+            "#  spaced",
+            "See #[[file:a.md]]",
+        ]
+    ),
+    max_size=12,
+).map(lambda lines: "\n".join(lines) + "\n")
+
+
+@settings(max_examples=40, deadline=None)
+@given(MARKDOWN)
+def test_safe_markdown_fixes_keep_the_rendered_html(text: str) -> None:
+    from steersync.fixes.verify import renders_same
+
+    ctx = FileContext("a.md", "steering")
+    safe_md = [
+        f
+        for f in SAFE
+        if f.rule_id.startswith("md-") and not f.demotable and not f.changes_markdown
+    ]
+    fixed, _ = engine.fix_text(text, safe_md, ctx, 100)
+    assert renders_same(text, fixed)

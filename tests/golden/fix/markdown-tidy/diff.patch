@@ -1,0 +1,23 @@
+--- a/.kiro/steering/style.md
++++ b/.kiro/steering/style.md
+@@ -2,13 +2,18 @@
+ inclusion: manual
+ ---
+ # Style
+-Keep it short.   
+-#  Rules
++
++Keep it short.  
++
++# Rules
++
+ * one
+ + two
++
+ ```py
+ x	= 1
+ ```
++
+ Done.
+ 
+ 

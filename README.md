@@ -735,11 +735,14 @@ steersync lint --fix --show-fixes --select fm- --ignore fm-move-to-metadata
 
 | Class | Meaning | Applied |
 |---|---|---|
-| safe | Keeps the meaning: a byte order mark, CRLF, blank lines before `---`, `filematchpattern` spelt `fileMatchPattern`, `Always` written `always`, JSON indentation | With `--fix`, without a question |
-| unsafe | Changes how Kiro loads the file: a misspelt inclusion mode, a comma separated pattern split into a list, a quoted glob, a derived `auto` name, keys moved into `metadata`, a lowercased skill name | With `--unsafe-fixes`, or chosen in one checkbox (all unchecked) |
+| safe | Keeps the meaning: a byte order mark, CRLF, blank lines before `---`, `filematchpattern` spelt `fileMatchPattern`, `Always` written `always`, JSON indentation, Markdown whitespace (final newline, trailing spaces, spaces after `#`, list markers and `>`). Bullet, rule and fence styles, list indentation, tabs and blank lines around headings and fences are safe only while the rendered Markdown is unchanged; otherwise they are offered as unsafe | With `--fix`, without a question |
+| unsafe | Changes how Kiro loads or renders the file: a misspelt inclusion mode, a comma separated pattern split into a list, a quoted glob, a derived `auto` name, keys moved into `metadata`, a lowercased skill name, blank lines around lists, heading levels, list renumbering, code block style | With `--unsafe-fixes`, or chosen in one checkbox (all unchecked) |
 | never | Line length, bare URLs, fence languages, tables, anything inside `#[[...]]` or fenced code, agent and hook semantics, legacy V3 keys, any file with a possible secret | Reported only |
 
-Every fix is verified before anything is written: the front matter data (other than the keys
+Markdown fixes run PyMarkdown's fix mode on the body only (front matter is put back byte for
+byte), and only for rules the installed PyMarkdown reports it can fix; blank lines around
+headings, fences and lists are steersync's own. `lint.fix.engine: builtin` leaves PyMarkdown
+out. Every fix is verified before anything is written: the front matter data (other than the keys
 the fix changes), the JSON data, the rendered Markdown, every `#[[...]]` reference and every
 fenced code block must stay the same, the fix must be idempotent and relinting must find
 nothing new. A file that fails is left untouched and lint exits 11. Files with uncommitted

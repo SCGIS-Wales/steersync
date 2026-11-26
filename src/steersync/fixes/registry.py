@@ -8,14 +8,16 @@
 from collections.abc import Sequence
 
 from steersync.config import FixConfig
-from steersync.fixes import frontmatter_fixes, json_fixes, markdown_fixes
+from steersync.fixes import frontmatter_fixes, json_fixes, markdown_fixes, pymarkdown_bridge
 from steersync.fixes.model import Fixer, Safety
 
 ALL_FIXERS: tuple[Fixer, ...] = (
     *frontmatter_fixes.FIXERS,
     *json_fixes.FIXERS,
+    *pymarkdown_bridge.FIXERS,
     *markdown_fixes.FIXERS,
 )
+BRIDGE_IDS = frozenset(f.rule_id for f in pymarkdown_bridge.FIXERS)
 
 
 def _matches(rule: str, names: Sequence[str]) -> bool:
@@ -38,6 +40,8 @@ def catalogue(
     """Fixers in catalogue order with their safety; --select and --ignore take prefixes."""
     chosen: list[tuple[Fixer, Safety]] = []
     for fixer in ALL_FIXERS:
+        if config.engine == "builtin" and fixer.rule_id in BRIDGE_IDS:
+            continue
         if select and not _matches(fixer.rule_id, select):
             continue
         if ignore and _matches(fixer.rule_id, ignore):
