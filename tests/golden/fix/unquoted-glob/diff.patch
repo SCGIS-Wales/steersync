@@ -1,0 +1,10 @@
+--- a/.kiro/steering/go.md
++++ b/.kiro/steering/go.md
+@@ -1,6 +1,6 @@
+ ---
+ inclusion: fileMatch
+-fileMatchPattern: **/*.go
++fileMatchPattern: "**/*.go"
+ ---
+ 
+ # Go

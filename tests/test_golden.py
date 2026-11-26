@@ -22,7 +22,8 @@ from steersync.lint import lint_paths
 from steersync.steering import FileSpec
 
 GOLDEN = Path(__file__).parent / "golden"
-CASES = sorted(p.name for p in GOLDEN.iterdir() if p.is_dir())
+# golden/fix holds the lint --fix corpus (tests/test_fix.py), not a collection case.
+CASES = sorted(p.name for p in GOLDEN.iterdir() if p.is_dir() and p.name != "fix")
 
 
 def findings(config: Config, case: str) -> dict[str, Any]:

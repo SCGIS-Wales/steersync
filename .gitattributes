@@ -1,0 +1,2 @@
+# Fix golden files are compared byte for byte (BOMs, CRLF): never convert them.
+tests/golden/fix/** -text

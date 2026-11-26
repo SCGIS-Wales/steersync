@@ -39,6 +39,9 @@ dependencies = [
   # checkbox and select prompts.
   "rich>=14.0,<16",
   "questionary>=2.1,<3",
+  # lint --fix: round trip YAML edits and the rendered Markdown check.
+  "ruamel-yaml>=0.19.1,<1",
+  "markdown-it-py>=4.0,<5",
 ]
 
 [project.optional-dependencies]

@@ -165,6 +165,35 @@ class SpecConfig(_Strict):
     ears_pattern: str = r"(?i)^(WHEN|IF|WHILE|WHERE|THE)\b.*\bSHALL\b"
 
 
+FixSafety = Literal["safe", "unsafe", "never"]
+_DEFAULT_FIX_SAFETY: dict[str, FixSafety] = {
+    "file-bom": "safe",
+    "file-eol": "safe",
+    "fm-leading-blank": "safe",
+    "fm-key-case": "safe",
+    "fm-inclusion-case": "safe",
+    "json-format": "safe",
+    "fm-inclusion-typo": "unsafe",
+    "fm-quote-glob": "unsafe",
+    "fm-filematch-comma": "unsafe",
+    "fm-auto-name": "unsafe",
+    "fm-move-to-metadata": "unsafe",
+    "skill-name-case": "unsafe",
+}
+
+
+class FixConfig(_Strict):
+    """steersync lint --fix: the fix catalogue's safety classes and the guards."""
+
+    engine: Literal["pymarkdown", "builtin"] = "pymarkdown"
+    safety: dict[str, FixSafety] = Field(default_factory=lambda: dict(_DEFAULT_FIX_SAFETY))
+    extend_safe_fixes: tuple[str, ...] = ()
+    extend_unsafe_fixes: tuple[str, ...] = ()
+    unfixable: tuple[str, ...] = ()
+    max_passes: int = Field(default=100, ge=1)
+    require_clean_git: bool = True
+
+
 class KnowledgeLintConfig(_Strict):
     """Knowledge notes are retrieved in chunks: keep the summary early and sections short."""
 
@@ -224,6 +253,9 @@ class LintConfig(_Strict):
     budgets: BudgetsConfig = BudgetsConfig()
     spec: SpecConfig = SpecConfig()
     knowledge: KnowledgeLintConfig = KnowledgeLintConfig()
+    # Findings at or above this severity make lint exit 4.
+    fail_level: Literal["error", "warning", "info"] = "error"
+    fix: FixConfig = FixConfig()
     agent_fields: tuple[str, ...] = _V3_AGENT_FIELDS
     legacy_agent_keys: dict[str, str] = Field(default_factory=lambda: dict(_LEGACY_AGENT_KEYS))
     upgraded_agent_keys: tuple[str, ...] = _UPGRADED_AGENT_KEYS

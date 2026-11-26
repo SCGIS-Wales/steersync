@@ -1497,6 +1497,15 @@ wheels = [
 ]
 
 [[package]]
+name = "ruamel-yaml"
+version = "0.19.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/3b/ebda527b56beb90cb7652cb1c7e4f91f48649fbcd8d2eb2fb6e77cd3329b/ruamel_yaml-0.19.1.tar.gz", hash = "sha256:53eb66cd27849eff968ebf8f0bf61f46cdac2da1d1f3576dd4ccee9b25c31993", size = 142709, upload-time = "2026-01-02T16:50:31.84Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/0c/51f6841f1d84f404f92463fc2b1ba0da357ca1e3db6b7fbda26956c3b82a/ruamel_yaml-0.19.1-py3-none-any.whl", hash = "sha256:27592957fedf6e0b62f281e96effd28043345e0e66001f97683aa9a40c667c93", size = 118102, upload-time = "2026-01-02T16:50:29.201Z" },
+]
+
+[[package]]
 name = "ruff"
 version = "0.17.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1569,12 +1578,14 @@ name = "steersync"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "markdown-it-py" },
     { name = "pydantic" },
     { name = "pymarkdownlnt" },
     { name = "python-frontmatter" },
     { name = "pyyaml" },
     { name = "questionary" },
     { name = "rich" },
+    { name = "ruamel-yaml" },
 ]
 
 [package.optional-dependencies]
@@ -1617,6 +1628,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.2,<9" },
+    { name = "markdown-it-py", specifier = ">=4.0,<5" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3,<3" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pymarkdownlnt", specifier = ">=0.9.40,<1" },
@@ -1624,6 +1636,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "questionary", specifier = ">=2.1,<3" },
     { name = "rich", specifier = ">=14.0,<16" },
+    { name = "ruamel-yaml", specifier = ">=0.19.1,<1" },
 ]
 provides-extras = ["mcp"]
 
