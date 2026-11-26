@@ -153,7 +153,7 @@ def test_golden_fix(case: str, tmp_path: Path) -> None:
     """input/ fixed (with case.json's unsafe choice) must equal expected/ and diff.patch;
     a second run changes nothing. STEERSYNC_UPDATE_GOLDEN=1 regenerates."""
     folder = GOLDEN / case
-    meta = json.loads((folder / "case.json").read_text())
+    meta = json.loads((folder / "case.json").read_text(encoding="utf-8"))
     work = tmp_path / "ws"
     shutil.copytree(folder / "input", work)
     found = [_target(work, p) for p in sorted(work.rglob("*")) if p.is_file()]
@@ -220,12 +220,12 @@ def test_fix_safe_then_unsafe_and_undo(workspace: Path, env: dict[str, str]) -> 
     assert "file-bom, fm-inclusion-case" in result.output
     assert "unsafe fixes available" in result.output
     assert "fm-filematch-comma · .kiro/steering/py.md" in result.output
-    assert api.read_text().startswith("---\ninclusion: always\n")
-    assert '"src/**, tests/**"' in py.read_text()  # unsafe: listed, not applied
+    assert api.read_text(encoding="utf-8").startswith("---\ninclusion: always\n")
+    assert '"src/**, tests/**"' in py.read_text(encoding="utf-8")  # unsafe: listed, not applied
     stamp = result.output.split("Undo with: steersync restore ")[1].split()[0]
     git("commit", "-qam", "safe fixes", cwd=workspace, env=env)
     unsafe = CliRunner().invoke(main, ["lint", "--fix", "--unsafe-fixes"])
-    assert 'fileMatchPattern: ["src/**", "tests/**"]' in py.read_text()
+    assert 'fileMatchPattern: ["src/**", "tests/**"]' in py.read_text(encoding="utf-8")
     assert "fixed 1 file(s)" in unsafe.output
     restored = CliRunner().invoke(main, ["restore", stamp, "--yes"])
     assert restored.exit_code == 0, restored.output
@@ -284,7 +284,7 @@ def test_interactive_unsafe_choice(workspace: Path) -> None:
     )
     assert code == 0
     assert [o.rule for o in asked[0]] == ["fm-filematch-comma"]
-    assert 'fileMatchPattern: ["src/**", "tests/**"]' in py.read_text()
+    assert 'fileMatchPattern: ["src/**", "tests/**"]' in py.read_text(encoding="utf-8")
 
 
 def test_fail_level(workspace: Path) -> None:
@@ -321,7 +321,7 @@ def test_engine_guards(tmp_path: Path) -> None:
     unreadable = tmp_path / "bin.md"
     unreadable.write_bytes(b"\xff\xfe")
     leak = tmp_path / "leak.md"
-    leak.write_text("﻿# Leak\n", encoding="utf-8")
+    leak.write_text("\ufeff# Leak\n", encoding="utf-8")
     other = tmp_path / "other.txt"
     other.write_text("x")
     found = [
@@ -344,7 +344,7 @@ def test_engine_guards(tmp_path: Path) -> None:
 
 def test_a_file_edited_during_the_run_is_left_alone(tmp_path: Path) -> None:
     path = tmp_path / "a.md"
-    path.write_text("﻿# A\n", encoding="utf-8")
+    path.write_text("\ufeff# A\n", encoding="utf-8")
     target = engine.Target(path, "a.md", "steering")
     plan = engine.plan_fixes(
         [target],
@@ -353,11 +353,11 @@ def test_a_file_edited_during_the_run_is_left_alone(tmp_path: Path) -> None:
         secret=lambda *_: False,
         dirty=lambda _: False,
     )
-    path.write_text("﻿# A, edited meanwhile\n", encoding="utf-8")
+    path.write_text("\ufeff# A, edited meanwhile\n", encoding="utf-8")
     stamp, changed = engine.apply_fixes(plan.fixes, {"a.md": path}, tmp_path / "backups")
     assert stamp is not None
     assert changed == ["a.md"]
-    assert path.read_text() == "﻿# A, edited meanwhile\n"
+    assert path.read_text(encoding="utf-8") == "\ufeff# A, edited meanwhile\n"
 
 
 def test_atomic_write_cleans_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -370,5 +370,5 @@ def test_atomic_write_cleans_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(Path, "replace", broken)
     with pytest.raises(OSError, match="disk full"):
         engine._write_atomic(path, "new")
-    assert path.read_text() == "old"
+    assert path.read_text(encoding="utf-8") == "old"
     assert [p.name for p in tmp_path.iterdir()] == ["a.md"]
