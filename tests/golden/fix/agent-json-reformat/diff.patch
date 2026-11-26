@@ -1,0 +1,13 @@
+--- a/.kiro/agents/dev.json
++++ b/.kiro/agents/dev.json
+@@ -1 +1,8 @@
+-{"name":"dev","tools":["read","write"],"description":"Developer"}
+\ No newline at end of file
++{
++  "name": "dev",
++  "tools": [
++    "read",
++    "write"
++  ],
++  "description": "Developer"
++}

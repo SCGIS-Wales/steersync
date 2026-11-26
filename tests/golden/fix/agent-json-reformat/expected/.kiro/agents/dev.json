@@ -1,0 +1,8 @@
+{
+  "name": "dev",
+  "tools": [
+    "read",
+    "write"
+  ],
+  "description": "Developer"
+}

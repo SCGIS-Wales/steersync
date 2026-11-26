@@ -132,6 +132,7 @@ for what each state means and how overwrites are protected.
 - [Git hook](https://github.com/SCGIS-Wales/steersync#git-hook)
 - [Proposal branches and GitLab merge requests](https://github.com/SCGIS-Wales/steersync#proposal-branches-and-gitlab-merge-requests)
 - [Validation](https://github.com/SCGIS-Wales/steersync#validation)
+- [Fixing lint findings](https://github.com/SCGIS-Wales/steersync#fixing-lint-findings)
 - [Front matter reference](https://github.com/SCGIS-Wales/steersync#front-matter-reference), [knowledge notes](https://github.com/SCGIS-Wales/steersync#knowledge-notes-and-knowledge-bases) and [writing good steering](https://github.com/SCGIS-Wales/steersync#writing-good-steering)
 - [Kiro integration](https://github.com/SCGIS-Wales/steersync#kiro-integration)
 - [Verifying a release](https://github.com/SCGIS-Wales/steersync#verifying-a-release)
@@ -478,7 +479,7 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 | `steersync pull [--force] [--dry-run] [--no-global] [--no-workspace] [--strict] [--best-effort] [-c NAME] [--json]` | Apply central collections locally. `--best-effort` warns and exits 0 on failure. |
 | `steersync push [--dry-run] [--scope global] [--no-lint] [-m WHY] [-c NAME] [--json]` | Propose local collections centrally in one branch; `-m` adds your reason to the merge request. `--from-hook` is used by git hooks and never blocks the push unless strict. |
 | `steersync status [-c NAME] [--json]` | Show adds, updates, deletes and local edits per collection in both directions. |
-| `steersync lint [PATHS] [-c NAME] [--profile P] [--json]` | Validate every collection with its profile, or explicit paths. Exit code 4 on errors. |
+| `steersync lint [PATHS] [-c NAME] [--profile P] [--json] [--fix] [--unsafe-fixes] [--diff] [--show-fixes] [--select ID] [--ignore ID] [--allow-dirty]` | Validate every collection with its profile, or explicit paths; `--fix` repairs what is safe (see [Fixing lint findings](https://github.com/SCGIS-Wales/steersync#fixing-lint-findings)). |
 | `steersync mr [--branch NAME] [--title T] [-c NAME] [--json]` | Open, or find, the GitLab merge request for the pushed proposal branch. Needs the token in `GITLAB_TOKEN` (configurable). |
 | `steersync init [--write-config] [--hook] [--no-exclude] [--kiro] [--mcp-command PATH]` plus the plan options | Prepare a repository: excludes and git hook; `--kiro` also writes the Kiro session hook and MCP server entry into its `.kiro`. The step flags are answers, so with any of them nothing is asked. |
 | `steersync restore [STAMP] [--list] [--repo PATH] [--yes]` | Undo a run: put back what setup, init or a forced pull changed, and remove what it created. |
@@ -508,13 +509,14 @@ Global options: `--config PATH`, `--log-level`, `--log-format text|json`, `--qui
 | 1 | Unexpected error, or a plan the user cancelled. |
 | 2 | Configuration error, a command line usage error, or input needed in a run that cannot prompt (the message names `--yes`). |
 | 3 | git failed. |
-| 4 | Lint errors. |
+| 4 | Lint findings at or above `lint.fail_level` (default `error`) remain, or `lint --diff` found fixes to make. |
 | 5 | Conflicting changes, a backup that could not be taken, a plan step that failed, or a `fleet` command where at least one repository failed. |
 | 6 | A path escaped the directory it must stay in. |
 | 7 | Central content exceeds the safety limits. |
 | 8 | Timed out waiting for another steersync process. |
 | 9 | GitLab API error or missing token. |
 | 10 | `doctor --kiro --strict`: the machine or its agents are below the supported V3 baseline. |
+| 11 | `lint --fix`: a fix failed verification; that file was left untouched. |
 | 130 | Interrupted (Ctrl-C); a `fleet` summary still lists what completed. |
 
 ## Configuration
@@ -718,6 +720,33 @@ path, more than 48 KiB of always on steering, missing `product.md`, `tech.md` an
 `structure.md`. Every rule, its severity and the documentation page it comes from are listed
 in [docs/validation.md](https://github.com/SCGIS-Wales/steersync/blob/main/docs/validation.md); thresholds live under `lint.practice_limits`
 and `lint.practices: false` turns the warnings off.
+
+## Fixing lint findings
+
+`steersync lint --fix` repairs what can be repaired without changing what a file means. It
+recommends first and applies after approval, the way ruff does:
+
+```bash
+steersync lint --diff                 # show every fix as a unified diff; writes nothing (exit 4 if any)
+steersync lint --fix                  # apply the safe fixes, backed up; list the unsafe ones
+steersync lint --fix --unsafe-fixes   # also apply the unsafe ones
+steersync lint --fix --show-fixes --select fm- --ignore fm-move-to-metadata
+```
+
+| Class | Meaning | Applied |
+|---|---|---|
+| safe | Keeps the meaning: a byte order mark, CRLF, blank lines before `---`, `filematchpattern` spelt `fileMatchPattern`, `Always` written `always`, JSON indentation | With `--fix`, without a question |
+| unsafe | Changes how Kiro loads the file: a misspelt inclusion mode, a comma separated pattern split into a list, a quoted glob, a derived `auto` name, keys moved into `metadata`, a lowercased skill name | With `--unsafe-fixes`, or chosen in one checkbox (all unchecked) |
+| never | Line length, bare URLs, fence languages, tables, anything inside `#[[...]]` or fenced code, agent and hook semantics, legacy V3 keys, any file with a possible secret | Reported only |
+
+Every fix is verified before anything is written: the front matter data (other than the keys
+the fix changes), the JSON data, the rendered Markdown, every `#[[...]]` reference and every
+fenced code block must stay the same, the fix must be idempotent and relinting must find
+nothing new. A file that fails is left untouched and lint exits 11. Files with uncommitted
+changes are left alone unless `--allow-dirty` (`lint.fix.require_clean_git`). Each file's hash
+is checked again just before an atomic write, and one backup covers the run:
+`Undo with: steersync restore <id>`. The classes are configuration (`lint.fix.safety`,
+`extend_safe_fixes`, `extend_unsafe_fixes`, `unfixable`).
 
 ## Front matter reference
 

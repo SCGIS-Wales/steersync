@@ -1,0 +1,10 @@
+--- a/.kiro/steering/tf.md
++++ b/.kiro/steering/tf.md
+@@ -1,6 +1,6 @@
+ ---
+ inclusion: fileMatch
+-filematchpattern: "**/*.tf"
++fileMatchPattern: "**/*.tf"
+ ---
+ 
+ # Terraform

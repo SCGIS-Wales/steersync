@@ -292,6 +292,30 @@ lint:
     skill_tokens: 5000
     chars_per_token: 4
     dup_rule_min_chars: 24
+  # Findings at or above this severity make `steersync lint` exit 4.
+  fail_level: error
+  # steersync lint --fix: safe fixes apply after a backup; unsafe ones need
+  # --unsafe-fixes or a selection; never means report only.
+  fix:
+    engine: pymarkdown        # pymarkdown | builtin
+    safety:
+      file-bom: safe
+      file-eol: safe
+      fm-leading-blank: safe
+      fm-key-case: safe
+      fm-inclusion-case: safe
+      json-format: safe
+      fm-inclusion-typo: unsafe
+      fm-quote-glob: unsafe
+      fm-filematch-comma: unsafe
+      fm-auto-name: unsafe
+      fm-move-to-metadata: unsafe
+      skill-name-case: unsafe
+    extend_safe_fixes: []
+    extend_unsafe_fixes: []
+    unfixable: []
+    max_passes: 100
+    require_clean_git: true
   # Knowledge notes (kn-* rules).
   knowledge:
     summary_within_lines: 5

@@ -12,6 +12,7 @@ import click
 
 from steersync import (
     __version__,
+    cli_fix,
     gitlab,
     gitops,
     hooks,
@@ -442,6 +443,17 @@ def status(
     help="Lint profile for explicit PATHS (default: steering, or the collection's profile).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
+@click.option("--fix", is_flag=True, help="Apply safe fixes (backed up, verified).")
+@click.option(
+    "--unsafe-fixes", is_flag=True, help="With --fix, also apply unsafe fixes; else list them."
+)
+@click.option("--diff", "diff_only", is_flag=True, help="Print the fixes as diffs; write nothing.")
+@click.option("--show-fixes", is_flag=True, help="List the fixes applied to each file.")
+@click.option("--select", multiple=True, help="Only these fix ids (prefixes allowed).")
+@click.option("--ignore", multiple=True, help="Never these fix ids (prefixes allowed).")
+@click.option("--allow-dirty", is_flag=True, help="Fix files with uncommitted git changes.")
+@click.option("-y", "--yes", is_flag=True, help="Do not ask about unsafe fixes.")
+@click.option("--no-input", is_flag=True, help="Never prompt.")
 @click.pass_context
 def lint(
     ctx: click.Context,
@@ -449,8 +461,22 @@ def lint(
     collections: tuple[str, ...],
     profile: str | None,
     as_json: bool,
+    fix: bool,
+    unsafe_fixes: bool,
+    diff_only: bool,
+    show_fixes: bool,
+    select: tuple[str, ...],
+    ignore: tuple[str, ...],
+    allow_dirty: bool,
+    yes: bool,
+    no_input: bool,
 ) -> None:
-    """Validate synced content. Defaults to every collection in this workspace."""
+    """Validate synced content; --fix repairs what can be repaired safely.
+
+    Defaults to every collection in this workspace. Safe fixes apply without a question
+    (backed up, `steersync restore` undoes them); unsafe fixes need --unsafe-fixes or a
+    selection. Every fix is verified to keep the file's meaning before it is written.
+    """
     config, root = _bootstrap(ctx)
     quiet = bool(ctx.find_root().params.get("quiet"))
     try:
@@ -458,32 +484,70 @@ def lint(
     except SteersyncError as exc:
         _fail(exc)
         return
-    if paths:
-        report = _lint_explicit_paths(config, root, paths, collections, profile)
-    else:
-        if root is None:
-            _fail(SteersyncError("no paths given and not inside a git repository"))
-            return
-        reports: list[LintReport] = []
-        for collection in selected.values():
-            target = workspace_collection_dir(collection, root)
-            if target is None:
-                continue
-            reports.append(
-                lint_paths(
-                    [target],
-                    config.lint,
-                    root,
-                    profile=collection.lint,
-                    spec=FileSpec(collection.include, collection.exclude, collection.max_depth),
-                )
-            )
-        if not collections:
-            reports.append(_workspace_report(config, root))
-        report = merge_reports(reports)
+    if not paths and root is None:
+        _fail(SteersyncError("no paths given and not inside a git repository"))
+        return
+    fix_code = 0
+    if fix or diff_only:
+        forced = config.collections[collections[0]] if collections else None
+
+        def collection_for(path: Path) -> CollectionConfig | None:
+            if forced is not None:
+                return forced
+            name = _collection_for_path(config, root, path)
+            return config.collections[name] if name else _collection_for_profile(config, profile)
+
+        found = cli_fix.targets(
+            config, root, paths, list(selected.values()), collection_for, profile
+        )
+        interaction = interaction_from({"yes": yes, "no_input": no_input, "as_json": as_json})
+        fix_code = cli_fix.run_fix(
+            config,
+            root,
+            found,
+            interaction,
+            diff_only=diff_only,
+            unsafe_fixes=unsafe_fixes,
+            show_fixes=show_fixes,
+            select=select,
+            ignore=ignore,
+            allow_dirty=allow_dirty,
+        )
+        if diff_only:
+            sys.exit(fix_code)
+    report = _lint_report(config, root, paths, collections, profile, selected)
     _print_lint(report, as_json=as_json, quiet=quiet)
-    if not report.ok:
-        sys.exit(4)
+    cli_fix.exit_with(fix_code, report, config.lint.fail_level)
+
+
+def _lint_report(
+    config: Config,
+    root: Path | None,
+    paths: tuple[Path, ...],
+    collections: tuple[str, ...],
+    profile: str | None,
+    selected: Mapping[str, CollectionConfig],
+) -> LintReport:
+    if paths:
+        return _lint_explicit_paths(config, root, paths, collections, profile)
+    assert root is not None  # noqa: S101 - checked by the caller
+    reports: list[LintReport] = []
+    for collection in selected.values():
+        target = workspace_collection_dir(collection, root)
+        if target is None:
+            continue
+        reports.append(
+            lint_paths(
+                [target],
+                config.lint,
+                root,
+                profile=collection.lint,
+                spec=FileSpec(collection.include, collection.exclude, collection.max_depth),
+            )
+        )
+    if not collections:
+        reports.append(_workspace_report(config, root))
+    return merge_reports(reports)
 
 
 def _workspace_report(config: Config, root: Path) -> LintReport:

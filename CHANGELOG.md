@@ -15,6 +15,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `steersync lint --fix` with `--unsafe-fixes`, `--diff`, `--show-fixes`, `--select`,
+  `--ignore` and `--allow-dirty`: safe fixes apply after one backup, unsafe ones need the
+  flag or a checkbox choice, and every fix is verified (front matter data, JSON data,
+  rendered Markdown via markdown-it-py, references, fenced code, idempotence, no new
+  findings) before an atomic write; a failure exits 11 and leaves the file alone. Fixes:
+  `file-bom`, `file-eol`, `fm-leading-blank`, `fm-key-case`, `fm-inclusion-case`,
+  `json-format` (safe), `fm-inclusion-typo`, `fm-quote-glob`, `fm-filematch-comma`,
+  `fm-auto-name`, `fm-move-to-metadata` (ruamel.yaml round trip), `skill-name-case`
+  (unsafe); classes in `lint.fix`. `lint.fail_level` sets which severity exits 4.
+
 - A `knowledge` collection for team knowledge notes retrieved through Kiro knowledge bases,
   **off by default** and with a configurable folder (default `.kiro/knowledge`). The note
   schema (`KnowledgeNote`, also in `schema export`), the `knowledge` lint profile with the

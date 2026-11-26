@@ -1,0 +1,10 @@
+--- a/.kiro/steering/py.md
++++ b/.kiro/steering/py.md
+@@ -1,6 +1,6 @@
+ ---
+ inclusion: fileMatch
+-fileMatchPattern: "src/**/*.py, tests/**/*.py"
++fileMatchPattern: ["src/**/*.py", "tests/**/*.py"]
+ ---
+ 
+ # Python
