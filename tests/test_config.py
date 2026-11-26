@@ -175,10 +175,12 @@ def test_collections_defaults_and_overrides(env: dict[str, str], tmp_path: Path)
         "cli-settings",
         "workflows",
         "prompts",
+        "knowledge",
         "agents-md",
         "kiroignore",
     ]
     assert "cli-settings" not in default.enabled_collections()
+    assert "knowledge" not in default.enabled_collections()
     assert default.collections["steering"].lint == "steering"
     assert default.collections["specs"].global_path is None
     path = tmp_path / "c.yaml"

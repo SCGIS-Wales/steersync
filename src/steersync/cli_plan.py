@@ -49,6 +49,9 @@ def run_plan(
     except click.UsageError as exc:
         _fail(ConfigError(exc.format_message()))
         raise AssertionError from exc  # pragma: no cover - _fail always exits
+    if _names(plan_flags.get("only")):
+        # Steps named with --only are what the user asked for: select them all.
+        plan = with_defaults(plan, [step.id for step in plan.steps])
     profile = plan_flags.get("profile")
     saved = config.setup.profiles.get(profile) if isinstance(profile, str) else None
     remembered: frozenset[str] | None = None

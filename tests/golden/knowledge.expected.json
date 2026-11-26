@@ -1,0 +1,41 @@
+{
+  "checked": 2,
+  "findings": [
+    {
+      "path": "apigee/in-steering-form.md",
+      "rule": "kn-inclusion",
+      "severity": "error",
+      "line": 2
+    },
+    {
+      "path": "apigee/in-steering-form.md",
+      "rule": "kn-schema",
+      "severity": "error",
+      "line": 2
+    },
+    {
+      "path": "apigee/in-steering-form.md",
+      "rule": "kn-schema",
+      "severity": "error",
+      "line": 2
+    },
+    {
+      "path": "apigee/in-steering-form.md",
+      "rule": "kn-schema",
+      "severity": "error",
+      "line": 2
+    },
+    {
+      "path": "apigee/in-steering-form.md",
+      "rule": "kn-schema",
+      "severity": "error",
+      "line": 2
+    },
+    {
+      "path": "apigee/in-steering-form.md",
+      "rule": "kn-summary",
+      "severity": "warning",
+      "line": null
+    }
+  ]
+}

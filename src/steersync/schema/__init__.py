@@ -12,12 +12,14 @@ from pydantic import BaseModel
 from steersync.schema.agent import AgentConfig
 from steersync.schema.frontmatter import SkillFrontMatter, SteeringFrontMatter
 from steersync.schema.hook import HookFile
+from steersync.schema.knowledge import KnowledgeNote
 
 KINDS: Mapping[str, type[BaseModel]] = {
     "steering": SteeringFrontMatter,
     "skill": SkillFrontMatter,
     "agent": AgentConfig,
     "hook": HookFile,
+    "knowledge": KnowledgeNote,
 }
 
 

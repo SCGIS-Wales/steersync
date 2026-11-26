@@ -191,6 +191,8 @@ def pull(
         else result.commit[:12]
     )
     _echo(f"{verb} {result.change_count} change(s) from {source}", quiet=quiet)
+    if not dry_run and (note := knowledge_reminder(result)):
+        _echo(note, err=True)
     if result.conflicts:
         _echo(
             f"{len(result.conflicts)} locally modified file(s) kept; "
@@ -313,6 +315,17 @@ def _agent_dirs(config: Config, root: Path | None) -> list[Path]:
     if root is None or agents is None or agents.workspace_path is None:
         return []
     return [root / agents.workspace_path]
+
+
+def knowledge_reminder(result: sync.PullResult) -> str | None:
+    """Kiro indexes are local: after a pull that changed knowledge notes, say to reindex."""
+    changed = [
+        r for r in result.results if r.collection == "knowledge" and (r.written or r.plan.delete)
+    ]
+    if not changed:
+        return None
+    folder = changed[0].target_dir.name
+    return f"{folder}/ changed. In Kiro run /knowledge update and wait for it to finish."
 
 
 def _maybe_check_kiro(config: Config, root: Path | None) -> None:
@@ -646,7 +659,7 @@ def init(
     result = run_plan(
         plan, config, plan_flags, answered=flags_answered, notes=setup_plan.notes(state)
     )
-    if result.exit_code == 0:
+    if result.exit_code == 0 and not plan_flags.get("dry_run") and not plan_flags.get("as_json"):
         if "repo.exclude" in result.applied:
             _hint_tracked_files(config, root, setup_plan.exclude_patterns(config))
         steering_dir = workspace_steering_dir(config, root)

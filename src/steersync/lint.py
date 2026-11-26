@@ -16,7 +16,7 @@ from typing import Any, Literal, NamedTuple
 
 import yaml
 
-from steersync import fm_rules, kiro_rules, practices, refs
+from steersync import fm_rules, kiro_rules, kn_rules, practices, refs
 from steersync.config import LintConfig, LintProfile
 from steersync.kiro_rules import HOOK_TRIGGERS
 from steersync.steering import (
@@ -304,6 +304,41 @@ def _profile_spec(doc: SteeringDocument, config: LintConfig, ctx: LintContext) -
     return findings
 
 
+def _profile_knowledge(
+    doc: SteeringDocument, config: LintConfig, ctx: LintContext
+) -> list[LintFinding]:
+    """Knowledge notes: the note schema and the retrieval friendly shape (kn-*)."""
+    if PurePosixPath(doc.relative_path).suffix.lower() != ".md":
+        return _profile_generic(doc, config, ctx)
+    findings = _text_findings(doc)
+    if findings:
+        return findings
+    findings.extend(_secret_findings(doc, config))
+    fm = doc.front_matter
+    if fm is None or doc.text is None:
+        return findings
+    if fm.error:
+        return [
+            *findings,
+            LintFinding(doc.relative_path, "fm-yaml", "error", fm.error, fm.error_line or 1),
+        ]
+    if not fm.present:
+        return [
+            *findings,
+            LintFinding(
+                doc.relative_path,
+                "kn-schema",
+                "error",
+                "a knowledge note starts with front matter: title, domain, type, status, "
+                "verified_on",
+                1,
+            ),
+        ]
+    header = doc.text[: len(doc.text) - len(fm.body)]
+    findings.extend(_hits(doc, kn_rules.note_hits(fm.metadata, header, fm.body, config.knowledge)))
+    return findings
+
+
 def _skill_metadata_findings(doc: SteeringDocument, config: LintConfig) -> list[LintFinding]:
     fm = doc.front_matter
     if fm is None or fm.leading_blank or not fm.present:
@@ -479,6 +514,7 @@ def _profile_agent(
                 )
             findings.extend(_issues(doc, _agent_rules(data, config, markdown=False)))
             findings.extend(_resource_budget(doc, data, config, ctx))
+            findings.extend(_knowledge_sources(doc, data, ctx))
     findings.extend(_secret_findings(doc, config))
     return findings
 
@@ -491,6 +527,32 @@ def _agent_rules(data: Mapping[str, Any], config: LintConfig, *, markdown: bool)
         upgraded_keys=config.upgraded_agent_keys,
         markdown=markdown,
     )
+
+
+def _knowledge_sources(
+    doc: SteeringDocument, data: Mapping[str, Any], ctx: LintContext
+) -> list[LintFinding]:
+    """A knowledgeBase source must name a folder that exists in the workspace."""
+    if ctx.workspace_root is None:
+        return []
+    found: list[LintFinding] = []
+    for resource in data.get("resources") or []:
+        if not isinstance(resource, Mapping) or resource.get("type") != "knowledgeBase":
+            continue
+        source = resource.get("source")
+        if not isinstance(source, str) or not source.startswith("file://"):
+            continue
+        folder = ctx.workspace_root / source.removeprefix("file://")
+        if not folder.is_dir():
+            found.append(
+                LintFinding(
+                    doc.relative_path,
+                    "agent-knowledge-base",
+                    "warning",
+                    f"{source} is not a folder in this workspace; pull or create it",
+                )
+            )
+    return found
 
 
 def _resource_budget(
@@ -621,6 +683,17 @@ def collection_findings(
     """Practices that look at a whole collection rather than one file."""
     if not config.practices:
         return []
+    if profile == "knowledge":
+        notes = {
+            path: front.metadata
+            for path, raw in snapshot.items()
+            if path.endswith(".md")
+            and (front := parse_front_matter(raw.decode("utf-8", errors="replace"))).present
+        }
+        return [
+            LintFinding(path, hit.rule, hit.severity, hit.message, hit.line)
+            for path, hit in kn_rules.collection_hits(notes)
+        ]
     if profile == "steering":
         return [
             *_warnings(practices.steering_collection_findings(snapshot)),
@@ -725,6 +798,7 @@ PROFILES: dict[str, Profile] = {
     "steering": _profile_steering,
     "markdown": _profile_markdown,
     "spec": _profile_spec,
+    "knowledge": _profile_knowledge,
     "skill": _profile_skill,
     "agent": _profile_agent,
     "hooks": _profile_hooks,

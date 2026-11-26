@@ -1,0 +1,18 @@
+{
+  "name": "platform-knowledge",
+  "description": "Platform engineering agent with semantic access to the team knowledge notes",
+  "tools": ["read", "write", "shell", "web", "knowledge"],
+  "resources": [
+    "file://.kiro/steering/knowledge-routing.md",
+    "skill://.kiro/skills/**/SKILL.md",
+    {
+      "type": "knowledgeBase",
+      "source": "file://./{knowledge_folder}",
+      "name": "team-knowledge",
+      "description": "Team knowledge notes: platform, runbooks, CVE exposure records",
+      "indexType": "best",
+      "autoUpdate": true
+    }
+  ],
+  "includeMcpJson": true
+}
