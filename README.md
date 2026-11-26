@@ -382,7 +382,9 @@ checkout with `core.autocrlf`) count as equal.
 | `missing` | The folder is gone or is no longer a git work tree. | `fleet prune`. |
 | `error` | Comparing this repository failed; the note says why. | Fix it; every other repository is still shown. |
 
-The `~/.kiro` row (`g`) is your global configuration. Each central repository is refreshed
+The `~/.kiro` row (`g`, your global configuration) is left out by default: add `--global`
+to `fleet`, `fleet status`, `push` or `pull` for one run, set `fleet.include_global: true`
+to always show it, or name it with `--repo ~/.kiro`. Each central repository is refreshed
 once per run, not once per repository; `--no-refresh` uses the cached copy, and by default
 a copy younger than `fleet.refresh_max_age_seconds` (300) is reused. When the central
 repository cannot be reached the table says `offline` and shows the cached copy; pushes and

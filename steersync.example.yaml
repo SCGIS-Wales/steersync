@@ -61,6 +61,7 @@ fleet:                          # steersync fleet: every repository on the machi
   refresh_max_age_seconds: 300
   backup_keep_days: 14          # backups taken before a forced pull
   backup_max_bytes: 536870912
+  include_global: false         # the ~/.kiro row; --global includes it for one run
 
 sync:
   prune: true

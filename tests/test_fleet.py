@@ -17,7 +17,7 @@ from tests.conftest import STEERING, CentralCommit, by_name, make_project, seed
 
 
 def test_status_classifies_every_state(fleet_env: dict[str, Path], tmp_path: Path) -> None:
-    result = CliRunner().invoke(main, ["fleet", "status", "--json"])
+    result = CliRunner().invoke(main, ["fleet", "status", "--global", "--json"])
     assert result.exit_code == 0, result.output
     document = json.loads(result.stdout)
     rows = by_name(document, fleet_env)
@@ -39,6 +39,28 @@ def test_status_classifies_every_state(fleet_env: dict[str, Path], tmp_path: Pat
     order = [r["state"] for r in document["repositories"] if r["path"] != "~/.kiro"]
     assert order.index("diverged") < order.index("local-ahead") < order.index("in-sync")
     assert document["repositories"][-1]["path"] == "~/.kiro"
+
+
+def test_global_row_is_opt_in(fleet_env: dict[str, Path], config_file: Path) -> None:
+    def paths(*args: str) -> list[str]:
+        result = CliRunner().invoke(main, ["fleet", *args, "--json"])
+        assert result.exit_code == 0, result.output
+        return [r["path"] for r in json.loads(result.stdout)["repositories"]]
+
+    assert "~/.kiro" not in paths("status")
+    assert "~/.kiro" in paths("status", "--global")
+    assert "~/.kiro" in paths("--global", "status")  # on the group as well
+    config_file.write_text(config_file.read_text() + "\nfleet:\n  include_global: true\n")
+    assert "~/.kiro" in paths("status")
+    assert "~/.kiro" not in paths("status", "--no-global")
+
+
+def test_push_by_name_includes_the_global_row(fleet_env: dict[str, Path]) -> None:
+    result = CliRunner().invoke(main, ["fleet", "pull", "--repo", "~/.kiro", "--plan", "--json"])
+    assert result.exit_code == 0, result.output
+    assert [s["id"] for s in json.loads(result.stdout)["steps"]] == ["pull:~/.kiro"]
+    nothing = CliRunner().invoke(main, ["fleet", "pull", "--all", "--plan", "--json"])
+    assert all("~/.kiro" not in s["id"] for s in json.loads(nothing.stdout)["steps"])
 
 
 def test_status_table_and_filter(fleet_env: dict[str, Path]) -> None:

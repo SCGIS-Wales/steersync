@@ -154,3 +154,10 @@ def test_lint_json_and_sarif(in_project: Path) -> None:
     with_fix = [r for r in run["results"] if "fixes" in r]
     assert with_fix
     assert with_fix[0]["fixes"][0]["properties"]["safety"] == "safe"
+
+
+def test_plan_fleet_leaves_global_out_unless_named(fleet_env: dict[str, Path]) -> None:
+    everything = structured(call("plan_fleet", {"action": "pull", "states": ["central-ahead"]}))
+    assert all("~/.kiro" not in s["id"] for s in everything["steps"])
+    named = structured(call("plan_fleet", {"action": "pull", "repos": ["~/.kiro"]}))
+    assert [s["id"] for s in named["steps"]] == ["pull:~/.kiro"]

@@ -596,6 +596,9 @@ class FleetConfig(_Strict):
     refresh_max_age_seconds: int = Field(default=300, ge=0, le=86_400)
     backup_keep_days: int = Field(default=14, ge=1, le=3650)
     backup_max_bytes: int = Field(default=536_870_912, ge=1_048_576)
+    # The ~/.kiro (global) row in status, push and pull: off unless asked for, per run with
+    # --global or always here.
+    include_global: bool = False
 
 
 class HookConfig(_Strict):

@@ -8,6 +8,7 @@ needed, so other commands keep their start up time.
 import json
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -21,8 +22,37 @@ from steersync.logging_utils import configure_logging
 from steersync.paths import registry_path
 from steersync.retry import RetryEvent
 
+GLOBAL_KEY = "steersync.fleet.include_global"
+
+
+def _remember_global(ctx: click.Context, _param: click.Parameter, value: bool | None) -> None:
+    if value is not None:
+        ctx.find_root().meta[GLOBAL_KEY] = value
+
+
+def global_option[F: Callable[..., object]](func: F) -> F:
+    """``--global/--no-global``: the ``~/.kiro`` row (default ``fleet.include_global``, off)."""
+    return click.option(
+        "--global/--no-global",
+        "include_global",
+        default=None,
+        expose_value=False,
+        callback=_remember_global,
+        help="Include ~/.kiro (global) as well (default: fleet.include_global, off).",
+    )(func)
+
+
+def wants_global(*, forced: bool = False) -> bool | None:
+    """--global or --no-global when given (True when ``forced``), else None (configuration)."""
+    if forced:
+        return True
+    ctx = click.get_current_context(silent=True)
+    value = ctx.find_root().meta.get(GLOBAL_KEY) if ctx else None
+    return value if isinstance(value, bool) else None
+
 
 @click.group("fleet", invoke_without_command=True)
+@global_option
 @click.pass_context
 def fleet(ctx: click.Context) -> None:
     """Every repository set up for steersync on this machine: status, push and pull.
@@ -152,7 +182,14 @@ def _report(refresh: bool | None, *, show_progress: bool) -> fleet_core.FleetRep
     def retried(event: RetryEvent) -> None:
         click.echo(f"  {event.render()}", err=True)
 
-    return fleet_core.collect(entries, env, refresh=refresh, on_event=progress, on_retry=retried)
+    return fleet_core.collect(
+        entries,
+        env,
+        refresh=refresh,
+        include_global=wants_global(),
+        on_event=progress,
+        on_retry=retried,
+    )
 
 
 @fleet.command("status")
@@ -164,6 +201,7 @@ def _report(refresh: bool | None, *, show_progress: bool) -> fleet_core.FleetRep
     "fleet.refresh_max_age_seconds).",
 )
 @click.option("--state", "states", multiple=True, type=click.Choice(STATES), help="Only these.")
+@global_option
 def fleet_status(as_json: bool, refresh: bool | None, states: tuple[str, ...]) -> None:
     """Show what is pushed and what is not for every registered repository."""
     report = _report(refresh, show_progress=not as_json)
