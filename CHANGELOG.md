@@ -5,6 +5,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Removed
+
+- Support for Kiro V1 (Classic) and V2: steersync supports the Kiro V3 harness only (Kiro
+  CLI 3.1.0 or later, Kiro IDE 1.4.86 or later). The V2 reminders, the `acp.agentEngine`
+  check, `steersync v3-status`, the `kiro_v3_status` MCP tool, `steersync migrate-hooks`,
+  `kiro-hook --engine v2`, the `hook-trigger-alias`, `agent-v2-format` and
+  `agent-v2-tool-name` rules and the legacy hook warnings are gone.
+
+### Added
+
+- `steersync doctor --kiro [--json] [--strict]` and the `kiro_check` MCP tool check the
+  installation against the minimums in the new `kiro` configuration section
+  (`min_cli_version`, `min_ide_version`); `--strict` exits 10 below the baseline.
+- `agent-unknown-key` (error in JSON agents, warning in Markdown front matter) against
+  `lint.agent_fields`, and `agent-resource-budget` (warning) against `lint.kiro_limits`.
+
+### Changed (breaking)
+
+- `agent-legacy-key` is an error for keys V3 does not read (`lint.legacy_agent_keys`) and
+  names the V3 replacement and `/upgrade-agent`; what `/upgrade-agent` keeps next to
+  `permissions` is accepted.
+- Non V3 hook triggers are errors (`hook-trigger`), and `*.kiro.hook` files, `when`/`then`
+  keys and agent hooks keyed by trigger are `hook-legacy-file` errors.
+- `STEERSYNC_NO_V3_REMINDER` is now `STEERSYNC_NO_KIRO_CHECK`; the MCP `doctor_kiro_config`
+  report's `harness` field is now `kiro`.
+
 ## [0.9.0] - 2026-11-23
 
 ### Changed

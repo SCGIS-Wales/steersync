@@ -68,6 +68,10 @@ SHAPED = st.recursive(
 )
 
 
+FIELDS = Config().lint.agent_fields
+LEGACY = Config().lint.legacy_agent_keys
+
+
 @given(RELATIVE)
 def test_validated_paths_never_escape(relative: str) -> None:
     try:
@@ -144,7 +148,7 @@ def test_rules_never_raise_on_arbitrary_json(data: Any) -> None:
     kiro_rules.cli_settings_issues(data)
     kiro_rules.workflow_issues(data, "x.workflow.json")
     if isinstance(data, dict):
-        kiro_rules.agent_issues(data)
+        kiro_rules.agent_issues(data, fields=FIELDS, legacy_keys=LEGACY)
 
 
 @given(SHAPED)
@@ -154,7 +158,11 @@ def test_rules_never_raise_on_nearly_valid_shapes(data: Any) -> None:
         kiro_rules.hook_file_issues(wrapped),
         kiro_rules.workflow_issues({"name": "x", "steps": [data]}, "x.workflow.json"),
         kiro_rules.mcp_issues({"mcpServers": {"s": data}}),
-        kiro_rules.agent_issues({"permissions": data, "resources": data, "hooks": data}),
+        kiro_rules.agent_issues(
+            {"permissions": data, "resources": data, "hooks": data},
+            fields=FIELDS,
+            legacy_keys=LEGACY,
+        ),
     ):
         for issue in issues:
             assert issue.severity in {"error", "warning"}

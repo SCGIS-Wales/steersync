@@ -248,12 +248,10 @@ def test_lint_command(runner: CliRunner, in_project: Path) -> None:
 def test_kiro_hook_and_mcp_config(runner: CliRunner, in_project: Path) -> None:
     v3 = runner.invoke(main, ["kiro-hook"])
     assert json.loads(v3.output)["hooks"][0]["trigger"] == "SessionStart"
-    v2 = runner.invoke(main, ["kiro-hook", "--engine", "v2"])
-    assert "agentSpawn" in json.loads(v2.output)["hooks"]
+    assert runner.invoke(main, ["kiro-hook", "--engine", "v2"]).exit_code == 2  # V3 only
     written = runner.invoke(main, ["kiro-hook", "--write"])
     assert written.exit_code == 0
     assert (in_project / ".kiro" / "hooks" / "steersync.json").exists()
-    assert runner.invoke(main, ["kiro-hook", "--engine", "v2", "--write"]).exit_code == 1
     mcp = runner.invoke(
         main, ["mcp-config", "--remote", "git@h:a/b.git", "--command", "/usr/local/bin/uvx"]
     )

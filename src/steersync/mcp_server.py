@@ -77,8 +77,9 @@ advice from the Kiro documentation.
 remote, token, directories and the Kiro CLI harness. Read only.
 - fleet_status: "which of my repositories have unpushed or unpulled Kiro changes". Read \
 only; covers every repository set up for steersync on this machine.
-- kiro_v3_status: "am I on Kiro CLI V3 / do my agents need upgrading". Read only; never \
-starts a chat, so it costs no Kiro credits.
+- kiro_check: "is my Kiro supported / do my agents need upgrading": kiro-cli version, \
+agent engine and agent files against the V3 baseline. Read only; never starts a chat, so it \
+costs no Kiro credits.
 Results are structured JSON. A failed call is returned as an error result whose text the \
 user should see verbatim.
 """
@@ -300,14 +301,14 @@ async def fleet_status(
     return await _run(functools.partial(mcp_tools.fleet_status, refresh))
 
 
-async def kiro_v3_status(cwd: Cwd = None) -> mcp_tools.HarnessReport:
-    """Report whether kiro-cli runs the V3 agent harness and which agents are not V3 ready.
+async def kiro_check(cwd: Cwd = None) -> mcp_tools.KiroReport:
+    """Check the Kiro installation against the supported V3 baseline.
 
-    Use for "am I on Kiro V3", "do my agents need upgrading", "why does Kiro rewrite my
-    agent". Runs only `kiro-cli --version` and `kiro-cli settings`; never starts a chat.
-    "message" holds the reminder to show the user when "needs_reminder" is true.
+    Use for "is my Kiro supported", "do my agents need upgrading", "why does Kiro rewrite
+    my agent". Runs only `kiro-cli --version` and `kiro-cli settings`; never starts a chat.
+    When "supported" is false, show "message" to the user.
     """
-    return await _run(functools.partial(mcp_tools.v3_status, cwd))
+    return await _run(functools.partial(mcp_tools.kiro_check, cwd))
 
 
 class ToolSpec(NamedTuple):
@@ -337,9 +338,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     ),
     "doctor_kiro_config": ToolSpec(doctor_kiro_config, "Check steersync setup", read_only=True),
     "fleet_status": ToolSpec(fleet_status, "Fleet status", read_only=True),
-    "kiro_v3_status": ToolSpec(
-        kiro_v3_status, "Kiro CLI V3 status", read_only=True, open_world=False
-    ),
+    "kiro_check": ToolSpec(kiro_check, "Kiro check", read_only=True, open_world=False),
 }
 READ_ONLY_TOOLS: tuple[str, ...] = tuple(n for n, s in TOOL_SPECS.items() if s.read_only)
 # The tool list and server description never change while the server runs and do not

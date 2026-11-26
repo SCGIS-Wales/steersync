@@ -20,7 +20,7 @@ def pulled(
 ) -> Path:
     monkeypatch.chdir(project)
     monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
-    monkeypatch.setenv("STEERSYNC_NO_V3_REMINDER", "1")
+    monkeypatch.setenv("STEERSYNC_NO_KIRO_CHECK", "1")
     assert CliRunner().invoke(main, ["pull", "--no-global"]).exit_code == 0
     return project
 

@@ -27,14 +27,14 @@
     },
     {
       "path": "bad.json",
-      "rule": "hook-trigger-alias",
-      "severity": "warning",
+      "rule": "hook-trigger",
+      "severity": "error",
       "line": null
     },
     {
       "path": "fmt.kiro.hook",
-      "rule": "hook-legacy-format",
-      "severity": "warning",
+      "rule": "hook-legacy-file",
+      "severity": "error",
       "line": null
     }
   ]

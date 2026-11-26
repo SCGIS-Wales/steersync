@@ -139,8 +139,8 @@ for what each state means and how overwrites are protected.
 Kiro has no built in command to import or sync its configuration from a remote repository;
 its guidance is to copy files from a central repository into `~/.kiro/` and `.kiro/`.
 steersync automates that in both directions for every *collection* it is configured with.
-It targets Kiro IDE 1.5 and Kiro CLI 3.5 with the V3 agent harness, and reminds you when a
-machine is still on V2. It is a plain Python CLI that shells out to the `git` binary, so your
+It supports Kiro V3 only: Kiro CLI 3.1.0 or later with the V3 agent harness, and Kiro IDE
+1.4.86 or later (see [Supported Kiro versions](https://github.com/SCGIS-Wales/steersync#supported-kiro-versions)). It is a plain Python CLI that shells out to the `git` binary, so your
 SSH agent or credential helper does the authentication; the MCP server and Kiro hooks are
 optional layers on the same core.
 
@@ -246,10 +246,11 @@ steersync status     # what would be proposed: one "+" line per file
 
 The project slug decides where the project lives centrally (`projects/acme/svc/`). It comes
 from the `origin` URL you configured, including subgroups, and is not affected by
-`insteadOf` rewrites. Fix lint errors when you can (only secrets stop a push): `steersync migrate-hooks
---write` converts old `*.kiro.hook` files, and `kiro-cli agent upgrade .kiro/agents`
-rewrites CLI 2.x agents in place into the universal format that Kiro CLI 2 and 3 both load
-(it keeps each original as `<name>.json.bak`, which steersync never syncs).
+`insteadOf` rewrites. Fix lint errors when you can (only secrets stop a push). An agent with
+keys V3 does not read (`agent-legacy-key`) is fixed by opening it in Kiro and running
+`/upgrade-agent`, then committing the result; a legacy `*.kiro.hook` file
+(`hook-legacy-file`) is rewritten by hand as `.kiro/hooks/<id>.json` (the error shows the
+fields).
 
 ### 5. Set up each further project
 
@@ -436,8 +437,7 @@ it covers every repository; teams that prefer to commit the pieces into each pro
 Kiro then loads what it finds: always on steering in every session, `fileMatch`, `manual`
 and `auto` steering on CLI V3, skills on demand, prompts as slash commands, hooks and
 settings. `steersync lint` warns (`autoload-hook-missing`, `autoload-mcp-missing`) when a
-repository lacks either piece. On CLI 2.x, where standalone hooks do not exist, paste
-`steersync kiro-hook --engine v2` into the custom agent's `hooks` block.
+repository lacks either piece.
 
 ## Central repository layout
 
@@ -476,9 +476,7 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 | `steersync mr [--branch NAME] [--title T] [-c NAME] [--json]` | Open, or find, the GitLab merge request for the pushed proposal branch. Needs the token in `GITLAB_TOKEN` (configurable). |
 | `steersync init [--write-config] [--hook] [--no-exclude] [--kiro] [--mcp-command PATH]` | Prepare a repository: excludes and git hook; `--kiro` also writes the Kiro session hook and MCP server entry into its `.kiro`. |
 | `steersync install-hook [--force]` | Install or update the chaining pre-push hook. |
-| `steersync kiro-hook [--engine v2\|v3] [--write]` | Render a Kiro hook that runs `steersync pull --quiet` at session start. |
-| `steersync migrate-hooks [--write]` | Convert `*.kiro.hook` files and CLI 2.x inline agent hooks into `.kiro/hooks/*.json`. Dry run by default; never overwrites or deletes. |
-| `steersync v3-status [--json] [--strict]` | Report the kiro-cli version, `chat.agentEngine` and agents still in the V2 format. `--strict` exits 10 when a reminder applies. |
+| `steersync kiro-hook [--write]` | Render the Kiro V3 hook that runs `steersync pull --quiet` at session start. |
 | `steersync mcp-config [--command uvx] [--remote URL]` | Render an `mcp.json` fragment. |
 | `steersync mcp` (or `steersync-mcp`) | Run the MCP stdio server. |
 | `steersync config show\|validate\|default\|collections` | Inspect configuration and the resolved collection directories. |
@@ -507,7 +505,7 @@ Global options: `--config PATH`, `--log-level`, `--log-format text|json`, `--qui
 | 7 | Central content exceeds the safety limits. |
 | 8 | Timed out waiting for another steersync process. |
 | 9 | GitLab API error or missing token. |
-| 10 | `v3-status --strict`: a Kiro V3 reminder applies. |
+| 10 | `doctor --kiro --strict`: the machine or its agents are below the supported V3 baseline. |
 | 130 | Interrupted (Ctrl-C); a `fleet` summary still lists what completed. |
 
 ## Configuration
@@ -699,7 +697,7 @@ Each collection runs one lint profile: `steering`, `agent`, `hooks`, `skill`, `s
 Kiro cannot read or would rewrite (front matter after a blank line, an unknown inclusion
 mode, invalid JSON, a `SKILL.md` without `name` and `description`, a hook without
 `version: "v1"`, a workflow `repeat` without `maxIterations`, an unknown sandbox
-`networkAccess`, a V2 format agent) or secrets, including literal tokens in `mcp.json`
+`networkAccess`, an agent key V3 does not read, a legacy hook file) or secrets, including literal tokens in `mcp.json`
 `env`, `headers` and `oauth.clientSecret`. Only secrets stop a push; every other error is
 printed and the files are synced as they are. **Warnings** are best practices from
 the Kiro documentation, reported objectively and never blocking: a steering file with a
@@ -720,20 +718,27 @@ in a repository) with a `SessionStart` trigger that runs
 `steersync pull --quiet --best-effort` through
 `uvx --quiet --python ">=3.14" --from "steersync==<version>"`, so it never depends on which
 `steersync` comes first on Kiro's `PATH`. Run `steersync setup --yes` again after upgrading
-to move the pin. For CLI 2.x agents paste the output of
-`steersync kiro-hook --engine v2` into the agent's `hooks` block. Field reports say Kiro hooks
+to move the pin. Field reports say Kiro hooks
 fire only in headless runs or with a custom agent active, so treat them as a convenience and
 keep the git hook as the dependable trigger.
 
-**Kiro CLI V3.** Kiro CLI 3.0.0 made V3 the default agent harness; V2 still runs but gets no
-new features. `steersync doctor`, `steersync v3-status`, the `kiro_v3_status` MCP tool and
-the session hook (at most once a day) check `kiro-cli --version`, `chat.agentEngine`,
-`acp.agentEngine` (the harness `kiro-cli acp` starts for editor integrations) and your agent
-files. When a reminder applies, run `kiro-cli settings chat.agentEngine v3`, start
-`kiro-cli` and run `/upgrade-agent`; for a shared agent directory run
-`kiro-cli agent upgrade <dir>`. See <https://kiro.dev/docs/cli/v3/>. The probes never start a
-chat, so they use no Kiro credits, and a reminder never fails a sync. Set
-`STEERSYNC_NO_V3_REMINDER=1` to silence the session hook reminder.
+### Supported Kiro versions
+
+steersync supports Kiro V3 only: Kiro CLI `kiro.min_cli_version` (3.1.0) or later running the
+V3 agent harness, and Kiro IDE `kiro.min_ide_version` (1.4.86) or later, which reads the same
+schema. Both minimums are configuration, not code. `steersync doctor --kiro` (add `--json`
+for machines, `--strict` to exit 10), the `kiro_check` MCP tool and the session hook (at most
+once a day) check `kiro-cli --version`, `chat.agentEngine` and your agent files:
+
+- kiro-cli below the minimum, or any engine other than V3: upgrade kiro-cli and run
+  `kiro-cli settings chat.agentEngine v3`.
+- Agent files with keys V3 does not read (`allowedTools` or `toolsSettings` without
+  `permissions`, `toolAliases`, `keyboardShortcut`): open the agent in Kiro, run
+  `/upgrade-agent` and commit the result. The keys `/upgrade-agent` keeps next to
+  `permissions` (and its `kiroUpgrade` block) are accepted.
+
+The probes never start a chat, so they use no Kiro credits, and the check never fails a
+sync. Set `STEERSYNC_NO_KIRO_CHECK=1` to silence the session hook notice.
 
 **MCP server.** `steersync setup` registers the server in `~/.kiro/settings/mcp.json`
 (`steersync init --kiro` in a repository's `.kiro/settings/mcp.json`)
@@ -758,7 +763,7 @@ which request, so plain sentences work:
 | "validate / lint / check the kiro config, agents, hooks, skills" | `validate_kiro_config` |
 | "what is synced and where" | `list_kiro_collections` |
 | "is steersync set up", "why does the sync fail" | `doctor_kiro_config` |
-| "am I on Kiro V3", "do my agents need upgrading" | `kiro_v3_status` |
+| "is my Kiro supported", "do my agents need upgrading" | `kiro_check` |
 | "which repos have unpushed kiro changes", "fleet status" | `fleet_status` (read only) |
 
 Every tool accepts a `collections` list. Kiro does not pass the shell's `PATH`,
@@ -769,8 +774,7 @@ if `uvx` is not on Kiro's path.
 **Custom agents.** On Kiro CLI V3 custom agents inherit steering, skills and `AGENTS.md` by
 default, so list only the always on steering files in `resources` and reference skills with
 `skill://.kiro/skills/*/SKILL.md`. A `file://.kiro/steering/**/*.md` glob loads every document
-at startup and defeats the `fileMatch`, `manual` and `auto` inclusion modes. On CLI 2.x list
-the documents you need explicitly.
+at startup and defeats the `fileMatch`, `manual` and `auto` inclusion modes.
 
 ## Verifying a release
 

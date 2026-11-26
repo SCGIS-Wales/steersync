@@ -3,14 +3,20 @@
   "findings": [
     {
       "path": "legacy.json",
-      "rule": "agent-inline-hooks",
-      "severity": "warning",
+      "rule": "agent-legacy-key",
+      "severity": "error",
       "line": null
     },
     {
       "path": "legacy.json",
       "rule": "agent-legacy-key",
-      "severity": "warning",
+      "severity": "error",
+      "line": null
+    },
+    {
+      "path": "legacy.json",
+      "rule": "agent-legacy-key",
+      "severity": "error",
       "line": null
     },
     {
@@ -21,20 +27,8 @@
     },
     {
       "path": "legacy.json",
-      "rule": "agent-v2-format",
+      "rule": "hook-legacy-file",
       "severity": "error",
-      "line": null
-    },
-    {
-      "path": "legacy.json",
-      "rule": "agent-v2-tool-name",
-      "severity": "warning",
-      "line": null
-    },
-    {
-      "path": "legacy.json",
-      "rule": "hook-trigger-alias",
-      "severity": "warning",
       "line": null
     },
     {

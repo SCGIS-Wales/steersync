@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import click
 
-from steersync import __version__, gitlab, gitops, hooks, kiro_version, migrate, registry, sync
+from steersync import __version__, gitlab, gitops, hooks, kiro_version, registry, sync
 from steersync import setup as setup_steps
 from steersync.cli_common import (
     _bootstrap,
@@ -128,7 +128,7 @@ def pull(
     registry.register(os.environ, root, "command")
     if best_effort:
         config = _hook_budget(config)
-        _maybe_remind_v3(config, root)
+        _maybe_check_kiro(config, root)
     try:
         result = sync.pull(
             config,
@@ -301,17 +301,17 @@ def _agent_dirs(config: Config, root: Path | None) -> list[Path]:
     return [root / agents.workspace_path]
 
 
-def _maybe_remind_v3(config: Config, root: Path | None) -> None:
-    """From the SessionStart hook: remind about the V3 harness at most once a day."""
+def _maybe_check_kiro(config: Config, root: Path | None) -> None:
+    """From the SessionStart hook: report a Kiro below the V3 baseline at most once a day."""
     env = os.environ
     try:
-        if not kiro_version.reminder_due(cache_root(config, env), env):
+        if not kiro_version.check_due(cache_root(config, env), env):
             return
-        status = kiro_version.detect_harness(env, agent_dirs=_agent_dirs(config, root))
+        status = _kiro_status(config, root)
     except OSError:
         return
-    if status.needs_reminder:
-        click.echo(f"steersync: {kiro_version.reminder_text(status)}", err=True)
+    if not status.supported:
+        click.echo(f"steersync: {kiro_version.problem_text(status)}", err=True)
 
 
 def _soft_failure(exc: Exception, *, soft: bool, label: str) -> None:
@@ -939,24 +939,15 @@ def _setup_summary(root: Path, env: Mapping[str, str]) -> None:
 
 
 @main.command("kiro-hook")
-@click.option("--engine", type=click.Choice(["v2", "v3"]), default="v3", show_default=True)
-@click.option("--write", is_flag=True, help="Write the v3 hook to .kiro/hooks/steersync.json.")
+@click.option("--write", is_flag=True, help="Write the hook to .kiro/hooks/steersync.json.")
 @click.pass_context
-def kiro_hook(ctx: click.Context, engine: str, write: bool) -> None:
+def kiro_hook(ctx: click.Context, write: bool) -> None:
     """Print (or write) a Kiro hook that runs `steersync pull` when a session starts."""
-    rendered = hooks.render_kiro_hook("v2" if engine == "v2" else "v3")
+    rendered = hooks.render_kiro_hook()
     if write:
         _, root = _bootstrap(ctx)
         if root is None:
             _fail(SteersyncError("not inside a git repository"))
-            return
-        if engine != "v3":
-            _fail(
-                SteersyncError(
-                    "only v3 standalone hooks can be written; "
-                    "paste the v2 JSON into your agent file"
-                )
-            )
             return
         target = root / ".kiro" / "hooks" / "steersync.json"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1046,89 +1037,36 @@ def mcp() -> None:
         _fail(exc)
 
 
-@main.command("v3-status")
-@click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
-@click.option("--strict", is_flag=True, help="Exit 10 when a V3 reminder applies.")
-@click.pass_context
-def v3_status(ctx: click.Context, as_json: bool, strict: bool) -> None:
-    """Check whether kiro-cli runs the V3 agent harness and your agents are V3 ready.
-
-    Runs `kiro-cli --version` and `kiro-cli settings` only; no chat session is
-    started, so no Kiro credits are used.
-    """
-    config, root = _bootstrap(ctx)
-    status = kiro_version.detect_harness(os.environ, agent_dirs=_agent_dirs(config, root))
-    if as_json:
-        click.echo(json.dumps(status.to_dict(), indent=2))
-    else:
-        for line in _harness_lines(status):
-            click.echo(line)
-        if status.needs_reminder:
-            click.echo(kiro_version.reminder_text(status), err=True)
-    if strict and status.needs_reminder:
-        sys.exit(10)
+def _kiro_status(config: Config, root: Path | None) -> kiro_version.KiroStatus:
+    return kiro_version.detect(
+        os.environ,
+        min_cli_version=config.kiro.min_cli_version,
+        min_ide_version=config.kiro.min_ide_version,
+        legacy_keys=config.lint.legacy_agent_keys,
+        upgraded_keys=config.lint.upgraded_agent_keys,
+        agent_dirs=_agent_dirs(config, root),
+    )
 
 
-def _harness_lines(status: kiro_version.HarnessStatus) -> list[str]:
+def _kiro_lines(status: kiro_version.KiroStatus) -> list[str]:
     if status.cli_path is None:
-        cli = "kiro-cli: not found (Kiro IDE only; nothing to switch)"
+        cli = "kiro-cli: not found (Kiro IDE only)"
     else:
         cli = f"kiro-cli: {status.cli_version or 'unknown version'} ({status.cli_path})"
     engine = status.engine or ("v3 (default)" if status.engine_source == "default" else "unknown")
-    lines = [cli, f"agent engine: {engine} [{status.engine_source}]"]
-    if status.acp_engine is not None:
-        lines.append(f"acp engine: {status.acp_engine}")
-    if status.auto_upgrade is not None:
-        lines.append(f"automatic agent upgrade: {'on' if status.auto_upgrade else 'off'}")
+    lines = [
+        cli,
+        f"agent engine: {engine} [{status.engine_source}]",
+        f"supported: Kiro CLI {status.min_cli_version}+ (V3), Kiro IDE {status.min_ide_version}+",
+    ]
     if status.cli_path is not None and status.workflows_enabled is not True:
         lines.append(
             "workflows: off (chat.enableWorkflows); synced recipes load after "
             "`kiro-cli settings chat.enableWorkflows true`"
         )
-    lines.extend(f"V2 format agent: {path}" for path in status.v2_agents)
-    lines.append("V3 harness: yes" if status.on_v3 else "V3 harness: no")
+    lines.extend(f"legacy agent: {path}" for path in status.legacy_agents)
+    lines.append("kiro: supported" if status.supported else "kiro: below the supported baseline")
     return lines
-
-
-@main.command("migrate-hooks")
-@click.option("--write", is_flag=True, help="Write the hook files (default: dry run).")
-@click.pass_context
-def migrate_hooks(ctx: click.Context, write: bool) -> None:
-    """Convert *.kiro.hook files and 2.x inline agent hooks into .kiro/hooks/*.json.
-
-    Dry run by default. Existing hook files are never overwritten and the sources
-    are left in place for you to delete after review.
-    """
-    config, root = _bootstrap(ctx)
-    if root is None:
-        _fail(SteersyncError("not inside a git repository"))
-        return
-    plans = migrate.plan_migrations(
-        root,
-        hooks_dir=_collection_path(config, "hooks") or ".kiro/hooks",
-        agents_dir=_collection_path(config, "agents") or ".kiro/agents",
-    )
-    if not plans:
-        click.echo("no legacy hooks found")
-        return
-    outcomes = (
-        migrate.apply_migrations(plans) if write else [(plan, "would write") for plan in plans]
-    )
-    for plan, outcome in outcomes:
-        source = plan.source.relative_to(root).as_posix()
-        target = plan.target.relative_to(root).as_posix()
-        if plan.hooks and outcome != "skipped":
-            click.echo(f"{outcome}: {target} ({len(plan.hooks)} hook(s) from {source})")
-            if plan.from_agent:
-                click.echo(
-                    "  note: standalone hooks apply to every agent, not only "
-                    f"{plan.source.stem}; review the matchers",
-                    err=True,
-                )
-        for reason in plan.skipped:
-            click.echo(f"skipped: {reason}", err=True)
-    if not write:
-        click.echo("dry run; rerun with --write to create the files")
 
 
 @main.group()
@@ -1212,11 +1150,31 @@ def config_collections(ctx: click.Context, as_json: bool) -> None:
 
 
 @main.command()
+@click.option("--kiro", "kiro_only", is_flag=True, help="Only check the Kiro installation.")
+@click.option("--strict", is_flag=True, help="With --kiro: exit 10 below the V3 baseline.")
+@click.option("--json", "as_json", is_flag=True, help="With --kiro: machine readable output.")
 @click.pass_context
-def doctor(ctx: click.Context) -> None:
-    """Check git, configuration and directories."""
+def doctor(ctx: click.Context, kiro_only: bool, strict: bool, as_json: bool) -> None:
+    """Check git, configuration and directories, and the Kiro installation.
+
+    `--kiro` runs only the Kiro check: kiro-cli version, chat.agentEngine and agent files
+    against the supported V3 baseline (kiro.min_cli_version). It runs `kiro-cli --version`
+    and `kiro-cli settings` only, so it never starts a chat or uses Kiro credits.
+    """
     config, root = _bootstrap(ctx)
     env = os.environ
+    if kiro_only:
+        status = _kiro_status(config, root)
+        if as_json:
+            click.echo(json.dumps(status.to_dict(), indent=2))
+        else:
+            for line in _kiro_lines(status):
+                click.echo(line)
+            if not status.supported:
+                click.echo(kiro_version.problem_text(status), err=True)
+        if strict and not status.supported:
+            sys.exit(10)
+        return
     try:
         click.echo(f"git: {gitops.git_version(config)}")
     except SteersyncError as exc:
@@ -1243,11 +1201,11 @@ def doctor(ctx: click.Context) -> None:
             click.echo(f"project slug: {gitops.project_slug(origin)}")
     else:
         click.echo("workspace: not inside a git repository")
-    status = kiro_version.detect_harness(env, agent_dirs=_agent_dirs(config, root))
-    for line in _harness_lines(status):
+    status = _kiro_status(config, root)
+    for line in _kiro_lines(status):
         click.echo(line)
-    if status.needs_reminder:
-        click.echo(kiro_version.reminder_text(status), err=True)
+    if not status.supported:
+        click.echo(kiro_version.problem_text(status), err=True)
 
 
 def run() -> None:

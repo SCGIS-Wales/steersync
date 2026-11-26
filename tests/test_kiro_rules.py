@@ -16,6 +16,19 @@ def rules_of(issues: list[kiro_rules.Issue]) -> set[str]:
     return {issue.rule for issue in issues}
 
 
+DEFAULTS = Config().lint
+
+
+def agent(data: dict[str, Any], *, markdown: bool = False) -> list[kiro_rules.Issue]:
+    return kiro_rules.agent_issues(
+        data,
+        fields=DEFAULTS.agent_fields,
+        legacy_keys=DEFAULTS.legacy_agent_keys,
+        upgraded_keys=DEFAULTS.upgraded_agent_keys,
+        markdown=markdown,
+    )
+
+
 def lint_rules(config: Config, path: str, profile: str, content: str | dict[str, Any]) -> set[str]:
     text = content if isinstance(content, str) else json.dumps(content)
     doc = document_from_bytes(path, text.encode())
@@ -55,7 +68,8 @@ def test_hook_file_requires_v1_and_valid_entries() -> None:
         ({"timeout": True}, "hook-timeout-value"),
         ({"enabled": "yes"}, "hook-schema"),
         ({"trigger": 3}, "hook-schema"),
-        ({"trigger": "agentSpawn"}, "hook-trigger-alias"),
+        ({"trigger": "agentSpawn"}, "hook-trigger"),
+        ({"when": {"type": "fileEdited"}}, "hook-legacy-file"),
         ({"trigger": "OnSave"}, "hook-trigger"),
         ({"matcher": "use_aws", "trigger": "PreToolUse"}, "hook-use-aws"),
         ({"trigger": "PreToolUse", "confirm": {"question": "ok?"}}, "hook-confirm"),
@@ -84,11 +98,29 @@ def test_hook_entry_accepts_current_triggers_and_confirm() -> None:
 # --- agents --------------------------------------------------------------------
 
 
-def test_agent_v2_and_universal_formats() -> None:
-    v2 = {"name": "a", "allowedTools": ["read"], "toolsSettings": {}}
-    assert "agent-v2-format" in rules_of(kiro_rules.agent_issues(v2))
-    universal = {**v2, "permissions": {"rules": [{"capability": "fs_read", "effect": "allow"}]}}
-    assert kiro_rules.agent_issues(universal) == []
+def test_legacy_keys_are_errors_naming_the_v3_replacement() -> None:
+    legacy = {"name": "a", "allowedTools": ["read"], "toolsSettings": {}}
+    issues = agent(legacy)
+    assert {(i.rule, i.severity) for i in issues} == {("agent-legacy-key", "error")}
+    message = " ".join(i.message for i in issues)
+    assert "use permissions instead" in message
+    assert "/upgrade-agent" in message
+    assert "commit the result" in message
+    rules = {"rules": [{"capability": "fs_read", "effect": "allow"}]}
+    assert agent({"name": "a", "permissions": rules}) == []
+    # /upgrade-agent keeps allowedTools and toolsSettings next to permissions.
+    assert agent({**legacy, "permissions": rules, "kiroUpgrade": {"revision": 2}}) == []
+    still = agent({**legacy, "toolAliases": {}, "permissions": rules})
+    assert [i.message.split(" ")[0] for i in still] == ["toolAliases"]
+
+
+def test_unknown_agent_key_is_an_error_in_json_and_a_warning_in_markdown() -> None:
+    data = {"name": "a", "colour": "blue", "welcomeMessage": "hi", "includePowers": True}
+    (issue,) = agent(data)
+    assert (issue.rule, issue.severity) == ("agent-unknown-key", "error")
+    assert "'colour'" in issue.message
+    (warning,) = agent(data, markdown=True)
+    assert warning.severity == "warning"
 
 
 def test_agent_legacy_tools_permissions_and_resources() -> None:
@@ -118,9 +150,8 @@ def test_agent_legacy_tools_permissions_and_resources() -> None:
             "bad",
         ],
     }
-    found = rules_of(kiro_rules.agent_issues(data))
+    found = rules_of(agent(data))
     assert {
-        "agent-v2-tool-name",
         "agent-use-aws",
         "agent-legacy-key",
         "agent-permission-capability",
@@ -128,19 +159,19 @@ def test_agent_legacy_tools_permissions_and_resources() -> None:
         "agent-machine-path",
         "agent-resource-scheme",
         "agent-knowledge-base",
-        "hook-trigger-alias",
+        "hook-trigger",
         "hook-action",
         "hook-schema",
     } <= found
-    assert "agent-permissions" in rules_of(kiro_rules.agent_issues({"permissions": []}))
-    legacy = rules_of(kiro_rules.agent_issues({"hooks": {"agentSpawn": [], "Stop": []}}))
-    assert legacy == {"hook-trigger-alias"}
+    assert "agent-permissions" in rules_of(agent({"permissions": []}))
+    legacy = rules_of(agent({"hooks": {"agentSpawn": [], "Stop": []}}))
+    assert legacy == {"hook-legacy-file"}
 
 
 def test_agent_profile_checks_markdown_front_matter(config: Config) -> None:
     md = "---\nname: r\nallowedTools: [read]\n---\nYou review.\n"
-    assert "agent-v2-format" in lint_rules(config, "r.md", "agent", md)
-    assert "agent-v2-format" not in lint_rules(config, "prompts/r.md", "agent", md)
+    assert "agent-legacy-key" in lint_rules(config, "r.md", "agent", md)
+    assert "agent-legacy-key" not in lint_rules(config, "prompts/r.md", "agent", md)
 
 
 def test_real_upgraded_agent_is_clean(config: Config) -> None:
@@ -345,11 +376,11 @@ def test_enums_match_kiro_cli_3_5() -> None:
     """Values checked against the Kiro docs and the harness bundled with Kiro CLI 3.5."""
     evaluate = {"capability": "workflow", "effect": "evaluate"}
     sessions = {"capability": "sessions", "effect": "allow"}
-    assert kiro_rules.agent_issues({"permissions": {"rules": [evaluate, sessions]}}) == []
-    for alias, canonical in (("fileEdited", "PostFileSave"), ("AfterFileEdit", "PostFileSave")):
-        issues = kiro_rules.hook_entry_issues(hook(trigger=alias), "h", standalone=True)
-        assert [i.rule for i in issues] == ["hook-trigger-alias"]
-        assert canonical in issues[0].message
+    assert agent({"permissions": {"rules": [evaluate, sessions]}}) == []
+    for legacy in ("fileEdited", "AfterFileEdit", "agentSpawn"):
+        issues = kiro_rules.hook_entry_issues(hook(trigger=legacy), "h", standalone=True)
+        assert [(i.rule, i.severity) for i in issues] == [("hook-trigger", "error")]
+        assert "PostFileSave" in issues[0].message
     for key in ("acp.agentEngine", "auth.portalUrl", "chat.uiMode", "chat.terminalTitle"):
         assert rules_of(kiro_rules.cli_settings_issues({key: "x"})) == {"cli-settings-global-only"}
 
@@ -360,3 +391,50 @@ def test_workflow_limits_count_step_nodes_only() -> None:
     steps = [{"type": "step", "id": f"s{i}", "agent": "a", "prompt": "p"} for i in range(51)]
     (issue,) = kiro_rules.workflow_issues(recipe(name="s", steps=steps), "s.workflow.json")
     assert (issue.rule, issue.severity) == ("workflow-size", "error")
+
+
+def test_no_v1_or_v2_support_remains() -> None:
+    """Only the MCP SDK's own version and the V3 hook schema value "v1" may appear."""
+    import re
+    from pathlib import Path
+
+    import steersync
+
+    pattern = re.compile(r"v2|V2|Classic|\bV1\b|2\.x")
+    allowed = ("SDK v2",)
+    found = [
+        f"{path.name}:{number}: {line.strip()}"
+        for path in Path(steersync.__file__).parent.rglob("*.py")
+        for number, line in enumerate(path.read_text("utf-8").splitlines(), start=1)
+        if pattern.search(line) and not any(a in line for a in allowed)
+    ]
+    assert found == []
+
+
+def test_agent_resource_budget(config: Config, tmp_path: Any) -> None:
+    steering = tmp_path / ".kiro" / "steering"
+    steering.mkdir(parents=True)
+    limits = config.lint.kiro_limits
+    for index in range(limits.agent_file_resources_max + 1):
+        (steering / f"s{index:02d}.md").write_text("# S\n")
+    (steering / "big.md").write_text("x" * (limits.file_chars_truncate + 1))
+    (steering / "big2.md").write_text("x" * (limits.file_chars_truncate + 1))  # over the total
+    (tmp_path / "huge.bin").write_bytes(b"x" * (limits.file_bytes_skip + 1))
+    data = {"name": "a", "resources": ["file://.kiro/steering/*.md", "file://huge.bin"]}
+    doc = document_from_bytes("a.json", json.dumps(data).encode())
+    found = [
+        f
+        for f in lint_document(doc, config.lint, profile="agent", workspace_root=tmp_path)
+        if f.rule == "agent-resource-budget"
+    ]
+    messages = " | ".join(f.message for f in found)
+    assert {f.severity for f in found} == {"warning"}
+    assert f"Kiro loads at most {limits.agent_file_resources_max}" in messages
+    assert "big.md has" in messages
+    assert "huge.bin is" in messages
+    assert "total" in messages
+    assert not [
+        f
+        for f in lint_document(doc, config.lint, profile="agent")
+        if f.rule == "agent-resource-budget"
+    ]

@@ -104,9 +104,8 @@ def test_agent_practices(config: Config, tmp_path: Path) -> None:
         "agent-steering-glob",
         "agent-source-glob",
         "agent-prompt-file-missing",
-        "agent-hooks-object-form",
-        "agent-inline-hooks",
-        "agent-v2-format",
+        "hook-legacy-file",
+        "agent-legacy-key",
     } <= found
     markdown = "---\nname: reviewer\ntools: ['*']\n---\nYou review code.\n"
     assert "agent-tools-wildcard" in rules(config, "reviewer.md", "agent", markdown)
@@ -128,11 +127,10 @@ def test_hook_practices(config: Config) -> None:
         ],
     }
     found = rules(config, "h.json", "hooks", json.dumps(hooks))
-    assert {"hook-timeout", "hook-matcher-ignored", "hook-when-then"} <= found
+    assert {"hook-timeout", "hook-matcher-ignored", "hook-legacy-file"} <= found
     legacy = rules(config, "fmt.kiro.hook", "hooks", json.dumps({"name": "fmt", "when": {}}))
-    assert "hook-legacy-format" in legacy
-    assert "hook-schema" not in legacy
-    assert "json-syntax" in rules(config, "broken.kiro.hook", "hooks", "{")
+    assert legacy == {"hook-legacy-file"}
+    assert rules(config, "broken.kiro.hook", "hooks", "{") == {"hook-legacy-file"}
 
 
 def test_skill_practices(config: Config) -> None:

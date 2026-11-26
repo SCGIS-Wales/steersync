@@ -114,6 +114,43 @@ class PracticeLimitsConfig(_Strict):
     prompt_name_max_chars: int = Field(default=50, ge=1)
 
 
+class KiroLimitsConfig(_Strict):
+    """Documented Kiro limits for file:// agent resources (Kiro CLI 3.1)."""
+
+    agent_file_resources_max: int = Field(default=32, ge=1)
+    agent_file_resources_chars: int = Field(default=100_000, ge=1)
+    file_chars_truncate: int = Field(default=50_000, ge=1)
+    file_bytes_skip: int = Field(default=1_048_576, ge=1)
+
+
+# Top level keys of a Kiro V3 agent (IDE 1.x and CLI 3.x schema).
+_V3_AGENT_FIELDS: tuple[str, ...] = (
+    "name",
+    "description",
+    "prompt",
+    "model",
+    "tools",
+    "excludedTools",
+    "permissions",
+    "resources",
+    "mcpServers",
+    "hooks",
+    "includeMcpJson",
+    "includePowers",
+    "welcomeMessage",
+)
+# Keys `/upgrade-agent` (Kiro CLI 3.5) writes next to "permissions" in an upgraded agent:
+# accepted there, legacy only in an agent that has no "permissions".
+_UPGRADED_AGENT_KEYS: tuple[str, ...] = ("allowedTools", "toolsSettings", "kiroUpgrade")
+# Keys V3 no longer reads, and what replaces each.
+_LEGACY_AGENT_KEYS: dict[str, str] = {
+    "allowedTools": "permissions",
+    "toolsSettings": "permissions",
+    "toolAliases": "tools and excludedTools",
+    "keyboardShortcut": "nothing (removed in V3)",
+}
+
+
 class LintConfig(_Strict):
     # Best practice warnings from the Kiro documentation. Never errors.
     practices: bool = True
@@ -123,6 +160,28 @@ class LintConfig(_Strict):
     file_reference_check: bool = True
     pymarkdown: PyMarkdownConfig = PyMarkdownConfig()
     forbidden_patterns: tuple[ForbiddenPattern, ...] = ()
+    kiro_limits: KiroLimitsConfig = KiroLimitsConfig()
+    agent_fields: tuple[str, ...] = _V3_AGENT_FIELDS
+    legacy_agent_keys: dict[str, str] = Field(default_factory=lambda: dict(_LEGACY_AGENT_KEYS))
+    upgraded_agent_keys: tuple[str, ...] = _UPGRADED_AGENT_KEYS
+
+
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+class KiroConfig(_Strict):
+    """The oldest Kiro releases steersync supports (the V3 harness and its schema)."""
+
+    min_cli_version: str = "3.1.0"
+    min_ide_version: str = "1.4.86"
+
+    @field_validator("min_cli_version", "min_ide_version")
+    @classmethod
+    def _version(cls, value: str) -> str:
+        if not _VERSION_RE.match(value):
+            msg = "a version is MAJOR.MINOR.PATCH, for example 3.1.0"
+            raise ValueError(msg)
+        return value
 
 
 class RemoteConfig(_Strict):
@@ -430,6 +489,7 @@ class Config(_Strict):
     gitlab: GitLabConfig = GitLabConfig()
     fleet: FleetConfig = FleetConfig()
     lint: LintConfig = LintConfig()
+    kiro: KiroConfig = KiroConfig()
     hook: HookConfig = HookConfig()
     logging: LoggingConfig = LoggingConfig()
     source_file: Path | None = None

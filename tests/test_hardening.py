@@ -528,7 +528,7 @@ def test_mcp_tools_report_configuration_errors(
     ):
         with pytest.raises(SteersyncError, match="missing"):
             tool()
-    assert mcp_tools.v3_status().cli_path is None
+    assert mcp_tools.kiro_check().cli_path is None
 
 
 def test_read_only_cache_files_are_removed(tmp_path: Path) -> None:

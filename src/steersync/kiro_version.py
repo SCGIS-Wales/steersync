@@ -1,14 +1,14 @@
-"""Detect whether this machine runs the Kiro CLI V3 agent harness and remind when not.
+"""Check that this machine runs a supported Kiro: the V3 harness at the configured minimum.
 
-Kiro CLI 3.0.0 made V3 (the unified harness Kiro IDE 1.x and Kiro Web already run)
-the default for interactive sessions; V2 still runs but receives no new features.
-Detection never fails a sync: every probe has a short timeout and an unknown answer
-simply means no reminder.
+steersync supports Kiro CLI V3 (and Kiro IDE 1.x, which reads the same schema) and
+nothing older. The minimum versions come from ``kiro.min_cli_version`` and
+``kiro.min_ide_version``. Detection never fails a sync: every probe has a short timeout
+and an unknown answer is not a problem.
 
-Probes, in order: ``kiro-cli --version``, ``kiro-cli settings -f json chat.agentEngine``
-(falling back to ``$KIRO_HOME/settings/cli.json``), ``chat.enableAutoAgentUpgrade``,
-and a scan of agent directories for configurations V3 does not load. None of the
-probes start a chat session, so they never consume Kiro credits.
+Probes: ``kiro-cli --version``, ``kiro-cli settings -f json chat.agentEngine`` (falling
+back to ``$KIRO_HOME/settings/cli.json``), ``chat.enableWorkflows``, and a scan of the
+agent directories for keys V3 does not read. None of them start a chat session, so they
+never consume Kiro credits.
 """
 
 import json
@@ -18,7 +18,7 @@ import shutil
 import subprocess  # nosec B404
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,53 +27,44 @@ from steersync.paths import kiro_home
 from steersync.steering import parse_front_matter
 
 CLI_BINARY = "kiro-cli"
-V3_MIN_VERSION: tuple[int, int, int] = (3, 0, 0)
+SUPPORTED_ENGINE = "v3"
 PROBE_TIMEOUT_SECONDS = 3.0
-REMINDER_INTERVAL_SECONDS = 24 * 60 * 60
-REMINDER_STAMP = "v3-reminder.stamp"
-ENV_NO_REMINDER = "STEERSYNC_NO_V3_REMINDER"
-DOCS_URL = "https://kiro.dev/docs/cli/v3/"
+CHECK_INTERVAL_SECONDS = 24 * 60 * 60
+CHECK_STAMP = "kiro-check.stamp"
+ENV_NO_CHECK = "STEERSYNC_NO_KIRO_CHECK"
+DOCS_URL = "https://kiro.dev/docs/cli/"
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-_V2_RULES = frozenset({"agent-v2-format", "hook-trigger-alias"})
 
 EngineSource = Literal["kiro-cli", "settings-file", "default", "unknown"]
 Runner = Callable[[Sequence[str]], tuple[int, str] | None]
 
 
 @dataclass(frozen=True, slots=True)
-class HarnessStatus:
-    """What steersync learned about the local Kiro CLI harness."""
+class KiroStatus:
+    """What steersync learned about the local Kiro installation."""
 
     cli_path: str | None
     cli_version: str | None
     engine: str | None
     engine_source: EngineSource
-    auto_upgrade: bool | None
-    # acp.agentEngine: the harness `kiro-cli acp` (IDE and editor integrations) starts;
-    # chat.agentEngine does not apply to it.
-    acp_engine: str | None = None
+    min_cli_version: str
+    min_ide_version: str
     # chat.enableWorkflows: workflow recipes (.kiro/workflows) load only when it is on.
     workflows_enabled: bool | None = None
-    v2_agents: tuple[str, ...] = ()
-    reasons: tuple[str, ...] = field(default=())
+    legacy_agents: tuple[str, ...] = ()
+    problems: tuple[str, ...] = ()
 
     @property
-    def on_v3(self) -> bool:
-        """True when interactive kiro-cli sessions run the V3 harness."""
-        return self.cli_path is not None and not _cli_reasons(self)
-
-    @property
-    def needs_reminder(self) -> bool:
-        return bool(self.reasons)
+    def supported(self) -> bool:
+        return not self.problems
 
     def to_dict(self) -> dict[str, Any]:
         return {
             **asdict(self),
-            "v2_agents": list(self.v2_agents),
-            "reasons": list(self.reasons),
-            "on_v3": self.on_v3,
-            "needs_reminder": self.needs_reminder,
-            "message": reminder_text(self) if self.needs_reminder else None,
+            "legacy_agents": list(self.legacy_agents),
+            "problems": list(self.problems),
+            "supported": self.supported,
+            "message": None if self.supported else problem_text(self),
         }
 
 
@@ -142,17 +133,22 @@ def _setting(
     return None, "unknown"
 
 
-def find_v2_agents(directories: Iterable[Path]) -> tuple[str, ...]:
-    """Return agent files the V3 harness skips or that still use 2.x hook triggers."""
+def find_legacy_agents(
+    directories: Iterable[Path],
+    legacy_keys: Mapping[str, str],
+    upgraded_keys: Sequence[str] = (),
+) -> tuple[str, ...]:
+    """Agent files that still carry keys the V3 harness does not read."""
     found: list[str] = []
     for directory in directories:
         if not directory.is_dir():
             continue
         for path in sorted(directory.iterdir()):
             data = _agent_data(path)
-            if data is None:
-                continue
-            if any(issue.rule in _V2_RULES for issue in kiro_rules.agent_issues(data)):
+            if data is not None and any(
+                key in data and not ("permissions" in data and key in upgraded_keys)
+                for key in legacy_keys
+            ):
                 found.append(str(path))
     return tuple(found)
 
@@ -176,13 +172,17 @@ def _agent_data(path: Path) -> Mapping[str, Any] | None:
     return None
 
 
-def detect_harness(
+def detect(
     env: Mapping[str, str] | None = None,
     *,
+    min_cli_version: str,
+    min_ide_version: str,
+    legacy_keys: Mapping[str, str],
+    upgraded_keys: Sequence[str] = (),
     agent_dirs: Iterable[Path] = (),
     run: Runner = default_runner,
     which: Callable[[str], str | None] = shutil.which,
-) -> HarnessStatus:
+) -> KiroStatus:
     """Probe the local Kiro CLI and agent directories; never raises."""
     environment = os.environ if env is None else env
     binary = which(CLI_BINARY)
@@ -196,92 +196,77 @@ def detect_harness(
     engine = engine_value.lower() if isinstance(engine_value, str) else None
     if engine is None and version is not None:
         source = "default"
-    upgrade_value, _ = _setting(binary, "chat.enableAutoAgentUpgrade", run, file_settings)
-    auto_upgrade = upgrade_value if isinstance(upgrade_value, bool) else None
-    acp_value, _ = _setting(binary, "acp.agentEngine", run, file_settings)
-    acp_engine = acp_value.lower() if isinstance(acp_value, str) else None
     workflows_value, _ = _setting(binary, "chat.enableWorkflows", run, file_settings)
-    workflows_enabled = workflows_value if isinstance(workflows_value, bool) else None
     dirs = [*agent_dirs, kiro_home(environment) / "agents"]
-    status = HarnessStatus(
+    status = KiroStatus(
         cli_path=binary,
         cli_version=version,
         engine=engine,
         engine_source=source,
-        auto_upgrade=auto_upgrade,
-        acp_engine=acp_engine,
-        workflows_enabled=workflows_enabled,
-        v2_agents=find_v2_agents(dict.fromkeys(dirs)),
+        min_cli_version=min_cli_version,
+        min_ide_version=min_ide_version,
+        workflows_enabled=workflows_value if isinstance(workflows_value, bool) else None,
+        legacy_agents=find_legacy_agents(dict.fromkeys(dirs), legacy_keys, upgraded_keys),
     )
-    reasons = [*_cli_reasons(status)]
-    if status.v2_agents:
-        reasons.append(
-            f"{len(status.v2_agents)} agent configuration(s) still use the V2 format"
-            + (" and automatic agent upgrade is off" if auto_upgrade is False else "")
+    return replace(status, problems=tuple(problems(status)))
+
+
+def problems(status: KiroStatus) -> list[str]:
+    """Why this machine or its agents are below the supported V3 baseline."""
+    found: list[str] = []
+    if status.cli_path is not None:
+        installed = parse_version(status.cli_version or "")
+        minimum = parse_version(status.min_cli_version)
+        if installed is not None and minimum is not None and installed < minimum:
+            found.append(
+                f"kiro-cli {status.cli_version} is installed; steersync needs "
+                f"{status.min_cli_version} or later"
+            )
+        if status.engine is not None and status.engine != SUPPORTED_ENGINE:
+            found.append(
+                f"chat.agentEngine is {status.engine!r}; steersync supports only the V3 harness"
+            )
+    if status.legacy_agents:
+        found.append(
+            f"{len(status.legacy_agents)} agent file(s) use keys V3 does not read: "
+            + ", ".join(status.legacy_agents)
         )
-    return replace(status, reasons=tuple(reasons))
+    return found
 
 
-def _cli_reasons(status: HarnessStatus) -> list[str]:
-    if status.cli_path is None:
-        return []  # Kiro IDE only: there is no CLI harness to switch.
-    reasons: list[str] = []
-    parsed = parse_version(status.cli_version or "")
-    if parsed is not None and parsed < V3_MIN_VERSION:
-        reasons.append(f"kiro-cli {status.cli_version} predates 3.0.0, where V3 became the default")
-    if status.engine in {"v1", "v2"}:
-        label = "the retired Classic harness" if status.engine == "v1" else "the V2 harness"
-        reasons.append(f"chat.agentEngine is {status.engine!r}, so kiro-cli runs {label}")
-    if status.acp_engine in {"v1", "v2"}:
-        reasons.append(
-            f"acp.agentEngine is {status.acp_engine!r}, so `kiro-cli acp` (editor and IDE "
-            "integrations) starts the old harness"
-        )
-    return reasons
-
-
-def reminder_text(status: HarnessStatus) -> str:
-    """The reminder shown by doctor, the SessionStart hook and the MCP tool.
-
-    Only the steps that apply are listed: a machine already on V3 with V2 format agent
-    files is told to upgrade the files, not to switch the engine it already runs.
-    """
-    lines = [
-        "Kiro CLI V3 is the default agent harness since Kiro CLI 3.0.0.",
-        *(f"- {reason}" for reason in status.reasons),
-    ]
-    parsed = parse_version(status.cli_version or "")
-    if parsed is not None and parsed < V3_MIN_VERSION:
-        lines.append("Update kiro-cli to 3.x first.")
-    if status.engine in {"v1", "v2"} or (parsed is not None and parsed < V3_MIN_VERSION):
+def problem_text(status: KiroStatus) -> str:
+    """What is below the baseline and how to fix it, for doctor, the hook and MCP."""
+    lines = ["Kiro is below the version steersync supports:"]
+    lines += [f"- {problem}" for problem in status.problems]
+    installed = parse_version(status.cli_version or "")
+    minimum = parse_version(status.min_cli_version)
+    if installed is not None and minimum is not None and installed < minimum:
+        lines.append(f"Upgrade kiro-cli to {status.min_cli_version} or later ({DOCS_URL}).")
+    if status.engine is not None and status.engine != SUPPORTED_ENGINE:
+        lines.append("Run `kiro-cli settings chat.agentEngine v3`.")
+    if status.legacy_agents:
         lines.append(
-            "Run `kiro-cli settings chat.agentEngine v3`, start `kiro-cli`, then run "
-            "`/upgrade-agent`."
+            "Open each agent in Kiro and run /upgrade-agent, then commit the result "
+            "(steersync lint names each key and its V3 replacement)."
         )
-    if status.v2_agents:
-        folders = sorted({str(Path(path).parent) for path in status.v2_agents})
-        lines.append(
-            "Upgrade the agent files to the universal format: "
-            + "; ".join(f"`kiro-cli agent upgrade {folder}`" for folder in folders)
-            + " (or `/upgrade-agent` inside kiro-cli)."
-        )
-    if status.acp_engine in {"v1", "v2"}:
-        lines.append("For editor integrations run `kiro-cli settings acp.agentEngine v3`.")
-    lines.append(f"See {DOCS_URL}")
+    lines.append(
+        f"Supported: Kiro CLI {status.min_cli_version} or later with the V3 harness, "
+        f"Kiro IDE {status.min_ide_version} or later."
+    )
     return "\n".join(lines)
 
 
-def reminder_due(cache_dir: Path, env: Mapping[str, str], *, now: float | None = None) -> bool:
+def check_due(cache_dir: Path, env: Mapping[str, str], *, now: float | None = None) -> bool:
     """Return True at most once per day; records the time when it does."""
-    if env.get(ENV_NO_REMINDER, "").strip().lower() in {"1", "true", "yes", "on"}:
+    if env.get(ENV_NO_CHECK, "").strip().lower() in {"1", "true", "yes", "on"}:
         return False
-    stamp = cache_dir / REMINDER_STAMP
+    stamp = cache_dir / CHECK_STAMP
     current = time.time() if now is None else now
     try:
         last = float(stamp.read_text("utf-8").strip())
     except OSError, ValueError:
         last = 0.0
-    if current - last < REMINDER_INTERVAL_SECONDS:
+    if current - last < CHECK_INTERVAL_SECONDS:
         return False
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
