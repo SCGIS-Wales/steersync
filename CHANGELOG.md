@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-26
+
 Kiro V3 only; setup, init and fleet show one plan and ask once; a front matter schema with
 new rules; an optional knowledge collection; `steersync lint --fix` with verified fixes; JSON
 and SARIF lint output; MCP tools that propose and then apply after one approval.
