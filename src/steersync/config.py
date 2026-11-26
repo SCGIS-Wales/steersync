@@ -455,6 +455,16 @@ class GitLabConfig(_Strict):
         return candidate
 
 
+class SetupConfig(_Strict):
+    """Selections setup remembers; written by setup itself, never secrets."""
+
+    # The step ids accepted on the last run, preselected next time (ux.remember_selection).
+    last: tuple[str, ...] = ()
+    # Named selections: `steersync setup --profile NAME` loads one, or saves the accepted
+    # selection under NAME when it does not exist yet.
+    profiles: dict[str, tuple[str, ...]] = {}
+
+
 class UxConfig(_Strict):
     """How commands that change state ask for approval."""
 
@@ -502,6 +512,7 @@ class Config(_Strict):
     lint: LintConfig = LintConfig()
     kiro: KiroConfig = KiroConfig()
     ux: UxConfig = UxConfig()
+    setup: SetupConfig = SetupConfig()
     hook: HookConfig = HookConfig()
     logging: LoggingConfig = LoggingConfig()
     source_file: Path | None = None

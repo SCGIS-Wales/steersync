@@ -1,28 +1,30 @@
 """Push, pull, restore and the interactive overview of ``steersync fleet``.
 
-Scripted subcommands use click prompts (so ``--yes`` and piped answers work); the
-interactive overview uses questionary. Every prompt goes through a :class:`Prompts`
-value, so the flows are tested with scripted answers.
+Push and pull build one plan (a step per repository, :mod:`steersync.fleet_plan`), show it
+and ask once. The interactive overview uses questionary; every prompt goes through a
+:class:`Prompts` value, so the flows are tested with scripted answers.
 """
 
 import json
 import os
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
 import click
 
-from steersync import backups, fleet, registry
+from steersync import backups, fleet, fleet_plan, plan_flow, plan_select, registry
 from steersync.cli_fleet import EXIT_PARTIAL
 from steersync.cli_fleet import fleet as fleet_group
+from steersync.cli_options import plan_options
+from steersync.cli_plan import run_plan
+from steersync.config import Config, load_config
+from steersync.errors import SteersyncError
 from steersync.fleet import FleetReport, Outcome, RepoStatus
 from steersync.paths import backup_root, registry_path
+from steersync.plan import Plan, pending, run_steps
 from steersync.retry import RetryEvent
-
-EXIT_INTERRUPTED = 130
-OVERWRITE_WORD = "overwrite"
 
 
 class Prompts(NamedTuple):
@@ -43,24 +45,6 @@ def questionary_prompts() -> Prompts:
         text=lambda message: questionary.text(message).ask(),
         confirm=lambda message, default: questionary.confirm(message, default=default).ask(),
     )
-
-
-def expected_word(count: int) -> str:
-    """What the user types to overwrite local edits in ``count`` repositories."""
-    return OVERWRITE_WORD if count == 1 else f"{OVERWRITE_WORD} {count}"
-
-
-def typed_overwrite(rows: Sequence[RepoStatus], ask: Callable[[str], str | None]) -> bool:
-    """Show every repository and file that would be overwritten; require the typed word."""
-    click.echo("These local edits will be replaced by the central versions (a verified")
-    click.echo("backup is taken first; `steersync fleet restore` puts it back):")
-    for row in rows:
-        click.echo(f"  {short(row.path)}")
-        for name in row.conflicts:
-            click.echo(f"    {name}")
-    word = expected_word(len(rows))
-    answer = ask(f"Type '{word}' to overwrite, anything else keeps your edits")
-    return (answer or "").strip() == word
 
 
 def short(path: str) -> str:
@@ -127,127 +111,89 @@ def _summary(outcomes: Sequence[Outcome], *, as_json: bool) -> None:
                 click.echo(f"         rerun: {outcome.rerun}", err=True)
 
 
-def _finish(outcomes: Sequence[Outcome], interrupted: bool, *, as_json: bool) -> None:
-    _summary(outcomes, as_json=as_json)
-    if interrupted:
-        click.echo("interrupted; the summary above shows what completed", err=True)
-        sys.exit(EXIT_INTERRUPTED)
-    if any(o.status == "failed" for o in outcomes):
-        sys.exit(EXIT_PARTIAL)
-
-
-def _progress(event: tuple[str, str, str]) -> None:
-    subject, phase, message = event
-    if phase == "running":
-        click.echo(f"{short(subject)}: {message}", err=True)
-
-
-def do_push(rows: Sequence[RepoStatus], *, dry_run: bool) -> tuple[list[Outcome], bool]:
-    env = os.environ
-    return fleet.run_batch(
-        rows, lambda r: fleet.push_one(r, env, dry_run=dry_run), kind="push", on_event=_progress
-    )
-
-
-def do_pull(
-    rows: Sequence[RepoStatus], overwrite: set[str], *, dry_run: bool
-) -> tuple[list[Outcome], bool]:
-    env = os.environ
-    return fleet.run_batch(
-        rows,
-        lambda r: fleet.pull_one(r, env, overwrite=r.path in overwrite, dry_run=dry_run),
-        kind="pull",
-        on_event=_progress,
-    )
-
-
 repo_option = click.option(
     "--repo", "repos", multiple=True, type=click.Path(path_type=Path), help="A repository."
 )
-json_option = click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
+
+
+def _machine_config() -> Config:
+    try:
+        return load_config(workspace_root=None, env=os.environ)
+    except SteersyncError:
+        return Config()
+
+
+def _run_fleet(
+    action: fleet_plan.Action,
+    repos: tuple[Path, ...],
+    states: tuple[str, ...],
+    all_rows: bool,
+    plan_flags: Mapping[str, object],
+    *,
+    overwrite: bool = False,
+) -> None:
+    # Act on the current central state: always refresh before changing anything.
+    report = _report(os.environ, refresh=True)
+    reason = fleet.push_reason if action == "push" else fleet.pull_reason
+    rows = _select(report, repos, states, all_rows, reason)
+    if not rows:
+        click.echo("nothing selected")
+        return
+    home = str(Path.home())
+    sink: list[Outcome] = []
+    plan = fleet_plan.build_fleet_plan(
+        action, rows, os.environ, sink=sink, overwrite=overwrite, home=home
+    )
+    as_json = bool(plan_flags.get("as_json"))
+    result = run_plan(
+        plan,
+        _machine_config(),
+        plan_flags,
+        notes=fleet_plan.skipped(action, rows, home),
+        report=lambda _results, _backup: _summary(sink, as_json=as_json),
+    )
+    plan_flow.finish(result)
 
 
 @fleet_group.command("push")
 @repo_option
 @click.option("--state", "states", multiple=True, type=click.Choice(fleet.STATE_ORDER))
 @click.option("--all", "all_rows", is_flag=True, help="Every repository with something to push.")
-@click.option("--dry-run", is_flag=True, help="Compute each proposal without pushing.")
-@click.option("-y", "--yes", is_flag=True, help="Do not ask for confirmation.")
-@json_option
+@plan_options
 def fleet_push(
-    repos: tuple[Path, ...],
-    states: tuple[str, ...],
-    all_rows: bool,
-    dry_run: bool,
-    yes: bool,
-    as_json: bool,
+    repos: tuple[Path, ...], states: tuple[str, ...], all_rows: bool, **plan_flags: object
 ) -> None:
-    """Propose the Kiro changes of several repositories, one merge request each."""
-    # Act on the current central state: always refresh before changing anything.
-    report = _report(os.environ, refresh=True)
-    rows = _select(report, repos, states, all_rows, fleet.push_reason)
-    if not as_json:
-        for row in rows:
-            reason = fleet.push_reason(row)
-            note = f"skip: {reason}" if reason else f"push {row.push.render()}"
-            click.echo(f"  {short(row.path)}  [{row.state}]  {note}")
-    if not rows:
-        click.echo("nothing selected")
-        return
-    if not (yes or dry_run or click.confirm("Proceed?", default=False)):
-        click.echo("cancelled; nothing was pushed")
-        return
-    outcomes, interrupted = do_push(rows, dry_run=dry_run)
-    _finish(outcomes, interrupted, as_json=as_json)
+    """Propose the Kiro changes of several repositories, one merge request each.
+
+    Shows one plan (a step per repository) and asks once; --yes applies it.
+    """
+    _run_fleet("push", repos, states, all_rows, plan_flags)
 
 
 @fleet_group.command("pull")
 @repo_option
 @click.option("--state", "states", multiple=True, type=click.Choice(fleet.STATE_ORDER))
 @click.option("--all", "all_rows", is_flag=True, help="Every repository with something to pull.")
-@click.option("--dry-run", is_flag=True, help="Show what would change without writing.")
-@click.option("-y", "--yes", is_flag=True, help="Do not ask for confirmation.")
 @click.option(
     "--overwrite-local",
     is_flag=True,
-    help="Replace locally edited files with the central versions after a verified backup "
-    "(asks for a typed confirmation unless --yes).",
+    help="Preselect replacing locally edited files with the central versions (a verified "
+    "backup is taken first; `steersync restore` undoes it).",
 )
-@json_option
+@plan_options
 def fleet_pull(
     repos: tuple[Path, ...],
     states: tuple[str, ...],
     all_rows: bool,
-    dry_run: bool,
-    yes: bool,
     overwrite_local: bool,
-    as_json: bool,
+    **plan_flags: object,
 ) -> None:
-    """Apply the central configuration to several repositories; local edits are kept."""
-    report = _report(os.environ, refresh=True)
-    rows = _select(report, repos, states, all_rows, fleet.pull_reason)
-    if not rows:
-        click.echo("nothing selected")
-        return
-    if not as_json:
-        for row in rows:
-            reason = fleet.pull_reason(row)
-            note = f"skip: {reason}" if reason else f"pull {row.pull.render()}"
-            if row.conflicts:
-                note += f", {len(row.conflicts)} file(s) edited locally"
-            click.echo(f"  {short(row.path)}  [{row.state}]  {note}")
-    conflicted = [r for r in rows if r.conflicts and fleet.pull_reason(r) is None]
-    overwrite: set[str] = set()
-    if overwrite_local and conflicted and not dry_run:
-        if yes or typed_overwrite(conflicted, lambda m: click.prompt(m, default="")):
-            overwrite = {r.path for r in conflicted}
-        else:
-            click.echo("overwrite cancelled; local edits are kept and the rest is pulled")
-    if not (yes or dry_run or click.confirm("Proceed?", default=False)):
-        click.echo("cancelled; nothing was pulled")
-        return
-    outcomes, interrupted = do_pull(rows, overwrite, dry_run=dry_run)
-    _finish(outcomes, interrupted, as_json=as_json)
+    """Apply the central configuration to several repositories; local edits are kept.
+
+    Shows one plan and asks once. Repositories with local edits that also changed centrally
+    get an "overwrite" step, off unless --overwrite-local.
+    """
+    _run_fleet("pull", repos, states, all_rows, plan_flags, overwrite=overwrite_local)
 
 
 @fleet_group.command("restore")
@@ -256,7 +202,11 @@ def fleet_pull(
 @click.option("--repo", type=click.Path(path_type=Path), help="Only this repository.")
 @click.option("-y", "--yes", is_flag=True, help="Do not ask for confirmation.")
 def fleet_restore(stamp: str | None, list_only: bool, repo: Path | None, yes: bool) -> None:
-    """Put back the files a forced pull replaced, from a verified backup."""
+    """Put back the files a steersync run replaced, from a verified backup.
+
+    Every run that writes (setup, init, fleet pull --overwrite-local, pull --force) takes
+    one backup first and prints its id; this undoes it. Files the run created are removed.
+    """
     found = backups.listing(backup_root(os.environ))
     if repo is not None:
         wanted = str(repo.expanduser().resolve())
@@ -287,6 +237,12 @@ def fleet_restore(stamp: str | None, list_only: bool, repo: Path | None, yes: bo
         click.echo(f"restored {len(restored)} file(s) into {backup.workspace}")
 
 
+# `steersync restore` (top level) is the same command; `fleet restore` stays as an alias.
+restore_command = click.Command(
+    "restore", callback=fleet_restore.callback, params=fleet_restore.params, help=fleet_restore.help
+)
+
+
 # --- interactive overview -------------------------------------------------------------------
 
 PUSH, PULL, DETAILS, REFRESH, QUIT = (
@@ -296,11 +252,8 @@ PUSH, PULL, DETAILS, REFRESH, QUIT = (
     "Refresh",
     "Quit",
 )
-KEEP, OVERWRITE, SKIP = (
-    "Keep my local edits (safe default)",
-    "Overwrite local .kiro with central",
-    "Skip",
-)
+
+Build = Callable[[fleet_plan.Action, Sequence[RepoStatus]], tuple[Plan, list[Outcome]]]
 
 
 def overview(
@@ -308,12 +261,9 @@ def overview(
     collect: Callable[[], FleetReport],
     render: Callable[[FleetReport], None],
     show_details: Callable[[RepoStatus], None],
-    push: Callable[[Sequence[RepoStatus]], tuple[list[Outcome], bool]],
-    pull: Callable[[Sequence[RepoStatus], set[str]], tuple[list[Outcome], bool]],
+    build: Build,
 ) -> list[Outcome]:
-    """The interactive loop; returns every outcome produced."""
-    from steersync.fleet_ui import choose_repositories  # noqa: PLC0415
-
+    """The interactive loop; push and pull are one plan and one checkbox each."""
     report = collect()
     produced: list[Outcome] = []
     while True:
@@ -331,46 +281,18 @@ def overview(
                 if row.path == label:
                     show_details(row)
             continue
-        is_push = action == PUSH
-        chosen = choose_repositories(
-            rows,
-            fleet.push_reason if is_push else fleet.pull_reason,
-            (lambda r: r.state in {"local-ahead", "diverged"})
-            if is_push
-            else (lambda r: r.state == "central-ahead"),
-            message="Select repositories (space to toggle, enter to confirm)",
-            checkbox=prompts.checkbox,
-        )
-        if not chosen:
+        verb: fleet_plan.Action = "push" if action == PUSH else "pull"
+        plan, sink = build(verb, rows)
+        if not pending(plan):
+            click.echo(f"nothing to {verb}")
             continue
-        overwrite: set[str] = set()
-        if not is_push:
-            wanting: list[RepoStatus] = []
-            for row in [r for r in chosen if r.conflicts]:
-                answer = prompts.select(
-                    f"{short(row.path)} has local edits that also changed centrally: "
-                    f"{', '.join(row.conflicts)}",
-                    [KEEP, OVERWRITE, SKIP],
-                )
-                if answer == OVERWRITE:
-                    wanting.append(row)
-                elif answer in {SKIP, None}:
-                    chosen = [r for r in chosen if r.path != row.path]
-            if wanting:
-                if typed_overwrite(wanting, prompts.text):
-                    overwrite = {r.path for r in wanting}
-                else:
-                    click.echo("overwrite cancelled; those repositories keep their local edits")
-        verb = "push" if is_push else "pull"
-        click.echo(f"{len(chosen)} repositor{'y' if len(chosen) == 1 else 'ies'} to {verb}:")
-        for row in chosen:
-            click.echo(f"  {short(row.path)}" + ("  (overwrite)" if row.path in overwrite else ""))
-        if not prompts.confirm("Proceed?", False):
+        picked = plan_select.select_steps(plan, None, checkbox=prompts.checkbox)
+        if not picked:
             continue
-        outcomes, interrupted = push(chosen) if is_push else pull(chosen, overwrite)
-        produced.extend(outcomes)
-        _summary(outcomes, as_json=False)
-        if interrupted:
+        results = run_steps(plan, picked)
+        produced.extend(sink)
+        _summary(sink, as_json=False)
+        if any(r.interrupted for r in results):
             return produced
         report = collect()
 
@@ -384,13 +306,17 @@ def interactive() -> None:
 
     console = Console(highlight=False)
     home = str(Path.home())
+
+    def build(action: fleet_plan.Action, rows: Sequence[RepoStatus]) -> tuple[Plan, list[Outcome]]:
+        sink: list[Outcome] = []
+        return fleet_plan.build_fleet_plan(action, rows, os.environ, sink=sink, home=home), sink
+
     outcomes = overview(
         questionary_prompts(),
         lambda: _report(os.environ),
         lambda report: fleet_ui.render(report, console, home=home),
         lambda row: fleet_ui.details(row, console),
-        lambda rows: do_push(rows, dry_run=False),
-        lambda rows, overwrite: do_pull(rows, overwrite, dry_run=False),
+        build,
     )
     if any(o.status == "failed" for o in outcomes):
         sys.exit(EXIT_PARTIAL)

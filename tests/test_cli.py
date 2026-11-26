@@ -104,8 +104,8 @@ def test_init_and_install_hook(runner: CliRunner, in_project: Path) -> None:
     assert "collections: steering, specs" in result.output
     assert (in_project / ".git" / "hooks" / "pre-push").exists()
     second = runner.invoke(main, ["init", "--write-config"])
-    assert "exists:" in second.output
-    assert "unchanged:" in second.output
+    assert second.exit_code == 0
+    assert "Nothing to do" in second.output
     hook = runner.invoke(main, ["install-hook"])
     assert "unchanged" in hook.output
     (in_project / ".git" / "hooks" / "pre-push").write_text(

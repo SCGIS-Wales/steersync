@@ -16,7 +16,8 @@ Everything here is pure except :func:`run_steps`, which calls each step's ``appl
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
 import click
@@ -33,6 +34,7 @@ class StepResult:
     ok: bool
     detail: str
     backup_id: str | None = None
+    interrupted: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ class Step:
     default: bool
     done: bool
     apply: Callable[[], StepResult]
+    # Files the step may create or change; they are backed up once before the run.
+    paths: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,12 @@ def restrict(plan: Plan, *, only: Sequence[str], skip: Sequence[str]) -> Plan:
     return Plan(plan.command, kept)
 
 
+def with_defaults(plan: Plan, selected: Sequence[str]) -> Plan:
+    """The plan with ``selected`` as its default selection (a saved profile)."""
+    chosen = set(selected)
+    return Plan(plan.command, tuple(replace(s, default=s.id in chosen) for s in plan.steps))
+
+
 def _step_json(step: Step) -> dict[str, Any]:
     return {
         "id": step.id,
@@ -123,7 +133,8 @@ def plan_hash(plan: Plan, input_digests: Mapping[str, str]) -> str:
 
 
 def non_interactive_message(plan: Plan) -> str:
-    count = len(pending(plan))
+    """What to run instead of answering; counts what --yes would apply."""
+    count = sum(1 for s in pending(plan) if s.default and s.risk != "destructive")
     return f"Re-run with --yes to apply {count} steps, or --plan to inspect."
 
 
@@ -146,7 +157,8 @@ def choose(
     if interaction.dry_run:
         return Choice("plan-only")
     if interaction.assume_yes:
-        return Choice("apply", tuple(default_selection(plan, interaction)))
+        selected = tuple(default_selection(plan, interaction))
+        return Choice("apply", selected) if selected else Choice("nothing")
     if not interaction.interactive:
         return Choice("needs-input")
     picked = ask(plan, remembered)
@@ -161,14 +173,20 @@ def choose(
 
 
 def run_steps(plan: Plan, step_ids: Sequence[str]) -> list[StepResult]:
-    """Apply the chosen steps in plan order; one failure never stops the others."""
-    wanted = set(step_ids)
+    """Apply the chosen steps in plan order; one failure never stops the others.
+
+    Ctrl-C stops the run: the step in progress and the rest are reported as interrupted.
+    """
+    wanted = [s for s in plan.steps if s.id in set(step_ids)]
     results: list[StepResult] = []
-    for step in plan.steps:
-        if step.id not in wanted:
-            continue
+    for index, step in enumerate(wanted):
         try:
             results.append(step.apply())
+        except KeyboardInterrupt:
+            results.extend(
+                StepResult(s.id, False, "interrupted", None, True) for s in wanted[index:]
+            )
+            break
         except Exception as exc:
             results.append(StepResult(step.id, False, f"{type(exc).__name__}: {exc}"))
     return results

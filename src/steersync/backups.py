@@ -38,6 +38,8 @@ class Item(NamedTuple):
     sha256: str
     mode: int
     size: int
+    # The file did not exist before the run: restoring removes it again.
+    created: bool = False
 
 
 class Backup(NamedTuple):
@@ -71,8 +73,13 @@ def take(
     *,
     project: str,
     stamp: str | None = None,
+    record_missing: bool = False,
 ) -> Backup:
-    """Copy and verify ``relatives`` (paths under ``workspace``) before an overwrite."""
+    """Copy and verify ``relatives`` (paths under ``workspace``) before an overwrite.
+
+    With ``record_missing`` a path that does not exist yet is recorded as created, so a
+    restore removes the file the run is about to create.
+    """
     when = stamp or stamp_now()
     target = root / when / _slug_dir(project)
     items: list[Item] = []
@@ -81,6 +88,8 @@ def take(
         for relative in sorted(set(relatives)):
             source = workspace / relative
             if not source.is_file():
+                if record_missing and not source.exists():
+                    items.append(Item(relative, "", 0, 0, created=True))
                 continue
             destination = target / "files" / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -112,11 +121,13 @@ def verify(backup: Backup) -> None:
             if files.exists()
             else set()
         )
-        expected = {item.path for item in backup.items}
+        expected = {item.path for item in backup.items if not item.created}
         if present != expected:
             msg = f"backup {backup.directory} holds {len(present)} files, expected {len(expected)}"
             raise BackupError(msg)
         for item in backup.items:
+            if item.created:
+                continue
             copy = files / item.path
             if _sha256(copy) != item.sha256:
                 raise BackupError(f"backup copy of {item.path} does not match its original")
@@ -133,7 +144,10 @@ def verify_unchanged(backup: Backup, workspace: Path) -> None:
     for item in backup.items:
         current = workspace / item.path
         try:
-            changed = not current.is_file() or _sha256(current) != item.sha256
+            if item.created:
+                changed = current.exists()
+            else:
+                changed = not current.is_file() or _sha256(current) != item.sha256
         except OSError as exc:
             raise BackupError(f"cannot re-read {item.path}: {exc}") from exc
         if changed:
@@ -173,13 +187,30 @@ def restore(backup: Backup, *, workspace: Path | None = None) -> list[str]:
     target = workspace or Path(backup.workspace)
     restored: list[str] = []
     for item in backup.items:
-        source = backup.directory / "files" / item.path
         destination = target / item.path
+        if item.created:
+            if destination.is_file() or destination.is_symlink():
+                destination.unlink()
+                restored.append(item.path)
+            continue
+        source = backup.directory / "files" / item.path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         destination.chmod(item.mode)
         restored.append(item.path)
     return restored
+
+
+def take_files(root: Path, paths: Iterable[Path], *, label: str) -> Backup:
+    """Back up absolute paths anywhere (setup touches ~/.config, ~/.kiro and the repository).
+
+    Paths that do not exist yet are recorded as created, so ``steersync restore`` removes
+    them again. ``label`` names the run in ``steersync restore --list``.
+    """
+    absolute = [path.expanduser().absolute() for path in paths]
+    anchor = Path(absolute[0].anchor) if absolute else Path("/")
+    relatives = [path.relative_to(anchor).as_posix() for path in absolute]
+    return take(root, anchor, relatives, project=label, record_missing=True)
 
 
 class PruneResult(NamedTuple):

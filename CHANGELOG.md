@@ -15,6 +15,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Configuration: `ux` (`confirm_after_select`, `remember_selection`, `show_undo_hint`) and
+  `setup` (`last`, the selection preselected next time, and named `profiles`).
+
 - `steersync doctor --kiro [--json] [--strict]` and the `kiro_check` MCP tool check the
   installation against the minimums in the new `kiro` configuration section
   (`min_cli_version`, `min_ide_version`); `--strict` exits 10 below the baseline.
@@ -22,6 +25,23 @@ Keep a Changelog and the project uses semantic versioning.
   `lint.agent_fields`, and `agent-resource-budget` (warning) against `lint.kiro_limits`.
 
 ### Changed (breaking)
+
+- `fleet push` and `fleet pull` show one plan (a step per repository) and ask once; the
+  `Proceed?` questions and the typed `overwrite` word are gone. Overwriting local edits is
+  an `overwrite:` step (review, backed up, off unless `--overwrite-local`). `--dry-run` is
+  now `--plan`. The interactive overview uses the same plan and one checkbox. Ctrl-C still
+  prints the summary and exits 130.
+
+- `steersync setup` and `steersync init` detect everything first, show one plan and ask
+  once: one checkbox (enter applies). setup asks one question only when no central
+  repository is configured; the branch is no longer asked. Without a terminal, in CI, with
+  `--no-input` or `STEERSYNC_NO_INPUT`, they print the plan and exit 2 naming `--yes`;
+  `--yes` applies the default selection (never destructive steps), `--plan`/`--dry-run`
+  only shows it, `--only`/`--skip`/`--profile`/`--json` shape it. init's step flags are
+  answers, so `init --hook` still needs no prompt.
+- Every run that writes takes one backup first and ends with
+  `Undo with: steersync restore <id>`; `steersync restore` is now a top level command
+  (`fleet restore` remains) and also removes files the run created.
 
 - `agent-legacy-key` is an error for keys V3 does not read (`lint.legacy_agent_keys`) and
   names the V3 replacement and `/upgrade-agent`; what `/upgrade-agent` keeps next to

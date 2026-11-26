@@ -85,12 +85,15 @@ answer "which of my repositories have unpushed Kiro changes?".
 ## Push and pull
 
 ```bash
-steersync fleet push [--repo PATH]... [--state STATE]... [--all] [--dry-run] [--yes] [--json]
-steersync fleet pull [--repo PATH]... [--state STATE]... [--all] [--overwrite-local] [--dry-run] [--yes] [--json]
+steersync fleet push [--repo PATH]... [--state STATE]... [--all] [plan options]
+steersync fleet pull [--repo PATH]... [--state STATE]... [--all] [--overwrite-local] [plan options]
 ```
 
-Both always refresh the central repositories first, list what they will do and ask for
-confirmation (`--yes` skips it). `--all` selects every repository that has something to
+Both always refresh the central repositories first, then show one plan, a step per
+repository (`push:~/code/app`, `pull:~/code/app`, `overwrite:~/code/app`), and ask once: one
+checkbox, enter applies. `--yes` applies the default selection, `--plan` (or `--dry-run`)
+only shows the plan (with `--json` as JSON), `--only`/`--skip` take step ids or kinds
+(`--skip overwrite`). Without a terminal and without `--yes` they print the plan and exit 2. `--all` selects every repository that has something to
 push, or to pull. A repository that cannot take part is reported as skipped with the
 reason: missing, unconfigured, error, offline, or nothing to do.
 
@@ -104,16 +107,18 @@ are written one at a time with a rename, so an interrupted pull never leaves a h
 file.
 
 On a terminal, bare `steersync fleet` shows the table and offers: details of one repository
-(every file by collection and direction), push, pull, refresh and quit. The push and pull
-choices open a checklist with the eligible repositories ticked; rows that cannot take part
-are shown greyed out with the reason.
+(every file by collection and direction), push, pull, refresh and quit. Push and pull open
+the same plan as one checkbox, with the repositories that have something to do ticked;
+repositories that cannot take part are listed as skipped with the reason.
 
 ### Overwriting local edits
 
-`fleet pull` never overwrites a locally edited file unless asked. With `--overwrite-local`,
-or the "overwrite" choice in the interactive flow, steersync lists every file it will
-replace and asks you to type `overwrite` (`overwrite N` for N repositories). With `--yes` in
-a script the typed confirmation is skipped, so use it deliberately.
+`fleet pull` never overwrites a locally edited file unless asked. A repository whose local
+edits also changed centrally gets an `overwrite:` step in the plan, which names the files.
+It is a `review` step: off by default, preselected by `--overwrite-local`, and covered by
+the single approval because a verified backup is always taken first (`steersync restore`
+undoes it). With `--overwrite-local --yes` in a script it runs without a question, so use it
+deliberately.
 
 Before anything is written:
 

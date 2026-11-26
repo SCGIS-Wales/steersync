@@ -155,7 +155,7 @@ def test_plan_json_and_hash() -> None:
 
 def test_non_interactive_message() -> None:
     assert non_interactive_message(PLAN) == (
-        "Re-run with --yes to apply 4 steps, or --plan to inspect."
+        "Re-run with --yes to apply 2 steps, or --plan to inspect."
     )
 
 

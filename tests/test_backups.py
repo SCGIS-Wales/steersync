@@ -150,3 +150,29 @@ def test_prune_by_age_and_size(tmp_path: Path) -> None:
     result = backups.prune(root, keep_days=14, max_bytes=400, now=now)
     assert result.removed == ("20260101T000000000000Z", "20261120T000000000000Z")
     assert [p.name for p in root.iterdir()] == ["20261121T000000000000Z"]
+
+
+def test_take_files_records_created_files_and_restore_removes_them(tmp_path: Path) -> None:
+    existing = tmp_path / "home" / ".config" / "steersync" / "config.yaml"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("remote: {}\n")
+    created = tmp_path / "home" / ".kiro" / "hooks" / "steersync.json"
+    root = tmp_path / "backups"
+    backup = backups.take_files(root, [existing, created], label="setup")
+    assert {(i.path.endswith("config.yaml"), i.created) for i in backup.items} == {
+        (True, False),
+        (False, True),
+    }
+    # The run writes both files; restore puts the first back and removes the second.
+    existing.write_text("remote: {url: x}\n")
+    created.parent.mkdir(parents=True)
+    created.write_text("{}")
+    (loaded,) = backups.listing(root)
+    assert loaded.project == "setup"
+    restored = backups.restore(loaded)
+    assert len(restored) == 2
+    assert existing.read_text() == "remote: {}\n"
+    assert not created.exists()
+    created.write_text("{}")
+    with pytest.raises(BackupError, match="changed after the backup"):
+        backups.verify_unchanged(loaded, Path(loaded.workspace))
