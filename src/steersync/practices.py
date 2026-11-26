@@ -254,25 +254,6 @@ def agent_findings(
                     f"prompt {prompt} does not exist relative to the agent file",
                 )
             )
-    hooks = data.get("hooks")
-    if isinstance(hooks, Mapping):
-        if any(not isinstance(value, list) for value in hooks.values()):
-            findings.append(
-                Finding(
-                    path,
-                    "agent-hooks-object-form",
-                    "inline hooks must be arrays per trigger on CLI 3.0; /upgrade-agent converts "
-                    "the 2.x object form",
-                )
-            )
-        findings.append(
-            Finding(
-                path,
-                "agent-inline-hooks",
-                "inline agent hooks are the CLI 2.x mechanism; CLI 3.0 and IDE 1.0 read "
-                "standalone .kiro/hooks/*.json files that apply to every agent",
-            )
-        )
     return findings
 
 
@@ -284,30 +265,12 @@ def hook_findings(
 ) -> list[Finding]:
     findings: list[Finding] = []
     path = doc.relative_path
-    if _name(path).endswith(".kiro.hook"):
-        findings.append(
-            Finding(
-                path,
-                "hook-legacy-format",
-                "the .kiro.hook format is deprecated; IDE 1.0 does not execute it until it is "
-                "migrated to .kiro/hooks/<name>.json",
-            )
-        )
     if not isinstance(data, Mapping):
         return findings
     for index, hook in enumerate(_as_list(data.get("hooks"))):
         if not isinstance(hook, Mapping):
             continue
         label = f"hooks[{index}]"
-        if "when" in hook or "then" in hook:
-            findings.append(
-                Finding(
-                    path,
-                    "hook-when-then",
-                    f"{label} uses the IDE 0.x when/then schema; current files use trigger, "
-                    "matcher and action",
-                )
-            )
         timeout = hook.get("timeout")
         if isinstance(timeout, int | float) and timeout > limits.hook_timeout_max_seconds:
             findings.append(

@@ -40,30 +40,6 @@ HOOK_TRIGGERS: frozenset[str] = frozenset(
         "Manual",
     }
 )
-# Every other spelling the Kiro CLI 3.5 harness accepts and the trigger it maps it to: the
-# CLI 2.x camelCase names, the IDE 0.x ``when.type`` names and the documented aliases.
-# They still load, but the canonical PascalCase name is what Kiro writes.
-HOOK_TRIGGER_ALIASES: Mapping[str, str] = {
-    "agentSpawn": "SessionStart",
-    "AgentSpawn": "SessionStart",
-    "sessionStart": "SessionStart",
-    "stop": "Stop",
-    "agentStop": "Stop",
-    "userPromptSubmit": "UserPromptSubmit",
-    "promptSubmit": "UserPromptSubmit",
-    "preToolUse": "PreToolUse",
-    "postToolUse": "PostToolUse",
-    "permissionRequest": "PermissionRequest",
-    "preCompact": "PreCompact",
-    "postCompact": "PostCompact",
-    "preTaskExecution": "PreTaskExec",
-    "postTaskExecution": "PostTaskExec",
-    "fileEdited": "PostFileSave",
-    "AfterFileEdit": "PostFileSave",
-    "fileCreated": "PostFileCreate",
-    "fileDeleted": "PostFileDelete",
-    "userTriggered": "Manual",
-}
 HOOK_ACTION_TYPES: frozenset[str] = frozenset({"command", "agent"})
 _NO_MATCHER_TRIGGERS: frozenset[str] = frozenset({"Stop", "SessionStart", "SessionEnd"})
 
@@ -90,23 +66,23 @@ def hook_entry_issues(hook: Mapping[str, Any], label: str, *, standalone: bool) 
         for key in required
         if key not in hook
     )
+    if "when" in hook or "then" in hook:
+        issues.append(
+            Issue(
+                "hook-legacy-file",
+                "error",
+                f"{label} uses the legacy when/then form; a V3 hook in .kiro/hooks/<id>.json "
+                'has "name", "trigger" (PascalCase) and "action" {"type": "command" | "agent"}',
+            )
+        )
     trigger = hook.get("trigger")
     if isinstance(trigger, str):
-        if trigger in HOOK_TRIGGER_ALIASES:
-            issues.append(
-                Issue(
-                    "hook-trigger-alias",
-                    "warning",
-                    f"{label}: {trigger!r} is the CLI 2.x name; V3 uses "
-                    f"{HOOK_TRIGGER_ALIASES[trigger]!r}",
-                )
-            )
-        elif trigger not in HOOK_TRIGGERS:
+        if trigger not in HOOK_TRIGGERS:
             issues.append(
                 Issue(
                     "hook-trigger",
-                    "warning",
-                    f"{label}: unknown trigger {trigger!r}; Kiro V3 triggers are PascalCase "
+                    "error",
+                    f"{label}: {trigger!r} is not a V3 trigger; V3 triggers are PascalCase "
                     f"({', '.join(sorted(HOOK_TRIGGERS))})",
                 )
             )
@@ -240,21 +216,8 @@ PERMISSION_CAPABILITIES: frozenset[str] = frozenset(
 )
 # ``evaluate`` is the weakest effect, written by the approve-for-me preset.
 PERMISSION_EFFECTS: frozenset[str] = frozenset({"allow", "ask", "deny", "evaluate"})
-# CLI 2.x tool names and the V3 tool tag that replaced each one.
-V2_TOOL_NAMES: Mapping[str, str] = {
-    "fs_read": "read",
-    "fs_write": "write",
-    "execute_bash": "shell",
-    "execute_cmd": "shell",
-    "use_subagent": "subagent",
-}
-LEGACY_AGENT_KEYS: Mapping[str, str] = {
-    "toolAliases": "tool aliases are not supported by the V3 harness",
-    "keyboardShortcut": "keyboard shortcuts for agents were removed with the Classic interface",
-}
 RESOURCE_SCHEMES: tuple[str, ...] = ("file://", "skill://")
 KNOWLEDGE_INDEX_TYPES: frozenset[str] = frozenset({"best", "fast"})
-UPGRADE_HINT = "run /upgrade-agent in kiro-cli, or 'kiro-cli agent upgrade <dir>' for a directory"
 _HOME_PATH_RE = re.compile(r"(?:^|[^A-Za-z0-9])(?:/Users/|/home/)[^/\s\"']+|[A-Za-z]:\\\\Users\\\\")
 
 
@@ -266,43 +229,51 @@ def _strings(value: object) -> list[str]:
     return []
 
 
-def agent_issues(data: Mapping[str, Any]) -> list[Issue]:
-    """V3 readiness and schema rules for a JSON agent or a Markdown agent's front matter."""
-    issues: list[Issue] = []
-    v2_keys = [key for key in ("toolsSettings", "allowedTools") if key in data]
-    if v2_keys and "permissions" not in data:
+def agent_issues(
+    data: Mapping[str, Any],
+    *,
+    fields: Sequence[str],
+    legacy_keys: Mapping[str, str],
+    upgraded_keys: Sequence[str] = (),
+    markdown: bool = False,
+) -> list[Issue]:
+    """V3 schema rules for a JSON agent or a Markdown agent's front matter.
+
+    ``fields`` are the V3 top level keys and ``legacy_keys`` maps each key V3 no longer
+    reads to its replacement (both from ``lint.agent_fields`` and
+    ``lint.legacy_agent_keys``). Kiro validates JSON agents, so an unknown key there is an
+    error; in Markdown front matter it is a warning. ``upgraded_keys`` are what
+    `/upgrade-agent` leaves next to ``permissions``: accepted in an upgraded agent.
+    """
+    upgraded = "permissions" in data
+    issues: list[Issue] = [
+        Issue(
+            "agent-legacy-key",
+            "error",
+            f"{key} is not read by Kiro V3; use {replacement} instead. Run /upgrade-agent "
+            "in Kiro, then commit the result",
+        )
+        for key, replacement in legacy_keys.items()
+        if key in data and not (upgraded and key in upgraded_keys)
+    ]
+    known = set(fields) | set(legacy_keys) | set(upgraded_keys)
+    issues.extend(
+        Issue(
+            "agent-unknown-key",
+            "warning" if markdown else "error",
+            f"{key!r} is not a Kiro V3 agent field ({', '.join(fields)})",
+        )
+        for key in data
+        if key not in known
+    )
+    if "use_aws" in _strings(data.get("tools")):
         issues.append(
             Issue(
-                "agent-v2-format",
-                "error",
-                f"{' and '.join(v2_keys)} without permissions is the CLI 2.x format. Kiro "
-                "rewrites such files in place on first load (automatic agent upgrade), so a "
-                "synced copy turns into a local edit on every machine and the next pull "
-                f"reports a conflict; {UPGRADE_HINT} to commit the universal format",
+                "agent-use-aws",
+                "warning",
+                "the use_aws tool is gone in V3; add the AWS API MCP server instead",
             )
         )
-    issues.extend(
-        Issue("agent-legacy-key", "warning", f"{key}: {reason}")
-        for key, reason in LEGACY_AGENT_KEYS.items()
-        if key in data
-    )
-    for tool in _strings(data.get("tools")):
-        if tool == "use_aws":
-            issues.append(
-                Issue(
-                    "agent-use-aws",
-                    "warning",
-                    "the use_aws tool is gone in V3; add the AWS API MCP server instead",
-                )
-            )
-        elif tool in V2_TOOL_NAMES:
-            issues.append(
-                Issue(
-                    "agent-v2-tool-name",
-                    "warning",
-                    f"tool {tool!r} is the CLI 2.x name; V3 uses {V2_TOOL_NAMES[tool]!r}",
-                )
-            )
     issues.extend(_permission_issues(data.get("permissions")))
     issues.extend(_resource_issues(data.get("resources")))
     hooks = data.get("hooks")
@@ -314,15 +285,14 @@ def agent_issues(data: Mapping[str, Any]) -> list[Issue]:
             else:
                 issues.append(Issue("hook-schema", "error", f"{label} must be an object"))
     elif isinstance(hooks, Mapping):
-        issues.extend(
+        issues.append(
             Issue(
-                "hook-trigger-alias",
-                "warning",
-                f"hooks.{trigger}: CLI 2.x camelCase trigger; V3 uses "
-                f"{HOOK_TRIGGER_ALIASES[trigger]!r} ({UPGRADE_HINT})",
+                "hook-legacy-file",
+                "error",
+                "hooks keyed by trigger is the legacy agent form; V3 agent hooks are a list "
+                'of {"trigger", "action"}, or move them to .kiro/hooks/<id>.json with '
+                '"version": "v1" and "hooks": [{"name", "trigger", "action"}]',
             )
-            for trigger in hooks
-            if trigger in HOOK_TRIGGER_ALIASES and trigger != HOOK_TRIGGER_ALIASES[trigger]
         )
     return issues
 

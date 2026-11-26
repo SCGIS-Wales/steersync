@@ -90,30 +90,20 @@ def install_pre_push_hook(
     return HookInstallResult(target, chained, action)
 
 
-def render_kiro_hook(
-    engine: Literal["v2", "v3"],
-    *,
-    command: str = SESSION_PULL_COMMAND,
-    timeout: int = 30,
-) -> str:
-    """Render the Kiro hook definition that pulls steering when a session starts."""
-    if engine == "v2":
-        payload: dict[str, object] = {
-            "hooks": {"agentSpawn": [{"command": command, "timeout_ms": timeout * 1000}]}
-        }
-    else:
-        payload = {
-            "version": "v1",
-            "hooks": [
-                {
-                    "name": "steersync-pull",
-                    "trigger": "SessionStart",
-                    "action": {"type": "command", "command": command},
-                    "timeout": timeout,
-                    "enabled": True,
-                }
-            ],
-        }
+def render_kiro_hook(*, command: str = SESSION_PULL_COMMAND, timeout: int = 30) -> str:
+    """Render the Kiro V3 hook file that pulls the configuration when a session starts."""
+    payload = {
+        "version": "v1",
+        "hooks": [
+            {
+                "name": "steersync-pull",
+                "trigger": "SessionStart",
+                "action": {"type": "command", "command": command},
+                "timeout": timeout,
+                "enabled": True,
+            }
+        ],
+    }
     return json.dumps(payload, indent=2) + "\n"
 
 
@@ -137,7 +127,7 @@ AUTO_APPROVE_TOOLS: tuple[str, ...] = (
     "list_kiro_collections",
     "doctor_kiro_config",
     "fleet_status",
-    "kiro_v3_status",
+    "kiro_check",
 )
 
 
@@ -235,7 +225,7 @@ def write_kiro_hook(
 ) -> Literal["written", "updated", "unchanged"]:
     """Write the V3 SessionStart hook file that refreshes the configuration."""
     target = hooks_dir / KIRO_HOOK_FILE
-    rendered = render_kiro_hook("v3", command=command, timeout=timeout)
+    rendered = render_kiro_hook(command=command, timeout=timeout)
     if target.is_file() and target.read_text("utf-8") == rendered:
         return "unchanged"
     action: Literal["written", "updated"] = "updated" if target.exists() else "written"

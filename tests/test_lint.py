@@ -208,10 +208,10 @@ def test_agent_and_generic_profiles(config: Config) -> None:
     assert profile_rules(config, "entra.json", "agent", '{"name": "entra"}') == set()
     assert "agent-name" in profile_rules(config, "entra.json", "agent", '{"description": "x"}')
     assert "agent-schema" in profile_rules(config, "entra.json", "agent", "[]")
-    assert "agent-v2-format" in profile_rules(
+    assert "agent-legacy-key" in profile_rules(
         config, "entra.json", "agent", '{"name": "e", "toolsSettings": {}}'
     )
-    universal = '{"name": "e", "toolsSettings": {}, "permissions": {"rules": []}}'
+    universal = '{"name": "e", "permissions": {"rules": []}}'
     assert profile_rules(config, "entra.json", "agent", universal) == set()
     assert "json-syntax" in profile_rules(config, "entra.json", "agent", "{")
     assert "encoding-utf8" in profile_rules(config, "entra.json", "agent", b"\xff")

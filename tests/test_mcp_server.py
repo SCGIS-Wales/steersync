@@ -74,7 +74,7 @@ def test_tools_are_typed_and_annotated() -> None:
     assert "force" in pull_args
     assert pull_args["collections"]["description"].startswith("Limit to these collections")
     assert "ok" in tools["validate_kiro_config"].output_schema["properties"]  # type: ignore[index]
-    assert set(mcp_server.READ_ONLY_TOOLS) >= {"doctor_kiro_config", "kiro_v3_status"}
+    assert set(mcp_server.READ_ONLY_TOOLS) >= {"doctor_kiro_config", "kiro_check"}
 
 
 def test_tools_round_trip(in_project: Path) -> None:
@@ -104,9 +104,9 @@ def test_tools_round_trip(in_project: Path) -> None:
     assert collections["workspace"] == str(in_project.resolve())
     doctor = structured(call("doctor_kiro_config"))
     assert doctor["project"] == PROJECT_SLUG
-    assert doctor["harness"]["cli_path"] is None
+    assert doctor["kiro"]["cli_path"] is None
     assert "steering" in doctor["directories"]
-    assert structured(call("kiro_v3_status"))["needs_reminder"] is False
+    assert structured(call("kiro_check"))["supported"] is True
 
 
 def test_failures_are_error_results(

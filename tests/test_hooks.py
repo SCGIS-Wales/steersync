@@ -59,7 +59,7 @@ def test_hook_script_is_posix_sh() -> None:
 
 
 def test_render_kiro_hooks() -> None:
-    v3 = json.loads(hooks.render_kiro_hook("v3"))
+    v3 = json.loads(hooks.render_kiro_hook())
     assert v3["version"] == "v1"
     assert v3["hooks"][0]["trigger"] == "SessionStart"
     command = v3["hooks"][0]["action"]["command"]
@@ -67,8 +67,9 @@ def test_render_kiro_hooks() -> None:
     assert f'--from "steersync=={__version__}"' in command
     assert '--python ">=3.14"' in command
     assert command.endswith("steersync pull --quiet --best-effort")
-    v2 = json.loads(hooks.render_kiro_hook("v2", command="steersync pull", timeout=5))
-    assert v2["hooks"]["agentSpawn"][0] == {"command": "steersync pull", "timeout_ms": 5000}
+    custom = json.loads(hooks.render_kiro_hook(command="steersync pull", timeout=5))
+    assert custom["hooks"][0]["action"]["command"] == "steersync pull"
+    assert custom["hooks"][0]["timeout"] == 5
 
 
 def test_render_mcp_config() -> None:
@@ -134,7 +135,7 @@ def test_session_start_hook_command_parses(
 
     monkeypatch.chdir(project)
     monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
-    command = json.loads(hooks.render_kiro_hook("v3"))["hooks"][0]["action"]["command"]
+    command = json.loads(hooks.render_kiro_hook())["hooks"][0]["action"]["command"]
     words = shlex.split(command)
     assert words[0] == "uvx"
     args = words[words.index("steersync") + 1 :]

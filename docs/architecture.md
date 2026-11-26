@@ -40,8 +40,7 @@ sync.py         pull / push / status / merge_request orchestration over every co
   ├── paths.py      Kiro home, per collection directories, lock paths, cache, containment
   └── config.py     layered YAML + environment configuration validated by pydantic
 hooks.py        pre-push hook installer, Kiro hook and mcp.json renderers
-kiro_version.py Kiro CLI V3 harness detection and the rate limited reminder
-migrate.py      legacy *.kiro.hook and inline agent hooks to .kiro/hooks/*.json
+kiro_version.py the Kiro V3 baseline check (kiro.min_cli_version) and its daily notice
 logging_utils.py text or JSON logging with secret redaction
 errors.py       exception types carrying exit codes
 ```
@@ -151,7 +150,7 @@ rich and questionary never slow down `pull` or the hooks.
 | 7 | Central or local content exceeds `sync.max_files` or `sync.max_total_bytes` |
 | 8 | Timed out waiting for another steersync process using the same cache |
 | 9 | GitLab API error or missing token |
-| 10 | `v3-status --strict`: a Kiro V3 reminder applies |
+| 10 | `doctor --kiro --strict`: below the supported Kiro V3 baseline |
 | 130 | Interrupted |
 
 ## Resiliency

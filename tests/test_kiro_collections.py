@@ -151,6 +151,6 @@ def test_lint_explicit_paths_outside_the_workspace(
     by_profile = runner.invoke(main, ["lint", "--json", "--profile", "agent", str(outside)])
     data = json.loads(by_profile.stdout)
     assert data["checked"] == 1
-    assert {f["rule"] for f in data["findings"]} == {"agent-v2-format"}
+    assert {f["rule"] for f in data["findings"]} == {"agent-legacy-key"}
     single = runner.invoke(main, ["lint", "--json", str(outside / "old.json")])
     assert json.loads(single.stdout)["checked"] == 1

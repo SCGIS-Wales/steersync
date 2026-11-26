@@ -12,7 +12,7 @@ import json
 import re
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import yaml
 
@@ -480,9 +480,22 @@ def _profile_hooks(
     findings = _text_findings(doc)
     if findings:
         return findings
+    if name.endswith(".kiro.hook"):
+        findings.append(
+            LintFinding(
+                doc.relative_path,
+                "hook-legacy-file",
+                "error",
+                "*.kiro.hook is the legacy hook format and Kiro V3 does not run it; write "
+                '.kiro/hooks/<id>.json with "version": "v1" and "hooks": [{"name", "trigger" '
+                '(PascalCase), "action": {"type": "command", "command"}}]',
+            )
+        )
+        findings.extend(_secret_findings(doc, config))
+        return findings
     data, syntax = _parse_json(doc)
     findings.extend(syntax)
-    if not syntax and not name.endswith(".kiro.hook"):
+    if not syntax:
         findings.extend(_issues(doc, kiro_rules.hook_file_issues(data)))
     if config.practices:
         findings.extend(_warnings(practices.hook_findings(doc, data, _limits(config))))
@@ -521,9 +534,65 @@ def _profile_agent(
                         doc.relative_path, "agent-name", "warning", 'agent definition has no "name"'
                     )
                 )
-            findings.extend(_issues(doc, kiro_rules.agent_issues(data)))
+            findings.extend(_issues(doc, _agent_rules(data, config, markdown=False)))
+            findings.extend(_resource_budget(doc, data, config, ctx))
     findings.extend(_secret_findings(doc, config))
     return findings
+
+
+def _agent_rules(data: Mapping[str, Any], config: LintConfig, *, markdown: bool) -> list[Any]:
+    return kiro_rules.agent_issues(
+        data,
+        fields=config.agent_fields,
+        legacy_keys=config.legacy_agent_keys,
+        upgraded_keys=config.upgraded_agent_keys,
+        markdown=markdown,
+    )
+
+
+def _resource_budget(
+    doc: SteeringDocument, data: Mapping[str, Any], config: LintConfig, ctx: LintContext
+) -> list[LintFinding]:
+    """agent-resource-budget: file:// resources Kiro would truncate or skip at startup."""
+    if ctx.workspace_root is None:
+        return []
+    limits = config.kiro_limits
+    files: dict[Path, int] = {}
+    for resource in data.get("resources") or []:
+        if not isinstance(resource, str) or not resource.startswith("file://"):
+            continue
+        for match in sorted(ctx.workspace_root.glob(resource.removeprefix("file://"))):
+            if match.is_file():
+                files[match] = match.stat().st_size
+    issues: list[str] = []
+    if len(files) > limits.agent_file_resources_max:
+        issues.append(
+            f"{len(files)} file:// resource files; Kiro loads at most "
+            f"{limits.agent_file_resources_max}"
+        )
+    chars = 0
+    for path, size in files.items():
+        if size > limits.file_bytes_skip:
+            issues.append(
+                f"{path.name} is {size} bytes; Kiro skips files over {limits.file_bytes_skip}"
+            )
+            continue
+        length = len(path.read_text("utf-8", errors="replace"))
+        chars += length
+        if length > limits.file_chars_truncate:
+            issues.append(
+                f"{path.name} has {length} characters; Kiro truncates at "
+                f"{limits.file_chars_truncate}"
+            )
+    if chars > limits.agent_file_resources_chars:
+        issues.append(
+            f"file:// resources total {chars} characters; Kiro loads at most "
+            f"{limits.agent_file_resources_chars}"
+        )
+    return [
+        LintFinding(doc.relative_path, "agent-resource-budget", "warning", message)
+        for message in issues
+    ]
 
 
 def _profile_markdown_agent(
@@ -538,7 +607,7 @@ def _profile_markdown_agent(
         and not fm.error
         and PurePosixPath(doc.relative_path).parent == PurePosixPath()
     ):
-        findings.extend(_issues(doc, kiro_rules.agent_issues(fm.metadata)))
+        findings.extend(_issues(doc, _agent_rules(fm.metadata, config, markdown=True)))
         if config.practices:
             findings.extend(_warnings(practices.agent_findings(doc, fm.metadata, ctx.directory)))
     return findings

@@ -46,7 +46,7 @@ def _isolated_state(
 def _no_local_kiro_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep tests independent of a kiro-cli installed on the developer's machine."""
     monkeypatch.setattr("steersync.kiro_version.CLI_BINARY", "kiro-cli-not-installed-in-tests")
-    monkeypatch.setenv("STEERSYNC_NO_V3_REMINDER", "1")
+    monkeypatch.setenv("STEERSYNC_NO_KIRO_CHECK", "1")
 
 
 def lock_file(project: Path) -> Path:
@@ -210,7 +210,7 @@ def fleet_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, Path]:
     monkeypatch.setenv("STEERSYNC_CONFIG", str(config_file))
-    monkeypatch.setenv("STEERSYNC_NO_V3_REMINDER", "1")
+    monkeypatch.setenv("STEERSYNC_NO_KIRO_CHECK", "1")
     slugs = ["acme/ahead", "acme/behind", "acme/both", "acme/proposed", "acme/same"]
     central_commit(seed(slugs), "seed fleet")
     base = tmp_path / "code"

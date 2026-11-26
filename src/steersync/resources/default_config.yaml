@@ -212,6 +212,12 @@ fleet:
   backup_keep_days: 14
   backup_max_bytes: 536870912
 
+# steersync supports the Kiro V3 harness only. Older kiro-cli releases or another
+# chat.agentEngine are reported by `steersync doctor --kiro` (exit 10 with --strict).
+kiro:
+  min_cli_version: "3.1.0"   # documented file:// resource limits start here
+  min_ide_version: "1.4.86"
+
 sync:
   # Delete locally managed files that disappeared from the central repository.
   prune: true
@@ -249,6 +255,26 @@ lint:
     disabled_rules:
       - MD013   # line length is not meaningful for prose steering
       - MD041   # first line heading is handled by require_h1 with front matter awareness
+  # Documented Kiro limits for file:// agent resources: more files or characters than
+  # this are truncated or skipped (agent-resource-budget warns before that happens).
+  kiro_limits:
+    agent_file_resources_max: 32
+    agent_file_resources_chars: 100000
+    file_chars_truncate: 50000
+    file_bytes_skip: 1048576
+  # Top level keys of a Kiro V3 agent. Any other key is an error in a JSON agent and a
+  # warning in a Markdown agent's front matter.
+  agent_fields: [name, description, prompt, model, tools, excludedTools, permissions,
+                 resources, mcpServers, hooks, includeMcpJson, includePowers, welcomeMessage]
+  # Agent keys V3 does not read, and their V3 replacement (agent-legacy-key).
+  legacy_agent_keys:
+    allowedTools: permissions
+    toolsSettings: permissions
+    toolAliases: tools and excludedTools
+    keyboardShortcut: nothing (removed in V3)
+  # Keys /upgrade-agent (Kiro CLI 3.5) keeps or adds next to "permissions" in an upgraded
+  # agent: accepted there, and legacy only in an agent without "permissions".
+  upgraded_agent_keys: [allowedTools, toolsSettings, kiroUpgrade]
   forbidden_patterns:
     - id: aws-access-key
       pattern: "(?<![A-Z0-9])(AKIA|ASIA)[0-9A-Z]{16}(?![A-Z0-9])"

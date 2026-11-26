@@ -144,21 +144,20 @@ class CollectionsReport(_Report):
     collections: list[CollectionInfo]
 
 
-class HarnessReport(_Report):
+class KiroReport(_Report):
     cli_path: str | None = Field(description="kiro-cli on PATH, or null for Kiro IDE only")
     cli_version: str | None
-    engine: str | None = Field(description="chat.agentEngine (v3, v2, v1) or null when unset")
+    engine: str | None = Field(description="chat.agentEngine, or null when unset (V3 default)")
     engine_source: Literal["kiro-cli", "settings-file", "default", "unknown"]
-    auto_upgrade: bool | None
-    acp_engine: str | None = Field(description="acp.agentEngine for `kiro-cli acp`, or null")
+    min_cli_version: str = Field(description="Oldest supported kiro-cli (kiro.min_cli_version)")
+    min_ide_version: str = Field(description="Oldest supported Kiro IDE (kiro.min_ide_version)")
     workflows_enabled: bool | None = Field(
         description="chat.enableWorkflows; synced workflow recipes load only when true"
     )
-    v2_agents: list[str] = Field(description="Agent files Kiro would rewrite on load")
-    reasons: list[str]
-    on_v3: bool
-    needs_reminder: bool
-    message: str | None = Field(description="The reminder to show the user, when one applies")
+    legacy_agents: list[str] = Field(description="Agent files with keys V3 does not read")
+    problems: list[str]
+    supported: bool = Field(description="True when the machine meets the V3 baseline")
+    message: str | None = Field(description="What to fix, to show the user when not supported")
 
 
 class DoctorReport(_Report):
@@ -172,7 +171,7 @@ class DoctorReport(_Report):
     directories: dict[str, dict[str, str]] = Field(
         description="Per collection workspace and global directories"
     )
-    harness: HarnessReport
+    kiro: KiroReport
 
 
 def load(cwd: str | None) -> tuple[Config, Path | None]:
@@ -353,17 +352,25 @@ def _agent_dirs(config: Config | None, root: Path | None) -> list[Path]:
     return [root / agents.workspace_path]
 
 
-def _harness(config: Config | None, root: Path | None) -> HarnessReport:
-    status = kiro_version.detect_harness(os.environ, agent_dirs=_agent_dirs(config, root))
-    return HarnessReport.model_validate(status.to_dict())
+def _kiro(config: Config | None, root: Path | None) -> KiroReport:
+    settings = config or Config()
+    status = kiro_version.detect(
+        os.environ,
+        min_cli_version=settings.kiro.min_cli_version,
+        min_ide_version=settings.kiro.min_ide_version,
+        legacy_keys=settings.lint.legacy_agent_keys,
+        upgraded_keys=settings.lint.upgraded_agent_keys,
+        agent_dirs=_agent_dirs(config, root),
+    )
+    return KiroReport.model_validate(status.to_dict())
 
 
-def v3_status(cwd: str | None = None) -> HarnessReport:
+def kiro_check(cwd: str | None = None) -> KiroReport:
     try:
         config, root = load(cwd)
     except SteersyncError, OSError:
-        return _harness(None, None)
-    return _harness(config, root)
+        return _kiro(None, None)
+    return _kiro(config, root)
 
 
 def doctor(cwd: str | None = None) -> DoctorReport:
@@ -387,7 +394,7 @@ def doctor(cwd: str | None = None) -> DoctorReport:
         origin=gitops.redact_url(origin) if origin else None,
         project=gitops.project_slug(origin) if origin else None,
         directories=directories,
-        harness=_harness(config, root),
+        kiro=_kiro(config, root),
     )
 
 
