@@ -1,0 +1,11 @@
+--- a/.kiro/steering/list.md
++++ b/.kiro/steering/list.md
+@@ -1,6 +1,8 @@
+ # List
+ 
+ Intro
++
+ - a
+ - b
++
+ After the list.

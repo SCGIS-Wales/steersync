@@ -34,7 +34,8 @@ dependencies = [
   "pydantic>=2.12,<3",
   "python-frontmatter>=1.1,<2",
   "PyYAML>=6.0.3,<7",
-  "pymarkdownlnt>=0.9.40,<1",
+  # Pinned exactly: lint --fix calls its fix mode, and the golden tests catch drift on upgrades.
+  "pymarkdownlnt==0.9.42",
   # steersync fleet: tables and live progress (works with a preinstalled rich 15), and
   # checkbox and select prompts.
   "rich>=14.0,<16",
@@ -99,6 +100,8 @@ include = ["src/steersync", "tests", "scripts", "schemas", "README.md", "CHANGEL
 target-version = "py314"
 line-length = 100
 src = ["src", "tests"]
+# Golden fixtures are compared byte for byte; ruff must never format the code in them.
+extend-exclude = ["tests/golden"]
 
 [tool.ruff.lint]
 select = [

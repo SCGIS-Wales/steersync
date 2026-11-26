@@ -15,6 +15,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- Markdown fixes for `lint --fix`: PyMarkdown fix mode on the body only, for the rules the
+  installed version reports it can fix (`md-final-newline`, `md-trailing-space`,
+  `md-hard-tabs`, `md-ul-style`, `md-hr-style`, `md-fence-style`, `md-heading-space`,
+  `md-list-space`, `md-quote-space`, `md-list-indent`; unsafe `md-heading-increment`,
+  `md-ol-prefix`, `md-code-style`), and steersync's `md-blanks-around` (safe after
+  verification) and `md-blanks-around-lists` (unsafe). Fixes that are safe only while the
+  rendered Markdown is unchanged are demoted to unsafe when it would change.
+  `pymarkdownlnt` is pinned exactly.
+
 - `steersync lint --fix` with `--unsafe-fixes`, `--diff`, `--show-fixes`, `--select`,
   `--ignore` and `--allow-dirty`: safe fixes apply after one backup, unsafe ones need the
   flag or a checkbox choice, and every fix is verified (front matter data, JSON data,

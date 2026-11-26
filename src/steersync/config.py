@@ -179,6 +179,21 @@ _DEFAULT_FIX_SAFETY: dict[str, FixSafety] = {
     "fm-auto-name": "unsafe",
     "fm-move-to-metadata": "unsafe",
     "skill-name-case": "unsafe",
+    "md-final-newline": "safe",
+    "md-trailing-space": "safe",
+    "md-hard-tabs": "safe",
+    "md-ul-style": "safe",
+    "md-hr-style": "safe",
+    "md-fence-style": "safe",
+    "md-heading-space": "safe",
+    "md-list-space": "safe",
+    "md-quote-space": "safe",
+    "md-list-indent": "safe",
+    "md-blanks-around": "safe",
+    "md-blanks-around-lists": "unsafe",
+    "md-heading-increment": "unsafe",
+    "md-ol-prefix": "unsafe",
+    "md-code-style": "unsafe",
 }
 
 

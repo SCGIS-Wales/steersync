@@ -1631,7 +1631,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=4.0,<5" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3,<3" },
     { name = "pydantic", specifier = ">=2.12,<3" },
-    { name = "pymarkdownlnt", specifier = ">=0.9.40,<1" },
+    { name = "pymarkdownlnt", specifier = "==0.9.42" },
     { name = "python-frontmatter", specifier = ">=1.1,<2" },
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "questionary", specifier = ">=2.1,<3" },

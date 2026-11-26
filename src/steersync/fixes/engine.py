@@ -15,6 +15,7 @@ import os
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -111,6 +112,13 @@ def _build(
     return fixed, rules
 
 
+def _changes_rendering(fixer: Fixer, text: str, target: Target) -> bool:
+    if not target.label.endswith(".md"):
+        return False
+    after = fixer.apply(text, _context(target))
+    return after != text and not verify.renders_same(text, after)
+
+
 def plan_fixes(
     targets: Sequence[Target],
     config: LintConfig,
@@ -152,14 +160,28 @@ def plan_fixes(
             continue
         safe = [f for f, s in candidates if s == "safe"]
         risky = [f for f, s in candidates if s == "unsafe"]
+        # Safe after verification: demoted to unsafe when it would change the rendering.
+        demoted = [f for f in safe if f.demotable and _changes_rendering(f, original, target)]
+        safe = [f for f in safe if f not in demoted]
+        risky = [*risky, *demoted]
         wanted = chosen_unsafe.get(target.label, frozenset())
-        picked = [f for f in risky if all_unsafe or f.rule_id in wanted]
-        ordered = [f for f, _ in candidates if f in safe or f in picked]
+        # A demoted fix the user chose may change the rendering: that is why it was offered.
+        picked = [
+            replace(f, changes_markdown=True) if f in demoted else f
+            for f in risky
+            if all_unsafe or f.rule_id in wanted
+        ]
+        chosen_ids = {f.rule_id for f in [*safe, *picked]}
+        ordered = [
+            next(p for p in [*safe, *picked] if p.rule_id == f.rule_id)
+            for f, _ in candidates
+            if f.rule_id in chosen_ids
+        ]
         try:
             fixed, rules = _build(target, original, ordered, config.fix.max_passes, relint)
             if not all_unsafe:
                 for fixer in risky:
-                    if fixer in picked:
+                    if fixer.rule_id in chosen_ids:
                         continue
                     _, trial_rules = fix_text(
                         fixed, [fixer], _context(target), config.fix.max_passes
