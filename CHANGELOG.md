@@ -5,6 +5,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-26
+
 ### Changed (breaking)
 
 - `steersync fleet` leaves the `~/.kiro` (global) row out of status, push and pull by

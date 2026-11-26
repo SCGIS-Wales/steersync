@@ -17,7 +17,7 @@ Teams that already use [pre-commit](https://pre-commit.com) can use the publishe
 default_install_hook_types: [pre-commit, pre-push]
 repos:
   - repo: https://github.com/SCGIS-Wales/steersync
-    rev: v0.10.0
+    rev: v0.11.0
     hooks:
       - id: steersync-push
       - id: steersync-lint

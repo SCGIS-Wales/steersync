@@ -195,7 +195,7 @@ the sdist and a `SHA256SUMS` file, with signed build provenance, and the same fi
 published to [PyPI](https://pypi.org/project/steersync/) through trusted publishing.
 
 ```bash
-VERSION=0.10.0
+VERSION=0.11.0
 uv tool install "steersync[mcp] @ https://github.com/SCGIS-Wales/steersync/releases/download/v${VERSION}/steersync-${VERSION}-py3-none-any.whl"
 gh attestation verify "steersync-${VERSION}-py3-none-any.whl" --repo SCGIS-Wales/steersync
 ```
