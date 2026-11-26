@@ -15,7 +15,7 @@ RISK_STYLE = {"safe": "green", "review": "yellow", "destructive": "bold red"}
 def render_plan(plan: Plan, console: Console) -> None:
     """One table: Step, Change, Target, Risk. Steps already in place say so."""
     grid = Table(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False, header_style="bold")
-    grid.add_column("Step", no_wrap=True)
+    grid.add_column("Step", overflow="fold", min_width=12)
     grid.add_column("Change", overflow="fold")
     grid.add_column("Target", overflow="fold")
     grid.add_column("Risk", no_wrap=True)

@@ -253,14 +253,14 @@ def terminal(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """A terminal for CliRunner, and a checkbox that ticks every offered step."""
     import questionary
 
-    from steersync import cli, interaction
+    from steersync import cli_plan, interaction
 
     real = interaction.resolve_interaction
 
     def on_a_terminal(**kwargs: Any) -> interaction.Interaction:
         return real(**{**kwargs, "stdin_tty": True, "env": {}})
 
-    monkeypatch.setattr(cli, "resolve_interaction", on_a_terminal)
+    monkeypatch.setattr(cli_plan, "resolve_interaction", on_a_terminal)
     offered: list[list[str]] = []
 
     class Ticked:
@@ -357,7 +357,7 @@ def test_setup_non_interactive(
     assert [s["id"] for s in json.loads(planned.stdout)["steps"]] == ["config.save"]
     result = CliRunner().invoke(main, [*base, "--yes"])
     assert result.exit_code == 0, result.output
-    assert "@ main" in result.output
+    assert load_config(workspace_root=None, env=env).remote.default_branch == "main"
     assert "mcp.register" not in result.output
     assert not (kiro_dir(env) / "settings" / "mcp.json").exists()
     assert not (realistic_project / ".git" / "hooks" / "pre-push").exists()

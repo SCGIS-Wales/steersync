@@ -35,6 +35,7 @@ from steersync.cli_common import (
 )
 from steersync.cli_fleet import fleet
 from steersync.cli_options import plan_options
+from steersync.cli_plan import interaction_from, run_plan
 from steersync.config import (
     LINT_PROFILES,
     CollectionConfig,
@@ -46,7 +47,7 @@ from steersync.config import (
 )
 from steersync.errors import ConfigError, SteersyncError
 from steersync.hooks import DEFAULT_TOKEN_ENV
-from steersync.interaction import Interaction, resolve_interaction
+from steersync.interaction import Interaction
 from steersync.lint import LintReport, lint_paths, lint_workspace, merge_reports
 from steersync.logging_utils import configure_logging
 from steersync.mcp_tools import MISSING_MCP_EXTRA
@@ -57,7 +58,6 @@ from steersync.paths import (
     workspace_collection_dir,
     workspace_steering_dir,
 )
-from steersync.plan import Plan, restrict, with_defaults
 from steersync.steering import FileSpec
 
 log = logging.getLogger("steersync")
@@ -642,7 +642,9 @@ def init(
         mcp_command=mcp_command,
     )
     flags_answered = write_config or any(v is not None for v in (exclude, hook, kiro))
-    result = _run_plan(plan, config, plan_flags, answered=flags_answered, notes=state)
+    result = run_plan(
+        plan, config, plan_flags, answered=flags_answered, notes=setup_plan.notes(state)
+    )
     if result.exit_code == 0:
         if "repo.exclude" in result.applied:
             _hint_tracked_files(config, root, setup_plan.exclude_patterns(config))
@@ -651,57 +653,6 @@ def init(
         click.echo(f"ready: {steering_dir}")
         click.echo(f"collections: {', '.join(config.enabled_collections()) or '(none)'}")
     plan_flow.finish(result)
-
-
-def _interaction(plan_flags: Mapping[str, object], *, answered: bool = False) -> Interaction:
-    return resolve_interaction(
-        yes=bool(plan_flags.get("yes")) or answered,
-        no_input=bool(plan_flags.get("no_input")),
-        force=bool(plan_flags.get("force")),
-        dry_run=bool(plan_flags.get("dry_run")),
-        output="json" if plan_flags.get("as_json") else "text",
-    )
-
-
-def _names(value: object) -> tuple[str, ...]:
-    return tuple(str(v) for v in value) if isinstance(value, tuple | list) else ()
-
-
-def _run_plan(
-    plan: Plan,
-    config: Config,
-    plan_flags: Mapping[str, object],
-    *,
-    answered: bool = False,
-    notes: setup_plan.SetupState | None = None,
-    extra_skip: tuple[str, ...] = (),
-) -> plan_flow.FlowResult:
-    """--only/--skip/--profile, the remembered selection, then the one approval."""
-    try:
-        plan = restrict(
-            plan,
-            only=_names(plan_flags.get("only")),
-            skip=(*_names(plan_flags.get("skip")), *extra_skip),
-        )
-    except click.UsageError as exc:
-        _fail(ConfigError(exc.format_message()))
-        raise AssertionError from exc  # pragma: no cover - _fail always exits
-    profile = plan_flags.get("profile")
-    saved = config.setup.profiles.get(profile) if isinstance(profile, str) else None
-    remembered: frozenset[str] | None = None
-    if saved is not None:
-        plan = with_defaults(plan, saved)
-    elif config.ux.remember_selection and config.setup.last and plan.command == "setup":
-        remembered = frozenset(config.setup.last)
-    return plan_flow.execute(
-        plan,
-        _interaction(plan_flags, answered=answered),
-        os.environ,
-        remembered=remembered,
-        confirm_after_select=config.ux.confirm_after_select,
-        undo_hint=config.ux.show_undo_hint,
-        notes=tuple(setup_plan.notes(notes)) if notes is not None else (),
-    )
 
 
 def _hint_tracked_files(config: Config, root: Path, patterns: list[str]) -> None:
@@ -766,7 +717,7 @@ def setup(
     configure_logging(
         params.get("log_level") or "WARNING", params.get("log_format") or "text", quiet=False
     )
-    interaction = _interaction(plan_flags)
+    interaction = interaction_from(plan_flags)
     git = setup_steps.check_git()
     if not git.ok:
         _fail(SteersyncError(git.problem or "git is not usable"))
@@ -794,7 +745,14 @@ def setup(
         for flag, step_id in ((mcp, "mcp.register"), (session_hook, "hook.session"))
         if flag is False and any(s.id == step_id for s in plan.steps)
     )
-    result = _run_plan(plan, current, plan_flags, notes=state, extra_skip=skipped)
+    result = run_plan(
+        plan,
+        current,
+        plan_flags,
+        notes=setup_plan.notes(state),
+        extra_skip=skipped,
+        remember=True,
+    )
     if result.applied:
         profile = plan_flags.get("profile")
         _remember_selection(

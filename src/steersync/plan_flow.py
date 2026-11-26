@@ -35,6 +35,7 @@ from steersync.plan import (
 EXIT_CANCELLED = 1
 EXIT_NEEDS_INPUT = 2
 EXIT_FAILED = 5
+EXIT_INTERRUPTED = 130
 
 
 class FlowResult(NamedTuple):
@@ -73,6 +74,7 @@ def execute(
     notes: tuple[str, ...] = (),
     ask: Ask | None = None,
     typed: Callable[[str], bool] = _typed,
+    report: Callable[[list[StepResult], str | None], None] | None = None,
 ) -> FlowResult:
     """Render, decide once, back up the selected steps' files, apply, report."""
     console = _console()
@@ -122,7 +124,9 @@ def execute(
             click.echo(f"steersync: {exc}", err=True)
             return FlowResult(EXIT_FAILED)
     results = run_steps(plan, choice.step_ids)
-    if as_json:
+    if report is not None:
+        report(results, backup_id)
+    elif as_json:
         click.echo(
             json.dumps(
                 {
@@ -136,8 +140,12 @@ def execute(
         )
     else:
         plan_render.render_results(results, backup_id, console, undo_hint=undo_hint)
-    failed = any(not r.ok for r in results)
-    return FlowResult(EXIT_FAILED if failed else 0, choice.step_ids, tuple(results), backup_id)
+    if any(r.interrupted for r in results):
+        click.echo("interrupted; the summary above shows what completed", err=True)
+        code = EXIT_INTERRUPTED
+    else:
+        code = EXIT_FAILED if any(not r.ok for r in results) else 0
+    return FlowResult(code, choice.step_ids, tuple(results), backup_id)
 
 
 def finish(result: FlowResult) -> None:

@@ -26,6 +26,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed (breaking)
 
+- `fleet push` and `fleet pull` show one plan (a step per repository) and ask once; the
+  `Proceed?` questions and the typed `overwrite` word are gone. Overwriting local edits is
+  an `overwrite:` step (review, backed up, off unless `--overwrite-local`). `--dry-run` is
+  now `--plan`. The interactive overview uses the same plan and one checkbox. Ctrl-C still
+  prints the summary and exits 130.
+
 - `steersync setup` and `steersync init` detect everything first, show one plan and ask
   once: one checkbox (enter applies). setup asks one question only when no central
   repository is configured; the branch is no longer asked. Without a terminal, in CI, with

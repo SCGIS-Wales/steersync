@@ -396,15 +396,17 @@ steersync fleet pull --all --yes
 steersync fleet status --json                            # the stable machine readable view
 ```
 
-Each repository gets its own proposal branch and merge request, exactly as `steersync push`
-in that repository would. One failure never stops the others: the summary lists what was
+Push and pull show one plan, a step per repository, and ask once (one checkbox; `--yes`
+applies the default selection; without a terminal they exit 2 naming `--yes`). Each
+repository gets its own proposal branch and merge request, exactly as `steersync push` in
+that repository would. One failure never stops the others: the summary lists what was
 done, skipped and failed, each failure with the command to rerun it, and the exit code is 5
 when anything failed.
 
 **Local edits are never lost.** `fleet pull` keeps every file you edited locally and says
-so. `--overwrite-local` (or choosing "overwrite" in the interactive flow) replaces them
-with the central versions, but only after you type `overwrite` (or `overwrite 3` for three
-repositories) and only after a verified backup:
+so. For a repository whose local edits also changed centrally, the plan has a separate
+`overwrite:` step (risk `review`, off by default; `--overwrite-local` preselects it) that
+replaces them with the central versions, only after a verified backup:
 
 1. every file about to be replaced or deleted is copied to
    `~/.local/state/steersync/backups/<UTC time>/<project>/` with a `manifest.json` of
@@ -488,9 +490,9 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 | `steersync doctor` | Report git version, resolved paths, remote, project slug and the Kiro CLI harness. |
 | `steersync fleet` | Every registered repository: a table, then (on a terminal) what to push or pull. |
 | `steersync fleet status [--json] [--refresh\|--no-refresh] [--state S]` | The table, or the stable JSON document. |
-| `steersync fleet push [--repo PATH]... [--state S]... [--all] [--dry-run] [--yes] [--json]` | Propose several repositories, one merge request each. |
-| `steersync fleet pull [--repo PATH]... [--state S]... [--all] [--overwrite-local] [--dry-run] [--yes] [--json]` | Pull several repositories; local edits are kept unless `--overwrite-local` (typed confirmation, verified backup). |
-| `steersync fleet restore [STAMP] [--list] [--repo PATH] [--yes]` | Put back what a forced pull replaced. |
+| `steersync fleet push [--repo PATH]... [--state S]... [--all]` plus the plan options | Propose several repositories, one merge request each; one plan, one approval. |
+| `steersync fleet pull [--repo PATH]... [--state S]... [--all] [--overwrite-local]` plus the plan options | Pull several repositories; local edits are kept unless an `overwrite:` step is selected (`--overwrite-local` preselects it; verified backup first). |
+| `steersync fleet restore` | The same as `steersync restore`. |
 | `steersync fleet scan ROOTS... [--max-depth N] [--no-add]`, `fleet add\|remove\|list\|prune` | Manage which repositories are registered. |
 | `steersync fleet doctor [--repair] [--json]` | Check the registry, work trees, sync records, cache clones, locks and backups. |
 

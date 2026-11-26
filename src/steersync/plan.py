@@ -34,6 +34,7 @@ class StepResult:
     ok: bool
     detail: str
     backup_id: str | None = None
+    interrupted: bool = False
 
 
 @dataclass(frozen=True)
@@ -172,14 +173,20 @@ def choose(
 
 
 def run_steps(plan: Plan, step_ids: Sequence[str]) -> list[StepResult]:
-    """Apply the chosen steps in plan order; one failure never stops the others."""
-    wanted = set(step_ids)
+    """Apply the chosen steps in plan order; one failure never stops the others.
+
+    Ctrl-C stops the run: the step in progress and the rest are reported as interrupted.
+    """
+    wanted = [s for s in plan.steps if s.id in set(step_ids)]
     results: list[StepResult] = []
-    for step in plan.steps:
-        if step.id not in wanted:
-            continue
+    for index, step in enumerate(wanted):
         try:
             results.append(step.apply())
+        except KeyboardInterrupt:
+            results.extend(
+                StepResult(s.id, False, "interrupted", None, True) for s in wanted[index:]
+            )
+            break
         except Exception as exc:
             results.append(StepResult(step.id, False, f"{type(exc).__name__}: {exc}"))
     return results

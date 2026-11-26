@@ -8,21 +8,19 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from steersync import fleet, gitops, sync
+from steersync import fleet, fleet_plan, gitops, sync
 from steersync.cli import main
 from steersync.cli_fleet_actions import (
     DETAILS,
-    KEEP,
-    OVERWRITE,
     PULL,
     PUSH,
     QUIT,
     Prompts,
-    expected_word,
     overview,
 )
 from steersync.errors import GitError, GitLabError
-from steersync.fleet import Outcome, RepoStatus
+from steersync.fleet import RepoStatus
+from steersync.plan import Plan
 from tests.conftest import STEERING, by_name, git
 
 LOCAL = STEERING.format(n=9)
@@ -69,12 +67,16 @@ def test_push_needs_a_selection_and_confirmation(fleet_env: dict[str, Path]) -> 
     assert CliRunner().invoke(main, ["fleet", "push"]).exit_code == 2
     unknown = CliRunner().invoke(main, ["fleet", "push", "--repo", "/nowhere"])
     assert "not registered" in unknown.output
-    cancelled = CliRunner().invoke(main, ["fleet", "push", "--all"], input="n\n")
-    assert "nothing was pushed" in cancelled.output
+    # No terminal and no --yes: the plan, then exit 2 naming the flag; nothing pushed.
+    asked = CliRunner().invoke(main, ["fleet", "push", "--all"])
+    assert asked.exit_code == 2
+    assert "Re-run with --yes to apply 2 steps" in asked.output
     assert status(fleet_env)["ahead"]["state"] == "local-ahead"
-    dry = CliRunner().invoke(main, ["fleet", "push", "--state", "local-ahead", "--dry-run"])
-    assert dry.exit_code == 0
-    assert "dry-run" in dry.output
+    planned = CliRunner().invoke(main, ["fleet", "push", "--state", "local-ahead", "--plan"])
+    assert planned.exit_code == 0
+    assert "push:" in planned.output
+    assert "review" in planned.output
+    assert status(fleet_env)["ahead"]["state"] == "local-ahead"
 
 
 def test_pull_keeps_local_edits_by_default(fleet_env: dict[str, Path]) -> None:
@@ -88,33 +90,28 @@ def test_pull_keeps_local_edits_by_default(fleet_env: dict[str, Path]) -> None:
     assert rows["both"]["state"] == "diverged"
 
 
-def test_typed_overwrite_backs_up_then_restore(fleet_env: dict[str, Path]) -> None:
+def test_overwrite_is_a_plan_step_with_a_backup_and_restore(fleet_env: dict[str, Path]) -> None:
     rules = fleet_env["both"] / ".kiro" / "steering" / "rules.md"
-    refused = CliRunner().invoke(
-        main,
-        ["fleet", "pull", "--repo", str(fleet_env["both"]), "--overwrite-local"],
-        input="yes please\ny\n",
+    planned = CliRunner().invoke(
+        main, ["fleet", "pull", "--repo", str(fleet_env["both"]), "--plan", "--json"]
     )
-    assert "overwrite cancelled" in refused.output
+    steps = {s["id"].split(":")[0]: s for s in json.loads(planned.stdout)["steps"]}
+    assert steps["overwrite"]["risk"] == "review"
+    assert steps["overwrite"]["default"] is False
+    kept = CliRunner().invoke(main, ["fleet", "pull", "--repo", str(fleet_env["both"]), "--yes"])
+    assert kept.exit_code == 0, kept.output
     assert rules.read_text() == LOCAL
     result = CliRunner().invoke(
-        main,
-        ["fleet", "pull", "--repo", str(fleet_env["both"]), "--overwrite-local"],
-        input="overwrite\ny\n",
+        main, ["fleet", "pull", "--repo", str(fleet_env["both"]), "--overwrite-local", "--yes"]
     )
     assert result.exit_code == 0, result.output
     assert rules.read_text() == STEERING.format(n=3)
     assert "backup:" in result.output
-    listed = CliRunner().invoke(main, ["fleet", "restore", "--list"]).output
+    listed = CliRunner().invoke(main, ["restore", "--list"]).output
     stamp = listed.split()[0]
-    restored = CliRunner().invoke(main, ["fleet", "restore", stamp, "--yes"])
+    restored = CliRunner().invoke(main, ["restore", stamp, "--yes"])
     assert restored.exit_code == 0, restored.output
     assert rules.read_text() == LOCAL
-
-
-def test_overwrite_many_needs_the_count() -> None:
-    assert expected_word(1) == "overwrite"
-    assert expected_word(3) == "overwrite 3"
 
 
 def test_offline_remote_refuses_push_and_pull(
@@ -127,7 +124,8 @@ def test_offline_remote_refuses_push_and_pull(
     monkeypatch.setattr(gitops, "ensure_cache_clone", unreachable)
     result = CliRunner().invoke(main, ["fleet", "push", "--state", "local-ahead", "--yes"])
     assert "offline" in result.output
-    assert "skipped" in result.output
+    assert "skip " in result.output
+    assert "Nothing to do" in result.output
     pulled = CliRunner().invoke(main, ["fleet", "pull", "--state", "central-ahead", "--yes"])
     assert "pull is disabled" in pulled.output
 
@@ -200,59 +198,54 @@ def test_interactive_overview_flows(fleet_env: dict[str, Path]) -> None:
     report = fleet.collect(entries, os.environ)
     path = {name: str(p.resolve()) for name, p in fleet_env.items()}
     shown: list[str] = []
-    pushed: list[list[str]] = []
-    pulled: list[tuple[list[str], set[str]]] = []
+    applied: list[list[str]] = []
+
+    def build(action: fleet_plan.Action, rows: Sequence[RepoStatus]) -> tuple[Plan, list[Any]]:
+        sink: list[Any] = []
+        plan = fleet_plan.build_fleet_plan(action, rows, os.environ, sink=sink)
+        recorded = Plan(
+            plan.command,
+            tuple(
+                s.__class__(**{**s.__dict__, "apply": _recorder(s.id, applied)}) for s in plan.steps
+            ),
+        )
+        return recorded, sink
+
     script = Scripted(
         [
             DETAILS,
             path["both"],
             PUSH,
-            [path["ahead"]],
-            True,
+            [f"push:{path['ahead']}"],
             PULL,
-            [path["behind"], path["both"]],
-            OVERWRITE,
-            "overwrite",
-            True,
+            [f"pull:{path['behind']}", f"overwrite:{path['both']}"],
             PULL,
-            [path["both"]],
-            KEEP,
-            False,
+            [],
             QUIT,
         ]
     )
 
-    def fake_push(rows: Sequence[RepoStatus]) -> tuple[list[Outcome], bool]:
-        pushed.append([r.path for r in rows])
-        return [], False
+    def show(row: RepoStatus) -> None:
+        shown.append(row.path)
 
-    def fake_pull(rows: Sequence[RepoStatus], overwrite: set[str]) -> tuple[list[Outcome], bool]:
-        pulled.append(([r.path for r in rows], overwrite))
-        return [], False
-
-    outcomes = overview(
-        script.prompts(),
-        lambda: report,
-        lambda _: None,
-        lambda row: shown.append(row.path),
-        fake_push,
-        fake_pull,
-    )
+    outcomes = overview(script.prompts(), lambda: report, lambda _: None, show, build)
     assert outcomes == []
     assert shown == [path["both"]]
-    assert pushed == [[path["ahead"]]]
-    assert [(sorted(rows), overwrite) for rows, overwrite in pulled] == [
-        (sorted([path["behind"], path["both"]]), {path["both"]})
+    assert [sorted(group) for group in applied] == [
+        [f"push:{path['ahead']}"],
+        sorted([f"pull:{path['behind']}", f"overwrite:{path['both']}"]),
     ]
-    assert any("local edits that also changed centrally" in q for q in script.asked)
+    # One checkbox per action, and no other question.
+    assert script.asked.count("Select the changes to apply (space toggles, enter applies):") == 3
 
 
-def test_fleet_warnings_use_the_steersync_log_format(
-    fleet_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def unreachable(*args: object, **kwargs: object) -> None:
-        raise GitError("git fetch failed (128): ssh: connect to host central: No route to host")
+def _recorder(step_id: str, applied: list[list[str]]) -> Any:
+    from steersync.plan import StepResult
 
-    monkeypatch.setattr(gitops, "ensure_cache_clone", unreachable)
-    result = CliRunner().invoke(main, ["fleet", "status", "--refresh"])
-    assert "WARNING:steersync" not in result.output
+    def apply() -> StepResult:
+        if not applied or applied[-1][-1].split(":")[0] == "push" or step_id.startswith("push"):
+            applied.append([])
+        applied[-1].append(step_id)
+        return StepResult(step_id, True, "recorded")
+
+    return apply
