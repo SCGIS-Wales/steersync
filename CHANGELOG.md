@@ -5,6 +5,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+Kiro V3 only; setup, init and fleet show one plan and ask once; a front matter schema with
+new rules; an optional knowledge collection; `steersync lint --fix` with verified fixes; JSON
+and SARIF lint output; MCP tools that propose and then apply after one approval.
+
 ### Removed
 
 - Support for Kiro V1 (Classic) and V2: steersync supports the Kiro V3 harness only (Kiro
@@ -15,41 +19,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- `steersync lint --format text|json|sarif`: the JSON document (`version`, `findings`,
-  `fixes` with their diffs and safety, `summary`) and SARIF 2.1.0 with the rule catalogue
-  and each fix as `artifactChanges` with `properties.safety`, validated against the SARIF
-  schema in the tests.
-- MCP tools `plan_setup`, `plan_fleet`, `apply_plan`, `propose_fixes` and `apply_fixes`:
-  propose without writing, then apply after one approval (one elicitation form, or
-  `confirm=true` when the client cannot ask), refusing stale plans.
-
-- Markdown fixes for `lint --fix`: PyMarkdown fix mode on the body only, for the rules the
-  installed version reports it can fix (`md-final-newline`, `md-trailing-space`,
-  `md-hard-tabs`, `md-ul-style`, `md-hr-style`, `md-fence-style`, `md-heading-space`,
-  `md-list-space`, `md-quote-space`, `md-list-indent`; unsafe `md-heading-increment`,
-  `md-ol-prefix`, `md-code-style`), and steersync's `md-blanks-around` (safe after
-  verification) and `md-blanks-around-lists` (unsafe). Fixes that are safe only while the
-  rendered Markdown is unchanged are demoted to unsafe when it would change.
-  `pymarkdownlnt` is pinned exactly.
-
-- `steersync lint --fix` with `--unsafe-fixes`, `--diff`, `--show-fixes`, `--select`,
-  `--ignore` and `--allow-dirty`: safe fixes apply after one backup, unsafe ones need the
-  flag or a checkbox choice, and every fix is verified (front matter data, JSON data,
-  rendered Markdown via markdown-it-py, references, fenced code, idempotence, no new
-  findings) before an atomic write; a failure exits 11 and leaves the file alone. Fixes:
-  `file-bom`, `file-eol`, `fm-leading-blank`, `fm-key-case`, `fm-inclusion-case`,
-  `json-format` (safe), `fm-inclusion-typo`, `fm-quote-glob`, `fm-filematch-comma`,
-  `fm-auto-name`, `fm-move-to-metadata` (ruamel.yaml round trip), `skill-name-case`
-  (unsafe); classes in `lint.fix`. `lint.fail_level` sets which severity exits 4.
-
-- A `knowledge` collection for team knowledge notes retrieved through Kiro knowledge bases,
-  **off by default** and with a configurable folder (default `.kiro/knowledge`). The note
-  schema (`KnowledgeNote`, also in `schema export`), the `knowledge` lint profile with the
-  `kn-*` rules (numbers under `lint.knowledge`), stricter `knowledgeBase` checks for agents,
-  `init` steps `knowledge.routing` and `knowledge.agent` (templates filled in with the
-  folder), and a reminder to run `/knowledge update` after a pull that changed notes.
-- `--only` selects the steps it names, so `init --yes --only knowledge` applies them.
-
+- `steersync doctor --kiro [--json] [--strict]` and the `kiro_check` MCP tool check the
+  installation against the minimums in the new `kiro` configuration section
+  (`min_cli_version`, `min_ide_version`); `--strict` exits 10 below the baseline.
+- `agent-unknown-key` (error in JSON agents, warning in Markdown front matter) against
+  `lint.agent_fields`, and `agent-resource-budget` (warning) against `lint.kiro_limits`.
+- Configuration: `ux` (`confirm_after_select`, `remember_selection`, `show_undo_hint`) and
+  `setup` (`last`, the selection preselected next time, and named `profiles`).
 - A front matter schema: Kiro native keys versus one `metadata` map of strings, with
   pydantic models (`steersync.schema`) and `steersync schema export` writing the JSON
   Schemas committed in `schemas/`. New rules: `fm-filematch-comma`,
@@ -59,15 +35,37 @@ Keep a Changelog and the project uses semantic versioning.
   their own folder), `steering-ext`, `steering-size`, `steering-dup-rule`, `skill-name`,
   `skill-size`, and `spec-ears` (info) for specs, which get their own `spec` profile.
   Every number is in `lint.budgets`, `lint.kiro_limits` or `lint.spec`.
-
-- Configuration: `ux` (`confirm_after_select`, `remember_selection`, `show_undo_hint`) and
-  `setup` (`last`, the selection preselected next time, and named `profiles`).
-
-- `steersync doctor --kiro [--json] [--strict]` and the `kiro_check` MCP tool check the
-  installation against the minimums in the new `kiro` configuration section
-  (`min_cli_version`, `min_ide_version`); `--strict` exits 10 below the baseline.
-- `agent-unknown-key` (error in JSON agents, warning in Markdown front matter) against
-  `lint.agent_fields`, and `agent-resource-budget` (warning) against `lint.kiro_limits`.
+- A `knowledge` collection for team knowledge notes retrieved through Kiro knowledge bases,
+  **off by default** and with a configurable folder (default `.kiro/knowledge`). The note
+  schema (`KnowledgeNote`, also in `schema export`), the `knowledge` lint profile with the
+  `kn-*` rules (numbers under `lint.knowledge`), stricter `knowledgeBase` checks for agents,
+  `init` steps `knowledge.routing` and `knowledge.agent` (templates filled in with the
+  folder), and a reminder to run `/knowledge update` after a pull that changed notes.
+- `--only` selects the steps it names, so `init --yes --only knowledge` applies them.
+- `steersync lint --fix` with `--unsafe-fixes`, `--diff`, `--show-fixes`, `--select`,
+  `--ignore` and `--allow-dirty`: safe fixes apply after one backup, unsafe ones need the
+  flag or a checkbox choice, and every fix is verified (front matter data, JSON data,
+  rendered Markdown via markdown-it-py, references, fenced code, idempotence, no new
+  findings) before an atomic write; a failure exits 11 and leaves the file alone. Fixes:
+  `file-bom`, `file-eol`, `fm-leading-blank`, `fm-key-case`, `fm-inclusion-case`,
+  `json-format` (safe), `fm-inclusion-typo`, `fm-quote-glob`, `fm-filematch-comma`,
+  `fm-auto-name`, `fm-move-to-metadata` (ruamel.yaml round trip), `skill-name-case`
+  (unsafe); classes in `lint.fix`. `lint.fail_level` sets which severity exits 4.
+- Markdown fixes for `lint --fix`: PyMarkdown fix mode on the body only, for the rules the
+  installed version reports it can fix (`md-final-newline`, `md-trailing-space`,
+  `md-hard-tabs`, `md-ul-style`, `md-hr-style`, `md-fence-style`, `md-heading-space`,
+  `md-list-space`, `md-quote-space`, `md-list-indent`; unsafe `md-heading-increment`,
+  `md-ol-prefix`, `md-code-style`), and steersync's `md-blanks-around` (safe after
+  verification) and `md-blanks-around-lists` (unsafe). Fixes that are safe only while the
+  rendered Markdown is unchanged are demoted to unsafe when it would change.
+  `pymarkdownlnt` is pinned exactly.
+- `steersync lint --format text|json|sarif`: the JSON document (`version`, `findings`,
+  `fixes` with their diffs and safety, `summary`) and SARIF 2.1.0 with the rule catalogue
+  and each fix as `artifactChanges` with `properties.safety`, validated against the SARIF
+  schema in the tests.
+- MCP tools `plan_setup`, `plan_fleet`, `apply_plan`, `propose_fixes` and `apply_fixes`:
+  propose without writing, then apply after one approval (one elicitation form, or
+  `confirm=true` when the client cannot ask), refusing stale plans.
 
 ### Changed (breaking)
 
@@ -81,13 +79,11 @@ Keep a Changelog and the project uses semantic versioning.
   and `steering-document-control-key` are folded into `fm-filematch-relative` and
   `fm-unknown-key`. `lint.allowed_extra_keys` moved to `lint.frontmatter.allowed_extra_keys`
   (default empty).
-
 - `fleet push` and `fleet pull` show one plan (a step per repository) and ask once; the
   `Proceed?` questions and the typed `overwrite` word are gone. Overwriting local edits is
   an `overwrite:` step (review, backed up, off unless `--overwrite-local`). `--dry-run` is
   now `--plan`. The interactive overview uses the same plan and one checkbox. Ctrl-C still
   prints the summary and exits 130.
-
 - `steersync setup` and `steersync init` detect everything first, show one plan and ask
   once: one checkbox (enter applies). setup asks one question only when no central
   repository is configured; the branch is no longer asked. Without a terminal, in CI, with
@@ -98,7 +94,6 @@ Keep a Changelog and the project uses semantic versioning.
 - Every run that writes takes one backup first and ends with
   `Undo with: steersync restore <id>`; `steersync restore` is now a top level command
   (`fleet restore` remains) and also removes files the run created.
-
 - `agent-legacy-key` is an error for keys V3 does not read (`lint.legacy_agent_keys`) and
   names the V3 replacement and `/upgrade-agent`; what `/upgrade-agent` keeps next to
   `permissions` is accepted.
