@@ -7,7 +7,7 @@ Keep it short.
 * one
 + two
 ```py
-x = 1
+x	= 1
 ```
 Done.
 
