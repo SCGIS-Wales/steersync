@@ -455,6 +455,17 @@ class GitLabConfig(_Strict):
         return candidate
 
 
+class UxConfig(_Strict):
+    """How commands that change state ask for approval."""
+
+    # Ask "Apply?" again after the checkbox; enter on the checkbox is the approval.
+    confirm_after_select: bool = False
+    # Save the last accepted selection under setup.last in the user configuration.
+    remember_selection: bool = True
+    # End every run that writes with "Undo with: steersync restore <backup id>".
+    show_undo_hint: bool = True
+
+
 class FleetConfig(_Strict):
     """`steersync fleet`: every initialised repository on this machine."""
 
@@ -490,6 +501,7 @@ class Config(_Strict):
     fleet: FleetConfig = FleetConfig()
     lint: LintConfig = LintConfig()
     kiro: KiroConfig = KiroConfig()
+    ux: UxConfig = UxConfig()
     hook: HookConfig = HookConfig()
     logging: LoggingConfig = LoggingConfig()
     source_file: Path | None = None
