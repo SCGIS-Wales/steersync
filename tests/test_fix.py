@@ -321,7 +321,7 @@ def test_engine_guards(tmp_path: Path) -> None:
     unreadable = tmp_path / "bin.md"
     unreadable.write_bytes(b"\xff\xfe")
     leak = tmp_path / "leak.md"
-    leak.write_text("﻿# Leak\n")
+    leak.write_text("﻿# Leak\n", encoding="utf-8")
     other = tmp_path / "other.txt"
     other.write_text("x")
     found = [
@@ -344,7 +344,7 @@ def test_engine_guards(tmp_path: Path) -> None:
 
 def test_a_file_edited_during_the_run_is_left_alone(tmp_path: Path) -> None:
     path = tmp_path / "a.md"
-    path.write_text("﻿# A\n")
+    path.write_text("﻿# A\n", encoding="utf-8")
     target = engine.Target(path, "a.md", "steering")
     plan = engine.plan_fixes(
         [target],
@@ -353,7 +353,7 @@ def test_a_file_edited_during_the_run_is_left_alone(tmp_path: Path) -> None:
         secret=lambda *_: False,
         dirty=lambda _: False,
     )
-    path.write_text("﻿# A, edited meanwhile\n")
+    path.write_text("﻿# A, edited meanwhile\n", encoding="utf-8")
     stamp, changed = engine.apply_fixes(plan.fixes, {"a.md": path}, tmp_path / "backups")
     assert stamp is not None
     assert changed == ["a.md"]

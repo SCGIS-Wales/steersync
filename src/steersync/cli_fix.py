@@ -5,16 +5,18 @@ or ``--diff`` found pending changes, 11 when a fix failed verification (that fil
 untouched).
 """
 
+import functools
 import os
 import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import cast
 
 import click
 
 from steersync import gitops
-from steersync.config import CollectionConfig, Config
+from steersync.config import CollectionConfig, Config, LintProfile
 from steersync.fixes import engine
 from steersync.interaction import Interaction
 from steersync.lint import LintReport, is_secret_rule, lint_document
@@ -83,7 +85,7 @@ def targets(
 def _relint(config: Config, root: Path | None) -> engine.Relint:
     def relint(target: engine.Target, text: str) -> Counter[str]:
         doc = document_from_bytes(target.label, text.encode("utf-8"))
-        found = lint_document(doc, config.lint, root, profile=target.profile)  # type: ignore[arg-type]
+        found = lint_document(doc, config.lint, root, profile=cast("LintProfile", target.profile))
         return Counter(f.rule for f in found)
 
     return relint
@@ -92,7 +94,7 @@ def _relint(config: Config, root: Path | None) -> engine.Relint:
 def _secret(config: Config, root: Path | None) -> Callable[[engine.Target, str], bool]:
     def secret(target: engine.Target, text: str) -> bool:
         doc = document_from_bytes(target.label, text.encode("utf-8"))
-        found = lint_document(doc, config.lint, root, profile=target.profile)  # type: ignore[arg-type]
+        found = lint_document(doc, config.lint, root, profile=cast("LintProfile", target.profile))
         return any(is_secret_rule(f.rule) for f in found)
 
     return secret
@@ -145,19 +147,22 @@ def run_fix(
     choose: Callable[[Sequence[engine.Offer]], dict[str, frozenset[str]]] = _choose_unsafe,
 ) -> int:
     """Plan, choose, apply (or print diffs) and return the fix part of the exit code."""
-    common = {
-        "relint": _relint(config, root),
-        "secret": _secret(config, root),
-        "dirty": _dirty(config, root),
-        "select": select,
-        "ignore": ignore,
-        "allow_dirty": allow_dirty,
-    }
-    plan = engine.plan_fixes(found, config.lint, all_unsafe=unsafe_fixes, **common)  # type: ignore[arg-type]
+    plan_for = functools.partial(
+        engine.plan_fixes,
+        found,
+        config.lint,
+        relint=_relint(config, root),
+        secret=_secret(config, root),
+        dirty=_dirty(config, root),
+        select=select,
+        ignore=ignore,
+        allow_dirty=allow_dirty,
+    )
+    plan = plan_for(all_unsafe=unsafe_fixes)
     if plan.offers and interaction.interactive and not diff_only and not unsafe_fixes:
         chosen = choose(plan.offers)
         if chosen:
-            plan = engine.plan_fixes(found, config.lint, unsafe=chosen, **common)  # type: ignore[arg-type]
+            plan = plan_for(unsafe=chosen)
     for note in plan.skipped:
         click.echo(f"skipped {note}", err=True)
     for failure in plan.failed:
