@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
-from steersync.steering import SteeringDocument, parse_front_matter
+from steersync.steering import SteeringDocument
 
 FOUNDATION_FILES: tuple[str, ...] = ("product.md", "tech.md", "structure.md")
 _NUMERIC_PREFIX_RE = re.compile(r"^\d+[a-z]?[-_]")
@@ -91,21 +91,6 @@ def steering_document_findings(
                 2,
             )
         )
-    pattern = meta.get("fileMatchPattern")
-    patterns = (
-        [pattern] if isinstance(pattern, str) else pattern if isinstance(pattern, list) else []
-    )
-    findings.extend(
-        Finding(
-            doc.relative_path,
-            "steering-filematch-prefix",
-            f"fileMatchPattern {item!r} is relative to the workspace root; drop the "
-            "leading / or ./",
-            2,
-        )
-        for item in patterns
-        if isinstance(item, str) and item.startswith(("/", "./"))
-    )
     if inclusion == "auto":
         description = meta.get("description")
         text = description.strip() if isinstance(description, str) else ""
@@ -132,25 +117,11 @@ def steering_document_findings(
                 "move detail to manual or auto steering or a skill",
             )
         )
-    for key in ("owner", "status", "last_updated", "last_verified", "version"):
-        if key in meta:
-            findings.append(
-                Finding(
-                    doc.relative_path,
-                    "steering-document-control-key",
-                    f"front matter key {key!r} is not a Kiro key; keep document control data in "
-                    "a footer line so a stricter parser cannot break inclusion",
-                    2,
-                )
-            )
-            break
     return findings
 
 
-def steering_collection_findings(
-    snapshot: Mapping[str, bytes], limits: PracticeLimits = DEFAULT_LIMITS
-) -> list[Finding]:
-    """Whole collection steering practices: foundation files and the always on budget."""
+def steering_collection_findings(snapshot: Mapping[str, bytes]) -> list[Finding]:
+    """Whole collection steering practices: the foundation files."""
     if not snapshot:
         return []
     findings: list[Finding] = []
@@ -163,25 +134,6 @@ def steering_collection_findings(
                 "steering-foundation-missing",
                 "foundation files included in every interaction by default are missing: "
                 + ", ".join(missing),
-            )
-        )
-    always_total = 0
-    for path, raw in snapshot.items():
-        try:
-            meta = parse_front_matter(raw.decode("utf-8")).metadata
-        except UnicodeDecodeError:
-            continue
-        if meta.get("inclusion", "always") == "always":
-            always_total += len(raw)
-        del path
-    if always_total > limits.always_total_bytes:
-        findings.append(
-            Finding(
-                ".",
-                "steering-always-budget",
-                f"{always_total} bytes of steering are always included; above "
-                f"{limits.always_total_bytes} bytes every session pays for it, so move "
-                "occasional guidance to fileMatch, manual or auto steering",
             )
         )
     return findings
@@ -300,24 +252,10 @@ def hook_findings(
 def skill_findings(
     doc: SteeringDocument,
     meta: Mapping[str, Any],
-    body: str,
     limits: PracticeLimits = DEFAULT_LIMITS,
 ) -> list[Finding]:
     findings: list[Finding] = []
     path = doc.relative_path
-    name = meta.get("name")
-    if isinstance(name, str) and name.strip():
-        value = name.strip()
-        if not _SKILL_NAME_RE.match(value) or len(value) > limits.skill_name_max_chars:
-            findings.append(
-                Finding(
-                    path,
-                    "skill-name-format",
-                    f"skill name {value!r} should be lowercase letters, digits and dashes, at "
-                    f"most {limits.skill_name_max_chars} characters (Agent Skills standard)",
-                    2,
-                )
-            )
     description = meta.get("description")
     if isinstance(description, str) and len(description) > limits.skill_description_max_chars:
         findings.append(
@@ -328,16 +266,6 @@ def skill_findings(
                 f"caps it at {limits.skill_description_max_chars}, and only name and "
                 "description load at startup",
                 2,
-            )
-        )
-    lines = body.count("\n") + 1
-    if lines > limits.skill_body_max_lines:
-        findings.append(
-            Finding(
-                path,
-                "skill-body-length",
-                f"SKILL.md has {lines} lines; keep the procedure summary short and move the "
-                "full runbook under references/ so it loads only on demand",
             )
         )
     return findings

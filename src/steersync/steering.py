@@ -299,6 +299,16 @@ def parse_front_matter(text: str) -> FrontMatter:
         return FrontMatter(
             True, False, {}, text[match.end() :], message, line + 1 if line else None
         )
+    raw = yaml.safe_load(match.group(1)) if match.group(1).strip() else {}
+    if raw is not None and not isinstance(raw, dict):
+        return FrontMatter(
+            True,
+            False,
+            {},
+            post.content,
+            "front matter is not a YAML mapping; write key: value lines",
+            2,
+        )
     metadata = post.metadata if isinstance(post.metadata, dict) else {}
     return FrontMatter(True, False, dict(metadata), post.content, None)
 

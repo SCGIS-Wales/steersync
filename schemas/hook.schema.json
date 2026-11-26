@@ -1,0 +1,154 @@
+{
+  "$defs": {
+    "AgentAction": {
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "minLength": 1,
+          "title": "Prompt",
+          "type": "string"
+        },
+        "type": {
+          "const": "agent",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "prompt"
+      ],
+      "title": "AgentAction",
+      "type": "object"
+    },
+    "CommandAction": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "minLength": 1,
+          "title": "Command",
+          "type": "string"
+        },
+        "type": {
+          "const": "command",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "command"
+      ],
+      "title": "CommandAction",
+      "type": "object"
+    },
+    "HookEntry": {
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "discriminator": {
+            "mapping": {
+              "agent": "#/$defs/AgentAction",
+              "command": "#/$defs/CommandAction"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CommandAction"
+            },
+            {
+              "$ref": "#/$defs/AgentAction"
+            }
+          ],
+          "title": "Action"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "matcher": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Matcher"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout"
+        },
+        "trigger": {
+          "enum": [
+            "SessionStart",
+            "SessionEnd",
+            "Stop",
+            "PreToolUse",
+            "PostToolUse",
+            "PermissionRequest",
+            "PreCompact",
+            "PostCompact",
+            "UserPromptSubmit",
+            "PreTaskExec",
+            "PostTaskExec",
+            "PostFileCreate",
+            "PostFileSave",
+            "PostFileDelete",
+            "Manual"
+          ],
+          "title": "Trigger",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "trigger",
+        "action"
+      ],
+      "title": "HookEntry",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "hooks": {
+      "items": {
+        "$ref": "#/$defs/HookEntry"
+      },
+      "title": "Hooks",
+      "type": "array"
+    },
+    "version": {
+      "const": "v1",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "hooks"
+  ],
+  "title": "HookFile",
+  "type": "object"
+}

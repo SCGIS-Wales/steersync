@@ -239,7 +239,7 @@ def test_lint_command(runner: CliRunner, in_project: Path) -> None:
     (steering / "bad.md").write_text("---\ninclusion: nope\n---\n# Bad\n")
     result = runner.invoke(main, ["lint"])
     assert result.exit_code == 4
-    assert "[inclusion-value]" in result.output
+    assert "[fm-inclusion]" in result.output
     as_json = runner.invoke(main, ["lint", "--json", str(steering / "bad.md")])
     assert json.loads(as_json.output)["errors"] == 1
     assert runner.invoke(main, ["-q", "lint"]).exit_code == 4

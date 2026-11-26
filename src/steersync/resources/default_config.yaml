@@ -104,7 +104,7 @@ collections:
     # Every file in a spec directory travels with it, not only the markdown.
     include: ["**/*"]
     exclude: ["**/__pycache__/**", "**/node_modules/**", "**/*.bak", "**/*.tmp"]
-    lint: markdown
+    lint: spec
   skills:
     description: Agent Skills (SKILL.md with scripts, references and assets)
     workspace_path: .kiro/skills
@@ -252,8 +252,6 @@ lint:
     hook_timeout_max_seconds: 300
     prompt_name_max_chars: 50
   require_h1: true
-  allowed_extra_keys:
-    - x-steersync
   file_reference_check: true
   pymarkdown:
     enabled: true
@@ -261,6 +259,32 @@ lint:
     disabled_rules:
       - MD013   # line length is not meaningful for prose steering
       - MD041   # first line heading is handled by require_h1 with front matter awareness
+  # Kiro native front matter keys versus organisational metadata (fm-* rules).
+  frontmatter:
+    metadata_placement: embedded    # embedded | sidecar (.kiro/steersync.meta.yaml)
+    metadata_key: metadata
+    allowed_extra_keys: []
+    metadata_fields:
+      owner:       { pattern: "^@?[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$" }
+      tags:        { list: true, separator: ",", allowed: [] }   # empty list allows any tag
+      references:  { list: true, separator: " ", pattern: "^(https://|#\\[\\[(file|folder):)" }
+      review-by:   { type: date, warn_when_past: true }
+      verified-on: { type: date }
+      status:      { enum: [draft, active, partial, superseded, deprecated] }
+      version:     { pattern: "^\\d+\\.\\d+(\\.\\d+)?$" }
+    knowledge_keys: [title, domain, verified_on, sources, relations]
+    sidecar: .kiro/steersync.meta.yaml
+  # Context budgets (steering-size, skill-size, steering-dup-rule).
+  budgets:
+    always_chars: 49152
+    skill_lines: 500
+    skill_tokens: 5000
+    chars_per_token: 4
+    dup_rule_min_chars: 24
+  # spec-ears (info): acceptance criteria in EARS form.
+  spec:
+    criteria_heading: "(?i)^#+\\s*acceptance criteria"
+    ears_pattern: "(?i)^(WHEN|IF|WHILE|WHERE|THE)\\b.*\\bSHALL\\b"
   # Documented Kiro limits for file:// agent resources: more files or characters than
   # this are truncated or skipped (agent-resource-budget warns before that happens).
   kiro_limits:

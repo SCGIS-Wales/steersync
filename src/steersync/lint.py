@@ -16,21 +16,19 @@ from typing import Any, Literal, NamedTuple
 
 import yaml
 
-from steersync import kiro_rules, practices
+from steersync import fm_rules, kiro_rules, practices, refs
 from steersync.config import LintConfig, LintProfile
 from steersync.kiro_rules import HOOK_TRIGGERS
 from steersync.steering import (
     FILE_REFERENCE_RE,
-    INCLUSION_MODES,
-    KNOWN_KEYS,
     FileSpec,
     SteeringDocument,
     discover_files,
     document_from_bytes,
-    file_references,
+    parse_front_matter,
 )
 
-Severity = Literal["error", "warning"]
+Severity = Literal["error", "warning", "info"]
 
 
 class LintContext(NamedTuple):
@@ -80,6 +78,10 @@ class LintReport(NamedTuple):
         return tuple(f for f in self.findings if f.severity == "warning")
 
     @property
+    def infos(self) -> tuple[LintFinding, ...]:
+        return tuple(f for f in self.findings if f.severity == "info")
+
+    @property
     def ok(self) -> bool:
         return not self.errors
 
@@ -94,107 +96,36 @@ class LintReport(NamedTuple):
                 "checked": self.checked,
                 "errors": len(self.errors),
                 "warnings": len(self.warnings),
+                "infos": len(self.infos),
                 "findings": [f._asdict() for f in self.findings],
             },
             indent=2,
         )
 
 
+def _hits(doc: SteeringDocument, hits: Iterable[fm_rules.Hit]) -> list[LintFinding]:
+    return [LintFinding(doc.relative_path, h.rule, h.severity, h.message, h.line) for h in hits]
+
+
 def _front_matter_findings(doc: SteeringDocument, config: LintConfig) -> list[LintFinding]:
-    findings: list[LintFinding] = []
     fm = doc.front_matter
-    if fm is None:
-        return findings
-    if fm.leading_blank:
-        findings.append(
-            LintFinding(
-                doc.relative_path,
-                "front-matter-position",
-                "error",
-                "front matter must start on line 1; Kiro ignores it after a blank line",
-                1,
-            )
-        )
-        return findings
+    if fm is None or doc.text is None:
+        return []
+    position = fm_rules.position_hits(doc.text)
+    if position:
+        return _hits(doc, position)
     if fm.error:
-        findings.append(
-            LintFinding(
-                doc.relative_path, "front-matter-yaml", "error", fm.error, fm.error_line or 1
-            )
-        )
-        return findings
+        return [LintFinding(doc.relative_path, "fm-yaml", "error", fm.error, fm.error_line or 1)]
     if not fm.present:
-        return findings
+        return []
     meta = fm.metadata
-    inclusion = meta.get("inclusion", "always")
-    if inclusion not in INCLUSION_MODES:
-        findings.append(
-            LintFinding(
-                doc.relative_path,
-                "inclusion-value",
-                "error",
-                f"inclusion must be one of {', '.join(INCLUSION_MODES)}; got {inclusion!r}",
-                2,
-            )
-        )
-    pattern = meta.get("fileMatchPattern")
-    if inclusion == "fileMatch":
-        if pattern is None:
-            findings.append(
-                LintFinding(
-                    doc.relative_path,
-                    "filematch-pattern-required",
-                    "error",
-                    "fileMatch requires fileMatchPattern",
-                    2,
-                )
-            )
-        elif not _is_pattern(pattern):
-            findings.append(
-                LintFinding(
-                    doc.relative_path,
-                    "filematch-pattern-type",
-                    "error",
-                    "fileMatchPattern must be a string or a list of strings",
-                    2,
-                )
-            )
-    elif pattern is not None:
-        findings.append(
-            LintFinding(
-                doc.relative_path,
-                "filematch-pattern-unused",
-                "warning",
-                "fileMatchPattern is ignored unless inclusion is fileMatch",
-                2,
-            )
-        )
-    if inclusion == "auto":
-        for key in ("name", "description"):
-            value = meta.get(key)
-            if not isinstance(value, str) or not value.strip():
-                findings.append(
-                    LintFinding(
-                        doc.relative_path,
-                        "auto-requires-metadata",
-                        "error",
-                        f"inclusion: auto requires a non empty {key}",
-                        2,
-                    )
-                )
-    allowed = KNOWN_KEYS | set(config.allowed_extra_keys)
-    findings.extend(
-        LintFinding(
-            doc.relative_path,
-            "unknown-key",
-            "warning",
-            f"unknown front matter key {key!r} is ignored by Kiro",
-            2,
-        )
-        for key in meta
-        if key not in allowed
+    return _hits(
+        doc,
+        [
+            *fm_rules.steering_hits(meta, config.frontmatter),
+            *fm_rules.metadata_hits(meta, config.frontmatter),
+        ],
     )
-    return findings
 
 
 def _is_pattern(value: object) -> bool:
@@ -221,8 +152,30 @@ def _secret_findings(doc: SteeringDocument, config: LintConfig) -> list[LintFind
     return findings
 
 
+def _reference_findings(
+    doc: SteeringDocument, config: LintConfig, base: Path | None
+) -> list[LintFinding]:
+    """ref-syntax always; ref-unresolved when the base the paths resolve from is known."""
+    if doc.text is None:
+        return []
+    references, problems = refs.parse(doc.text)
+    if config.file_reference_check and base is not None:
+        problems += [p for r in references if (p := refs.resolve(r, base)) is not None]
+    return [LintFinding(doc.relative_path, p.rule, "error", p.message, p.line) for p in problems]
+
+
+def _reference_base(ctx: LintContext) -> Path | None:
+    """Workspace steering resolves from the workspace root, global steering from its folder."""
+    if ctx.directory is not None and ctx.workspace_root is not None:
+        try:
+            ctx.directory.resolve().relative_to(ctx.workspace_root.resolve())
+        except ValueError:
+            return ctx.directory  # ~/.kiro/steering
+    return ctx.workspace_root or ctx.directory
+
+
 def _body_findings(
-    doc: SteeringDocument, config: LintConfig, workspace_root: Path | None
+    doc: SteeringDocument, config: LintConfig, base: Path | None
 ) -> list[LintFinding]:
     findings: list[LintFinding] = []
     if doc.text is None:
@@ -235,30 +188,7 @@ def _body_findings(
             )
         )
     findings.extend(_secret_findings(doc, config))
-    if config.file_reference_check and workspace_root is not None:
-        for kind, target in file_references(doc.text):
-            candidate = (workspace_root / target).resolve()
-            if (
-                workspace_root.resolve() not in candidate.parents
-                and candidate != workspace_root.resolve()
-            ):
-                findings.append(
-                    LintFinding(
-                        doc.relative_path,
-                        "file-reference-escape",
-                        "error",
-                        f"#[[{kind}:{target}]] points outside the workspace",
-                    )
-                )
-            elif not candidate.exists():
-                findings.append(
-                    LintFinding(
-                        doc.relative_path,
-                        "file-reference-missing",
-                        "warning",
-                        f"#[[{kind}:{target}]] does not exist in this workspace",
-                    )
-                )
+    findings.extend(_reference_findings(doc, config, base))
     return findings
 
 
@@ -326,8 +256,18 @@ def _profile_steering(
     if findings:
         return findings
     findings.extend(_front_matter_findings(doc, config))
-    findings.extend(_body_findings(doc, config, ctx.workspace_root))
+    findings.extend(_body_findings(doc, config, _reference_base(ctx)))
     findings.extend(_markdown_findings(doc, config))
+    if doc.text is not None and len(doc.text) > config.kiro_limits.file_chars_truncate:
+        findings.append(
+            LintFinding(
+                doc.relative_path,
+                "steering-size",
+                "warning",
+                f"{len(doc.text)} characters; Kiro truncates a file at "
+                f"{config.kiro_limits.file_chars_truncate}",
+            )
+        )
     if config.practices and doc.front_matter is not None and not doc.front_matter.error:
         meta = doc.front_matter.metadata if doc.front_matter.present else {}
         findings.extend(_warnings(practices.steering_document_findings(doc, meta, _limits(config))))
@@ -345,10 +285,26 @@ def _profile_markdown(
         return findings
     findings.extend(_secret_findings(doc, config))
     findings.extend(_markdown_findings(doc, config))
+    if PurePosixPath(doc.relative_path).name == "AGENTS.md":
+        # AGENTS.md references resolve from the folder that holds it.
+        base = (
+            (ctx.workspace_root / PurePosixPath(doc.relative_path).parent)
+            if ctx.workspace_root
+            else None
+        )
+        findings.extend(_reference_findings(doc, config, base))
     return findings
 
 
-def _skill_metadata_findings(doc: SteeringDocument) -> list[LintFinding]:
+def _profile_spec(doc: SteeringDocument, config: LintConfig, ctx: LintContext) -> list[LintFinding]:
+    """Specs: markdown, plus acceptance criteria in EARS form (info)."""
+    findings = _profile_markdown(doc, config, ctx)
+    if doc.text is not None and PurePosixPath(doc.relative_path).suffix.lower() == ".md":
+        findings.extend(_hits(doc, fm_rules.ears_hits(doc.text, config.spec)))
+    return findings
+
+
+def _skill_metadata_findings(doc: SteeringDocument, config: LintConfig) -> list[LintFinding]:
     fm = doc.front_matter
     if fm is None or fm.leading_blank or not fm.present:
         return [
@@ -361,11 +317,7 @@ def _skill_metadata_findings(doc: SteeringDocument) -> list[LintFinding]:
             )
         ]
     if fm.error:
-        return [
-            LintFinding(
-                doc.relative_path, "front-matter-yaml", "error", fm.error, fm.error_line or 1
-            )
-        ]
+        return [LintFinding(doc.relative_path, "fm-yaml", "error", fm.error, fm.error_line or 1)]
     findings: list[LintFinding] = []
     for key in ("name", "description"):
         value = fm.metadata.get(key)
@@ -379,18 +331,11 @@ def _skill_metadata_findings(doc: SteeringDocument) -> list[LintFinding]:
                     2,
                 )
             )
-    name = fm.metadata.get("name")
     folder = PurePosixPath(doc.relative_path).parent.name
-    if isinstance(name, str) and folder and name.strip() != folder:
-        findings.append(
-            LintFinding(
-                doc.relative_path,
-                "skill-name-mismatch",
-                "warning",
-                f"skill name {name!r} does not match its directory {folder!r}",
-                2,
-            )
-        )
+    limit = config.practice_limits.skill_name_max_chars
+    findings.extend(_hits(doc, fm_rules.skill_name_hits(fm.metadata.get("name"), folder, limit)))
+    findings.extend(_hits(doc, fm_rules.metadata_hits(fm.metadata, config.frontmatter)))
+    findings.extend(_hits(doc, fm_rules.skill_size_hits(fm.body, config.budgets)))
     return findings
 
 
@@ -403,14 +348,12 @@ def _profile_skill(
     findings = _text_findings(doc)
     if findings:
         return findings
-    findings.extend(_skill_metadata_findings(doc))
+    findings.extend(_skill_metadata_findings(doc, config))
     findings.extend(_secret_findings(doc, config))
     findings.extend(_markdown_findings(doc, config))
     fm = doc.front_matter
     if config.practices and fm is not None and fm.present and not fm.error:
-        findings.extend(
-            _warnings(practices.skill_findings(doc, fm.metadata, fm.body, _limits(config)))
-        )
+        findings.extend(_warnings(practices.skill_findings(doc, fm.metadata, _limits(config))))
     return findings
 
 
@@ -679,10 +622,83 @@ def collection_findings(
     if not config.practices:
         return []
     if profile == "steering":
-        return _warnings(practices.steering_collection_findings(snapshot, _limits(config)))
+        return [
+            *_warnings(practices.steering_collection_findings(snapshot)),
+            *_steering_collection(snapshot, config),
+        ]
     if profile == "skill":
         return _warnings(practices.skill_collection_findings(snapshot))
     return []
+
+
+def _steering_collection(snapshot: Mapping[str, bytes], config: LintConfig) -> list[LintFinding]:
+    """steering-dup-rule, and steering-size for the always included set."""
+    texts: dict[str, str] = {}
+    always = 0
+    for path, raw in snapshot.items():
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        texts[path] = text
+        front = parse_front_matter(text)
+        if front.metadata.get("inclusion", "always") == "always":
+            always += len(text)
+    findings = [
+        LintFinding(path, hit.rule, hit.severity, hit.message, hit.line)
+        for path, hit in fm_rules.dup_rule_hits(texts, config.budgets)
+    ]
+    if always > config.budgets.always_chars:
+        findings.append(
+            LintFinding(
+                ".",
+                "steering-size",
+                "warning",
+                f"{always} characters of steering are always included; above "
+                f"{config.budgets.always_chars} every turn pays for them, so move occasional "
+                "guidance to fileMatch, manual or auto steering",
+            )
+        )
+    return findings
+
+
+def _steering_extension_findings(directory: Path) -> list[LintFinding]:
+    """steering-ext: Kiro loads only .md files from a steering folder."""
+    return [
+        LintFinding(
+            path.relative_to(directory).as_posix(),
+            "steering-ext",
+            "error",
+            "Kiro loads only .md files from the steering folder; rename it to .md or move it",
+        )
+        for path in sorted(directory.rglob("*"))
+        if path.is_file()
+        and path.suffix.lower() != ".md"
+        and not any(part.startswith(".") for part in path.relative_to(directory).parts)
+    ]
+
+
+def sidecar_report(root: Path, config: LintConfig) -> LintReport:
+    """fm-metadata for .kiro/steersync.meta.yaml: existing paths mapped to metadata maps."""
+    sidecar = root / config.frontmatter.sidecar
+    if not sidecar.is_file():
+        return LintReport((), 0)
+    label = config.frontmatter.sidecar
+    try:
+        data = yaml.safe_load(sidecar.read_text("utf-8")) or {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        return LintReport((LintFinding(label, "fm-yaml", "error", f"invalid YAML: {exc}"),), 1)
+    existing = (
+        [str(path) for path in data if (root / str(path)).exists()]
+        if isinstance(data, Mapping)
+        else []
+    )
+    hits = fm_rules.sidecar_hits(data, existing, config.frontmatter)
+    return LintReport(tuple(_hits_at(label, hits)), 1)
+
+
+def _hits_at(path: str, hits: Iterable[fm_rules.Hit]) -> list[LintFinding]:
+    return [LintFinding(path, h.rule, h.severity, h.message, h.line) for h in hits]
 
 
 def lint_workspace(
@@ -694,12 +710,13 @@ def lint_workspace(
     kiro_home: Path | None = None,
 ) -> LintReport:
     """Report whether a Kiro session in ``root`` loads and refreshes the configuration."""
+    sidecar = sidecar_report(root, config)
     if not config.practices:
-        return LintReport((), 0)
+        return sidecar
     found = practices.workspace_findings(
         root, hooks_dir=hooks_dir, settings_dir=settings_dir, kiro_home=kiro_home
     )
-    return LintReport(tuple(_warnings(found)), 0)
+    return LintReport((*_warnings(found), *sidecar.findings), sidecar.checked)
 
 
 Profile = Callable[[SteeringDocument, LintConfig, LintContext], list[LintFinding]]
@@ -707,6 +724,7 @@ Profile = Callable[[SteeringDocument, LintConfig, LintContext], list[LintFinding
 PROFILES: dict[str, Profile] = {
     "steering": _profile_steering,
     "markdown": _profile_markdown,
+    "spec": _profile_spec,
     "skill": _profile_skill,
     "agent": _profile_agent,
     "hooks": _profile_hooks,
@@ -782,6 +800,13 @@ def lint_paths(
         if path.is_dir():
             files = discover_files(path, spec) if spec else discover_files(path)
             snapshot = {f.relative_to(path).as_posix(): f.read_bytes() for f in files}
+            if profile == "steering":
+                findings.extend(
+                    prefix_report(
+                        LintReport(tuple(_steering_extension_findings(path)), 0),
+                        _label(path, workspace_root),
+                    ).findings
+                )
             report = lint_snapshot(
                 snapshot,
                 config,

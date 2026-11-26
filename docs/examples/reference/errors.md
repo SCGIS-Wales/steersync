@@ -1,0 +1,44 @@
+# Error envelope
+
+Every non 2xx response carries the same JSON body.
+
+- Field 1: described here.
+- Field 2: described here.
+- Field 3: described here.
+- Field 4: described here.
+- Field 5: described here.
+- Field 6: described here.
+- Field 7: described here.
+- Field 8: described here.
+- Field 9: described here.
+- Field 10: described here.
+- Field 11: described here.
+- Field 12: described here.
+- Field 13: described here.
+- Field 14: described here.
+- Field 15: described here.
+- Field 16: described here.
+- Field 17: described here.
+- Field 18: described here.
+- Field 19: described here.
+- Field 20: described here.
+- Field 21: described here.
+- Field 22: described here.
+- Field 23: described here.
+- Field 24: described here.
+- Field 25: described here.
+- Field 26: described here.
+- Field 27: described here.
+- Field 28: described here.
+- Field 29: described here.
+- Field 30: described here.
+- Field 31: described here.
+- Field 32: described here.
+- Field 33: described here.
+- Field 34: described here.
+- Field 35: described here.
+- Field 36: described here.
+- Field 37: described here.
+- Field 38: described here.
+- Field 39: described here.
+- Field 40: described here.

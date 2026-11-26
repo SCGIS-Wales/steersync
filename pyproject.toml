@@ -90,7 +90,7 @@ path = "src/steersync/__init__.py"
 packages = ["src/steersync"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/steersync", "tests", "scripts", "README.md", "CHANGELOG.md", "LICENSE", "steersync.example.yaml"]
+include = ["src/steersync", "tests", "scripts", "schemas", "README.md", "CHANGELOG.md", "LICENSE", "steersync.example.yaml"]
 
 [tool.ruff]
 target-version = "py314"

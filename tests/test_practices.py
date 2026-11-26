@@ -23,7 +23,7 @@ def test_steering_practices(config: Config) -> None:
     assert "steering-globs-key" in rules(
         config, "tf.md", "steering", "---\ninclusion: fileMatch\nglobs: ['*.tf']\n---\n# T\n"
     )
-    assert "steering-filematch-prefix" in rules(
+    assert "fm-filematch-relative" in rules(
         config,
         "tf.md",
         "steering",
@@ -37,7 +37,7 @@ def test_steering_practices(config: Config) -> None:
     assert "steering-always-size" not in rules(
         config, "big.md", "steering", big.replace("always", "manual")
     )
-    assert "steering-document-control-key" in rules(
+    assert "fm-unknown-key" in rules(
         config, "x.md", "steering", "---\ninclusion: manual\nowner: me\n---\n# T\n"
     )
 
@@ -53,7 +53,7 @@ def test_steering_collection_practices(config: Config) -> None:
     heavy = {f"rule-{i}.md": b"# R\n\n" + b"y" * 20_000 for i in range(3)}
     heavy.update(snapshot)
     found = {f.rule for f in lint_snapshot(heavy, config.lint, profile="steering").findings}
-    assert "steering-always-budget" in found
+    assert "steering-size" in found
     assert lint_snapshot({}, config.lint, profile="steering").findings == ()
 
 
@@ -137,7 +137,7 @@ def test_skill_practices(config: Config) -> None:
     long_desc = "d" * 1100
     text = f"---\nname: Venafi_Runbook\ndescription: {long_desc}\n---\n# V\n" + "line\n" * 600
     found = rules(config, "venafi/SKILL.md", "skill", text)
-    assert {"skill-name-format", "skill-description-length", "skill-body-length"} <= found
+    assert {"skill-name", "skill-description-length", "skill-size"} <= found
     report = lint_snapshot(
         {"SKILL.md": b"---\nname: x\ndescription: y\n---\n# X\n"}, config.lint, profile="skill"
     )

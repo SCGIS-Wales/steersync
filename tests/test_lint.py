@@ -24,23 +24,21 @@ def test_clean_document_has_no_findings(config: Config) -> None:
 
 
 def test_front_matter_rules(config: Config) -> None:
-    assert "front-matter-position" in lint_text(config, "\n---\ninclusion: manual\n---\n# T\n")
-    assert "front-matter-yaml" in lint_text(config, "---\ninclusion: [x\n---\n# T\n")
-    assert "inclusion-value" in lint_text(config, "---\ninclusion: sometimes\n---\n# T\n")
-    assert "filematch-pattern-required" in lint_text(
-        config, "---\ninclusion: fileMatch\n---\n# T\n"
-    )
-    assert "filematch-pattern-type" in lint_text(
+    assert "fm-position" in lint_text(config, "\n---\ninclusion: manual\n---\n# T\n")
+    assert "fm-yaml" in lint_text(config, "---\ninclusion: [x\n---\n# T\n")
+    assert "fm-inclusion" in lint_text(config, "---\ninclusion: sometimes\n---\n# T\n")
+    assert "fm-filematch-required" in lint_text(config, "---\ninclusion: fileMatch\n---\n# T\n")
+    assert "fm-filematch-type" in lint_text(
         config, "---\ninclusion: fileMatch\nfileMatchPattern: 3\n---\n# T\n"
     )
-    assert "filematch-pattern-type" in lint_text(
+    assert "fm-filematch-type" in lint_text(
         config, "---\ninclusion: fileMatch\nfileMatchPattern: ['a', 2]\n---\n# T\n"
     )
-    assert "filematch-pattern-unused" in lint_text(
+    assert "fm-filematch-unused" in lint_text(
         config, "---\ninclusion: manual\nfileMatchPattern: '*'\n---\n# T\n"
     )
     found = lint_text(config, "---\ninclusion: auto\nname: ''\n---\n# T\n")
-    assert "auto-requires-metadata" in found
+    assert "fm-auto-fields" in found
     assert "steering-auto-description" in lint_text(
         config, "---\ninclusion: auto\nname: api\ndescription: REST rules\n---\n# T\n"
     )
@@ -52,9 +50,10 @@ def test_front_matter_rules(config: Config) -> None:
         )
         == set()
     )
-    assert "unknown-key" in lint_text(config, "---\ninclusion: manual\nowner: me\n---\n# T\n")
-    assert "unknown-key" not in lint_text(
-        config, "---\ninclusion: manual\nx-steersync: {source: a}\n---\n# T\n"
+    assert "fm-unknown-key" in lint_text(config, "---\ninclusion: manual\nowner: me\n---\n# T\n")
+    # Organisational keys belong in the metadata map, which is not an unknown key.
+    assert "fm-unknown-key" not in lint_text(
+        config, "---\ninclusion: manual\nmetadata: {owner: me}\n---\n# T\n"
     )
 
 
@@ -73,8 +72,8 @@ def test_body_rules(config: Config, tmp_path: Path) -> None:
         "# T\n\n#[[file:src/app.py]] #[[file:src/app.py:3-4]] #[[file:missing.py]] #[[folder:../x]]\n",
         tmp_path,
     )
-    assert "file-reference-missing" in found
-    assert "file-reference-escape" in found
+    assert "ref-unresolved" in found
+    assert "ref-unresolved" in found
     assert lint_text(config, "# T\n\n#[[file:missing.py]]\n", None) == set()
 
 
@@ -127,7 +126,7 @@ def test_lint_paths_and_report(config: Config, tmp_path: Path) -> None:
     assert report.checked == 3
     assert len(report.errors) == 1
     assert report.errors[0].path == ".kiro/steering/bad.md"
-    assert report.errors[0].render().startswith(".kiro/steering/bad.md:2: error: [inclusion-value]")
+    assert report.errors[0].render().startswith(".kiro/steering/bad.md:2: error: [fm-inclusion]")
     assert '"checked": 3' in report.to_json()
     assert not report.ok
 
@@ -149,7 +148,7 @@ def test_markdown_profile(config: Config) -> None:
     )
     assert "encoding-utf8" in profile_rules(config, "specs/x.md", "markdown", b"\xff\xfe")
     assert profile_rules(config, "specs/diagram.png", "markdown", b"\x89PNG\xff") == set()
-    assert "inclusion-value" not in profile_rules(
+    assert "fm-inclusion" not in profile_rules(
         config, "specs/x.md", "markdown", "---\ninclusion: nope\n---\n# T\n"
     )
 
@@ -157,14 +156,14 @@ def test_markdown_profile(config: Config) -> None:
 def test_skill_profile(config: Config) -> None:
     good = "---\nname: venafi\ndescription: Venafi runbook\n---\n# Venafi\n\nSteps.\n"
     assert profile_rules(config, "venafi/SKILL.md", "skill", good) == set()
-    assert "skill-name-mismatch" in profile_rules(config, "other/SKILL.md", "skill", good)
+    assert "skill-name" in profile_rules(config, "other/SKILL.md", "skill", good)
     assert "skill-front-matter-required" in profile_rules(
         config, "venafi/SKILL.md", "skill", "# No front matter\n"
     )
     assert "skill-front-matter-required" in profile_rules(
         config, "venafi/SKILL.md", "skill", "\n---\nname: venafi\ndescription: d\n---\n# T\n"
     )
-    assert "front-matter-yaml" in profile_rules(
+    assert "fm-yaml" in profile_rules(
         config, "venafi/SKILL.md", "skill", "---\nname: [\n---\n# T\n"
     )
     found = profile_rules(config, "venafi/SKILL.md", "skill", "---\nname: venafi\n---\n# T\n")
@@ -251,7 +250,7 @@ def test_front_matter_colon_in_value_says_how_to_fix(config: Config) -> None:
     (finding,) = [
         f
         for f in lint_document(document_from_bytes("plan.md", doc), config.lint)
-        if f.rule == "front-matter-yaml"
+        if f.rule == "fm-yaml"
     ]
     assert finding.line == 4
     assert "value of `status` contains ': '" in finding.message
@@ -263,5 +262,5 @@ def test_only_secrets_block(config: Config) -> None:
 
     assert is_secret_rule("forbidden-gitlab-token")
     assert is_secret_rule("mcp-literal-secret")
-    assert not is_secret_rule("front-matter-yaml")
+    assert not is_secret_rule("fm-yaml")
     assert not is_secret_rule("hook-schema")
