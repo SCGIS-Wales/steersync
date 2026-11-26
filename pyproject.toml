@@ -66,12 +66,14 @@ test = [
   "pytest-cov>=7.1,<8",
   "hypothesis>=6.140,<7",
   "mcp>=2.3,<3",
+  "jsonschema>=4.23,<5",
 ]
 lint = [
   { include-group = "test" },  # mypy type checks the tests too
   "ruff>=0.17.6,<1",
   "mypy>=2.4,<3",
   "types-PyYAML>=6.0.12",
+  "types-jsonschema>=4.23",
 ]
 security = [
   "bandit[toml]>=1.9,<2",

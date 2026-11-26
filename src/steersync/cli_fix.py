@@ -11,13 +11,14 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 import click
 
 from steersync import gitops
 from steersync.config import CollectionConfig, Config, LintProfile
 from steersync.fixes import engine
+from steersync.fixes.model import FileFix
 from steersync.interaction import Interaction
 from steersync.lint import LintReport, is_secret_rule, lint_document
 from steersync.paths import backup_root, workspace_collection_dir
@@ -52,6 +53,58 @@ def _files(path: Path, collection: CollectionConfig | None) -> list[Path]:
         else None
     )
     return list(discover_files(path, spec) if spec else discover_files(path))
+
+
+def collection_for_profile(config: Config, profile: str | None) -> CollectionConfig | None:
+    """The first collection using ``profile``, so its file patterns apply to a directory."""
+    if profile is None:
+        return None
+    return next((c for c in config.collections.values() if c.lint == profile), None)
+
+
+def collection_for_path(config: Config, root: Path | None, path: Path) -> str | None:
+    """Return the enabled collection whose workspace directory contains ``path``."""
+    if root is None:
+        return None
+    resolved = path.resolve()
+    root_resolved = root.resolve()
+    best: tuple[int, str] | None = None
+    for name, collection in config.enabled_collections().items():
+        target = workspace_collection_dir(collection, root)
+        if target is None:
+            continue
+        base = target.resolve()
+        if base == root_resolved:
+            # A collection rooted at the workspace (AGENTS.md, .kiroignore) owns only the
+            # files its patterns select, never every path under the repository.
+            spec = FileSpec(collection.include, collection.exclude, collection.max_depth)
+            if (
+                resolved.is_file()
+                and base in resolved.parents
+                and spec.matcher()(resolved.relative_to(base).as_posix())
+            ):
+                best = best or (0, name)
+            continue
+        if resolved == base or base in resolved.parents:
+            depth = len(base.parts)
+            if best is None or depth > best[0]:
+                best = (depth, name)
+    return best[1] if best else None
+
+
+def lookup(
+    config: Config, root: Path | None, collections: Sequence[str], profile: str | None
+) -> Callable[[Path], CollectionConfig | None]:
+    """The collection an explicit path belongs to (``--collection`` forces one)."""
+    forced = config.collections[collections[0]] if collections else None
+
+    def find(path: Path) -> CollectionConfig | None:
+        if forced is not None:
+            return forced
+        name = collection_for_path(config, root, path)
+        return config.collections[name] if name else collection_for_profile(config, profile)
+
+    return find
 
 
 def targets(
@@ -100,6 +153,13 @@ def _secret(config: Config, root: Path | None) -> Callable[[engine.Target, str],
     return secret
 
 
+def _severities(config: Config, root: Path | None, target: engine.Target) -> Counter[str]:
+    """How many errors, warnings and infos ``target`` has now."""
+    doc = document_from_bytes(target.label, target.path.read_bytes())
+    found = lint_document(doc, config.lint, root, profile=cast("LintProfile", target.profile))
+    return Counter(f.severity for f in found)
+
+
 def _dirty(config: Config, root: Path | None) -> Callable[[Path], bool]:
     def dirty(path: Path) -> bool:
         if root is None:
@@ -132,6 +192,12 @@ def _choose_unsafe(offers: Sequence[engine.Offer]) -> dict[str, frozenset[str]]:
     return {label: frozenset(rules) for label, rules in chosen.items()}
 
 
+class FixOutcome(NamedTuple):
+    code: int
+    fixes: tuple[FileFix, ...]
+    applied: bool
+
+
 def run_fix(
     config: Config,
     root: Path | None,
@@ -145,8 +211,16 @@ def run_fix(
     ignore: Sequence[str],
     allow_dirty: bool,
     choose: Callable[[Sequence[engine.Offer]], dict[str, frozenset[str]]] = _choose_unsafe,
-) -> int:
-    """Plan, choose, apply (or print diffs) and return the fix part of the exit code."""
+    machine: bool = False,
+) -> FixOutcome:
+    """Plan, choose, apply (or print diffs); the fix part of the exit code and the fixes.
+
+    With ``machine`` output (JSON, SARIF) every message goes to stderr.
+    """
+
+    def say(text: str, *, err: bool = False, nl: bool = True) -> None:
+        click.echo(text, err=err or machine, nl=nl)
+
     plan_for = functools.partial(
         engine.plan_fixes,
         found,
@@ -164,34 +238,35 @@ def run_fix(
         if chosen:
             plan = plan_for(unsafe=chosen)
     for note in plan.skipped:
-        click.echo(f"skipped {note}", err=True)
+        say(f"skipped {note}", err=True)
     for failure in plan.failed:
-        click.echo(f"FIX FAILED {failure} (file left untouched)", err=True)
+        say(f"FIX FAILED {failure} (file left untouched)", err=True)
     if plan.offers and not unsafe_fixes:
-        click.echo("unsafe fixes available (rerun with --unsafe-fixes to apply them):", err=True)
+        say("unsafe fixes available (rerun with --unsafe-fixes to apply them):", err=True)
         for offer in plan.offers:
-            click.echo(f"  {offer.rule} · {offer.label} · {offer.summary}", err=True)
+            say(f"  {offer.rule} · {offer.label} · {offer.summary}", err=True)
+    failed_code = EXIT_FIX_FAILED if plan.failed else 0
     if diff_only:
-        for fix in plan.fixes:
-            click.echo(fix.diff, nl=False)
-        if plan.failed:
-            return EXIT_FIX_FAILED
-        return EXIT_FINDINGS if plan.fixes else 0
+        if not machine:
+            for fix in plan.fixes:
+                say(fix.diff, nl=False)
+        code = failed_code or (EXIT_FINDINGS if plan.fixes else 0)
+        return FixOutcome(code, plan.fixes, False)
     paths = {t.label: t.path for t in found}
     backup_id, changed = engine.apply_fixes(plan.fixes, paths, backup_root(os.environ))
-    applied = [f for f in plan.fixes if f.path not in changed]
+    applied = tuple(f for f in plan.fixes if f.path not in changed)
     for label in changed:
-        click.echo(f"skipped {label}: changed while fixing; nothing written", err=True)
+        say(f"skipped {label}: changed while fixing; nothing written", err=True)
     if applied:
-        click.echo(f"fixed {len(applied)} file(s)")
+        say(f"fixed {len(applied)} file(s)")
         if show_fixes:
             for fix in applied:
-                click.echo(f"  {fix.path}: {', '.join(fix.rules)}")
+                say(f"  {fix.path}: {', '.join(fix.rules)}")
         if backup_id and config.ux.show_undo_hint:
-            click.echo(f"Undo with: steersync restore {backup_id}")
+            say(f"Undo with: steersync restore {backup_id}")
     elif not plan.failed:
-        click.echo("nothing to fix")
-    return EXIT_FIX_FAILED if plan.failed else 0
+        say("nothing to fix")
+    return FixOutcome(failed_code, applied, True)
 
 
 def exit_with(fix_code: int, report: LintReport, fail_level: str) -> None:

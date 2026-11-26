@@ -479,7 +479,7 @@ subdirectory; `pull` and `status` print a warning pointing at them until that is
 | `steersync pull [--force] [--dry-run] [--no-global] [--no-workspace] [--strict] [--best-effort] [-c NAME] [--json]` | Apply central collections locally. `--best-effort` warns and exits 0 on failure. |
 | `steersync push [--dry-run] [--scope global] [--no-lint] [-m WHY] [-c NAME] [--json]` | Propose local collections centrally in one branch; `-m` adds your reason to the merge request. `--from-hook` is used by git hooks and never blocks the push unless strict. |
 | `steersync status [-c NAME] [--json]` | Show adds, updates, deletes and local edits per collection in both directions. |
-| `steersync lint [PATHS] [-c NAME] [--profile P] [--json] [--fix] [--unsafe-fixes] [--diff] [--show-fixes] [--select ID] [--ignore ID] [--allow-dirty]` | Validate every collection with its profile, or explicit paths; `--fix` repairs what is safe (see [Fixing lint findings](https://github.com/SCGIS-Wales/steersync#fixing-lint-findings)). |
+| `steersync lint [PATHS] [-c NAME] [--profile P] [--format text\|json\|sarif] [--fix] [--unsafe-fixes] [--diff] [--show-fixes] [--select ID] [--ignore ID] [--allow-dirty]` | Validate every collection with its profile, or explicit paths; `--fix` repairs what is safe (see [Fixing lint findings](https://github.com/SCGIS-Wales/steersync#fixing-lint-findings)). |
 | `steersync mr [--branch NAME] [--title T] [-c NAME] [--json]` | Open, or find, the GitLab merge request for the pushed proposal branch. Needs the token in `GITLAB_TOKEN` (configurable). |
 | `steersync init [--write-config] [--hook] [--no-exclude] [--kiro] [--mcp-command PATH]` plus the plan options | Prepare a repository: excludes and git hook; `--kiro` also writes the Kiro session hook and MCP server entry into its `.kiro`. The step flags are answers, so with any of them nothing is asked. |
 | `steersync restore [STAMP] [--list] [--repo PATH] [--yes]` | Undo a run: put back what setup, init or a forced pull changed, and remove what it created. |
@@ -751,6 +751,16 @@ is checked again just before an atomic write, and one backup covers the run:
 `Undo with: steersync restore <id>`. The classes are configuration (`lint.fix.safety`,
 `extend_safe_fixes`, `extend_unsafe_fixes`, `unfixable`).
 
+`--format json` (or `--json`) prints one document: `version`, `findings`, `fixes` (path,
+rules, safety, unified diff, whether it was applied) and `summary`, with the counts also at
+the top level. `--format sarif` prints SARIF 2.1.0 for code scanning: the rule catalogue with
+each rule's fix safety, and each fixable result with its fix as `artifactChanges`. With either
+format every message goes to stderr, so stdout stays parseable:
+
+```bash
+steersync lint --diff --format sarif > steersync.sarif   # upload with github/codeql-action/upload-sarif
+```
+
 ## Front matter reference
 
 Kiro V3 reads only a few front matter keys. Everything a team adds for itself goes in one
@@ -931,6 +941,17 @@ which request, so plain sentences work:
 | "what is synced and where" | `list_kiro_collections` |
 | "is steersync set up", "why does the sync fail" | `doctor_kiro_config` |
 | "is my Kiro supported", "do my agents need upgrading" | `kiro_check` |
+| "what would setup change", "set this machine up" | `plan_setup`, then `apply_plan` |
+| "push / pull all my repositories" | `plan_fleet`, then `apply_plan` |
+| "fix the lint findings", "tidy the steering" | `propose_fixes`, then `apply_fixes` |
+
+The `plan_*` and `propose_fixes` tools write nothing and return a `plan_id`. `apply_plan` and
+`apply_fixes` rebuild the plan, refuse a `plan_id` that no longer matches (`stale_plan`), and
+ask the user once: one form with the steps (defaults ticked), `approve`, and
+`allow_destructive` only when a step has no backup; for fixes, `apply_safe` (on) and the
+unsafe fixes (none ticked). A client that cannot show a form gets an error asking it to show
+the plan to the user and call again with the same `plan_id` and `confirm=true`. Forms never
+ask for secrets.
 | "which repos have unpushed kiro changes", "fleet status" | `fleet_status` (read only) |
 
 Every tool accepts a `collections` list. Kiro does not pass the shell's `PATH`,
