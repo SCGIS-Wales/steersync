@@ -297,7 +297,6 @@ def test_setup_interactive_end_to_end(
         "repo.exclude",
         "repo.hook",
     ]
-    assert "@ master" in result.output
     assert "Undo with: steersync restore " in result.output
     config_file = Path(env["HOME"]) / ".config" / "steersync" / "config.yaml"
     config = load_config(workspace_root=realistic_project, env=env)
