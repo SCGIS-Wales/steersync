@@ -9,7 +9,7 @@ it. Skills follow the Agent Skills specification, which has its own ``metadata``
 import re
 from collections.abc import Mapping
 from datetime import date
-from typing import Annotated, Literal, NamedTuple
+from typing import Annotated, Literal, NamedTuple, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -29,7 +29,7 @@ class SteeringFrontMatter(BaseModel):
     metadata: dict[str, str] | None = None
 
     @model_validator(mode="after")
-    def _mode_rules(self) -> SteeringFrontMatter:
+    def _mode_rules(self) -> Self:
         if self.inclusion == "fileMatch" and not self.file_match_pattern:
             raise ValueError("fileMatch requires fileMatchPattern")
         if self.inclusion == "auto" and not (self.name and self.description):
