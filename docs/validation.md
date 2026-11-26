@@ -202,3 +202,39 @@ folder that exists in the workspace, a `name` unique within the agent, `indexTyp
 `forbidden-aws-access-key`, `forbidden-private-key`, `forbidden-github-token`,
 `forbidden-gitlab-token`, `forbidden-slack-token` and `forbidden-generic-secret` are errors.
 The patterns are configurable under `lint.forbidden_patterns`.
+
+## Fixes (`steersync lint --fix`)
+
+Every fix id, with its default class (configurable under `lint.fix.safety`). A fix runs only
+for profiles it applies to and is verified before anything is written; see "Fixing lint
+findings" in the README.
+
+| Fix | Class | What it does |
+|---|---|---|
+| `file-bom` | safe | strip the UTF-8 byte order mark |
+| `file-eol` | safe | CRLF line endings to LF |
+| `fm-leading-blank` | safe | remove blank lines before the opening --- |
+| `fm-key-case` | safe | spell fileMatchPattern the way Kiro reads it |
+| `fm-inclusion-case` | safe | inclusion in its exact case |
+| `fm-inclusion-typo` | unsafe | correct a misspelt inclusion mode (changes how the file loads) |
+| `fm-quote-glob` | unsafe | quote a glob that made the front matter invalid YAML |
+| `fm-filematch-comma` | unsafe | split a comma separated fileMatchPattern into a list (activates the file) |
+| `fm-auto-name` | unsafe | derive a missing name for inclusion: auto from the file name |
+| `fm-move-to-metadata` | unsafe | move organisational keys into metadata as strings (may lose comments) |
+| `skill-name-case` | unsafe | lowercase the skill name (the directory is never renamed) |
+| `json-format` | safe | reindent JSON with a final newline |
+| `md-final-newline` | safe | end the file with one newline |
+| `md-trailing-space` | safe | remove trailing spaces (keeps hard breaks) |
+| `md-hard-tabs` | safe (demoted to unsafe when the rendering changes) | spaces instead of tabs outside code |
+| `md-ul-style` | safe (demoted to unsafe when the rendering changes) | one bullet style |
+| `md-hr-style` | safe (demoted to unsafe when the rendering changes) | one horizontal rule style |
+| `md-fence-style` | safe (demoted to unsafe when the rendering changes) | one code fence style |
+| `md-heading-space` | safe | one space after # and headings at the left margin |
+| `md-list-space` | safe | one space after list markers |
+| `md-quote-space` | safe | one space after > in block quotes |
+| `md-list-indent` | safe (demoted to unsafe when the rendering changes) | consistent list indentation |
+| `md-heading-increment` | unsafe | headings step one level at a time (changes the outline) |
+| `md-ol-prefix` | unsafe | renumber ordered lists |
+| `md-code-style` | unsafe | one code block style (fenced) |
+| `md-blanks-around` | safe (demoted to unsafe when the rendering changes) | a blank line around headings and code fences |
+| `md-blanks-around-lists` | unsafe | a blank line around lists (can end a lazy continuation) |
