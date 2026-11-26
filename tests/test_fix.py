@@ -282,7 +282,7 @@ def test_interactive_unsafe_choice(workspace: Path) -> None:
         allow_dirty=False,
         choose=choose,
     )
-    assert code == 0
+    assert code.code == 0
     assert [o.rule for o in asked[0]] == ["fm-filematch-comma"]
     assert 'fileMatchPattern: ["src/**", "tests/**"]' in py.read_text(encoding="utf-8")
 

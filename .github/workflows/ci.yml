@@ -149,7 +149,7 @@ jobs:
         run: |
           uv venv --python "${PYTHON_VERSION}" .venv-lowest
           uv pip install --python .venv-lowest/bin/python --resolution lowest-direct \
-            -e ".[mcp]" "pytest>=9.2" "pytest-cov>=7.1" "hypothesis>=6.140"
+            -e ".[mcp]" "pytest>=9.2" "pytest-cov>=7.1" "hypothesis>=6.140" "jsonschema>=4.23"
           uv pip list --python .venv-lowest/bin/python
       - name: Configure git identity for integration tests
         run: |

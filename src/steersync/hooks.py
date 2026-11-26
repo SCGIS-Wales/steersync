@@ -128,6 +128,9 @@ AUTO_APPROVE_TOOLS: tuple[str, ...] = (
     "doctor_kiro_config",
     "fleet_status",
     "kiro_check",
+    "plan_setup",
+    "plan_fleet",
+    "propose_fixes",
 )
 
 

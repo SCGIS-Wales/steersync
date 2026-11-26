@@ -25,7 +25,7 @@ import os
 import re
 import sys
 from collections.abc import Awaitable, Callable, MutableMapping
-from typing import Annotated, Any, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple
 
 import anyio
 import anyio.from_thread
@@ -41,11 +41,12 @@ from mcp.server.mcpserver import (
 )
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue, create_model
 
-from steersync import __version__, mcp_tools
+from steersync import __version__, mcp_plans, mcp_tools
 from steersync.errors import SteersyncError
 from steersync.logging_utils import configure_logging
+from steersync.plan import default_selection, pending
 
 log = logging.getLogger(__name__)
 
@@ -311,6 +312,180 @@ async def kiro_check(cwd: Cwd = None) -> mcp_tools.KiroReport:
     return await _run(functools.partial(mcp_tools.kiro_check, cwd))
 
 
+# --- one approval per call: plans and fixes -------------------------------------------------
+
+
+def ask_once(ctx: Context, form: type[BaseModel], message: str) -> Elicit[Any] | bool:
+    """The single question of a call: a form when the client can ask, else False.
+
+    The SDK sends it as a multi round trip request on 2026-07-28 connections and as an
+    elicitation on earlier ones. When the client cannot ask, the tool answers with how to
+    confirm (show the plan to the user, then call again with confirm=true and the same
+    plan_id). Never request secrets in a form.
+    """
+    return Elicit(message, form) if _can_elicit(ctx) else False
+
+
+def _choices(values: list[str], default: list[str], description: str) -> tuple[object, object]:
+    """A multi select field: an array of strings whose items are an inline enum.
+
+    A Literal of one value renders as const and an Enum as a $ref, neither of which an
+    elicitation form accepts; the values are checked again when the plan is applied.
+    """
+    enum: list[JsonValue] = list(values)
+    extra: dict[str, JsonValue] | None = (
+        {"items": {"type": "string", "enum": enum}} if values else None
+    )
+    return (list[str], Field(default=default, description=description, json_schema_extra=extra))
+
+
+def _plan_form(step_ids: list[str], defaults: list[str], destructive: bool) -> type[BaseModel]:
+    fields: dict[str, Any] = {
+        "approve": (bool, Field(description="Apply the selected steps")),
+        "steps": _choices(step_ids, defaults, "Steps to apply"),
+    }
+    if destructive:
+        fields["allow_destructive"] = (
+            bool,
+            Field(default=False, description="Also run steps no backup covers"),
+        )
+    return create_model("PlanApproval", **fields)
+
+
+def ask_plan(plan_id: str, confirm: bool, ctx: Context) -> Elicit[Any] | bool:
+    """Resolver: rebuild the plan and ask once which steps to apply."""
+    if confirm:
+        return True
+    try:
+        plan = mcp_plans.current_plan(plan_id)
+    except SteersyncError:
+        return True  # the tool reports the stale plan
+    steps = pending(plan)
+    defaults = default_selection(plan, mcp_plans._NO_INPUT)
+    form = _plan_form([s.id for s in steps], defaults, any(s.risk == "destructive" for s in steps))
+    listed = "; ".join(f"{s.id} ({s.risk}): {s.title}" for s in steps)
+    return ask_once(ctx, form, f"Apply these {plan.command} steps? {listed}")
+
+
+def ask_fixes(plan_id: str, confirm: bool, ctx: Context) -> Elicit[Any] | bool:
+    """Resolver: ask once whether to apply the safe fixes and which unsafe ones."""
+    if confirm:
+        return True
+    offers = mcp_plans.fix_offers(plan_id)
+    fields: dict[str, Any] = {
+        "apply_safe": (bool, Field(default=True, description="Apply the safe fixes")),
+        "unsafe": _choices(offers, [], "Unsafe fixes to apply too"),
+    }
+    return ask_once(ctx, create_model("FixApproval", **fields), "Apply the proposed fixes?")
+
+
+def _answer(approval: object) -> dict[str, Any] | None:
+    """The form data, {} for confirm=true, None when the user did not approve."""
+    if not isinstance(approval, AcceptedElicitation):
+        return None
+    data: object = approval.data
+    if data is True:
+        return {}
+    return data.model_dump(mode="json") if isinstance(data, BaseModel) else None
+
+
+def _not_approved(ctx: Context) -> ToolError:
+    if _can_elicit(ctx):
+        return ToolError("the user did not approve; nothing was changed")
+    return ToolError(
+        "this client cannot ask the user: show the plan to the user, then call again with "
+        "the same plan_id and confirm=true"
+    )
+
+
+async def plan_setup(cwd: Cwd = None) -> mcp_plans.PlanReport:
+    """Show what `steersync setup` would change on this machine and repository; writes nothing.
+
+    Returns the steps (safe, review, destructive), which are already done, and a plan_id
+    for apply_plan.
+    """
+    return await _run(functools.partial(mcp_plans.plan_setup, cwd))
+
+
+async def plan_fleet(
+    action: Annotated[Literal["push", "pull"], Field(description="push or pull")],
+    repos: Annotated[list[str] | None, Field(description="Repository paths")] = None,
+    states: Annotated[list[str] | None, Field(description="States such as local-ahead")] = None,
+) -> mcp_plans.PlanReport:
+    """Plan a push or pull across repositories (one step each); writes nothing."""
+    return await _run(functools.partial(mcp_plans.plan_fleet, action, repos or [], states or []))
+
+
+async def apply_plan(
+    ctx: Context,
+    approval: Annotated[ElicitationResult[Any], Resolve(ask_plan)],
+    plan_id: Annotated[str, Field(description="From plan_setup or plan_fleet")],
+    step_ids: Annotated[
+        list[str] | None, Field(description="Steps to apply (default: the default selection)")
+    ] = None,
+    confirm: Annotated[
+        bool,
+        Field(description="The user approved the shown plan; needed when the client cannot ask"),
+    ] = False,
+) -> mcp_plans.ApplyReport:
+    """Apply a plan after one approval; refused with stale_plan when the plan changed."""
+    del confirm  # read by the ask_plan resolver
+    answer = _answer(approval)
+    if answer is None or (answer and not answer.get("approve", False)):
+        raise _not_approved(ctx)
+    chosen = answer.get("steps", step_ids) if answer else step_ids
+    return await _run(
+        functools.partial(
+            mcp_plans.apply_plan,
+            plan_id,
+            chosen,
+            allow_destructive=bool(answer.get("allow_destructive", False)),
+        )
+    )
+
+
+async def propose_fixes(
+    cwd: Cwd = None,
+    paths: Annotated[list[str] | None, Field(description="Files or folders (default: all)")] = None,
+    select: Annotated[list[str] | None, Field(description="Only these fix ids")] = None,
+    include_unsafe: Annotated[bool, Field(description="Compute unsafe fixes too")] = False,
+) -> mcp_plans.FixProposal:
+    """Run the lint --fix pipeline in memory: diffs, rules, safety and a plan_id; writes nothing."""
+    return await _run(
+        functools.partial(
+            mcp_plans.propose_fixes, cwd, paths or [], select, include_unsafe=include_unsafe
+        )
+    )
+
+
+async def apply_fixes(
+    ctx: Context,
+    approval: Annotated[ElicitationResult[Any], Resolve(ask_fixes)],
+    plan_id: Annotated[str, Field(description="From propose_fixes")],
+    unsafe_rule_ids: Annotated[
+        list[str] | None, Field(description="Unsafe choices (path::rule) to apply too")
+    ] = None,
+    confirm: Annotated[
+        bool,
+        Field(description="The user approved the shown fixes; needed when the client cannot ask"),
+    ] = False,
+) -> mcp_plans.FixApplyReport:
+    """Apply proposed fixes after one approval (backed up); stale_plan if files changed."""
+    del confirm  # read by the ask_fixes resolver
+    answer = _answer(approval)
+    if answer is None:
+        raise _not_approved(ctx)
+    unsafe = answer.get("unsafe", unsafe_rule_ids or []) if answer else unsafe_rule_ids or []
+    return await _run(
+        functools.partial(
+            mcp_plans.apply_fixes,
+            plan_id,
+            unsafe,
+            apply_safe=bool(answer.get("apply_safe", True)) if answer else True,
+        )
+    )
+
+
 class ToolSpec(NamedTuple):
     func: Callable[..., Awaitable[Any]]
     title: str
@@ -339,6 +514,13 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "doctor_kiro_config": ToolSpec(doctor_kiro_config, "Check steersync setup", read_only=True),
     "fleet_status": ToolSpec(fleet_status, "Fleet status", read_only=True),
     "kiro_check": ToolSpec(kiro_check, "Kiro check", read_only=True, open_world=False),
+    "plan_setup": ToolSpec(plan_setup, "Plan setup", read_only=True),
+    "plan_fleet": ToolSpec(plan_fleet, "Plan fleet push or pull", read_only=True),
+    "apply_plan": ToolSpec(apply_plan, "Apply plan", read_only=False),
+    "propose_fixes": ToolSpec(
+        propose_fixes, "Propose lint fixes", read_only=True, open_world=False
+    ),
+    "apply_fixes": ToolSpec(apply_fixes, "Apply lint fixes", read_only=False, open_world=False),
 }
 READ_ONLY_TOOLS: tuple[str, ...] = tuple(n for n, s in TOOL_SPECS.items() if s.read_only)
 # The tool list and server description never change while the server runs and do not

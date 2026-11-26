@@ -17,6 +17,7 @@ from steersync import (
     gitops,
     hooks,
     kiro_version,
+    lint_output,
     plan_flow,
     registry,
     setup_plan,
@@ -48,6 +49,7 @@ from steersync.config import (
     validate_remote_url,
 )
 from steersync.errors import ConfigError, SteersyncError
+from steersync.fixes import registry as fix_registry
 from steersync.hooks import DEFAULT_TOKEN_ENV
 from steersync.interaction import Interaction
 from steersync.lint import LintReport, lint_paths, lint_workspace, merge_reports
@@ -442,7 +444,14 @@ def status(
     type=click.Choice(list(LINT_PROFILES)),
     help="Lint profile for explicit PATHS (default: steering, or the collection's profile).",
 )
-@click.option("--json", "as_json", is_flag=True, help="Machine readable output.")
+@click.option("--json", "as_json", is_flag=True, help="Machine readable output (--format json).")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["text", "json", "sarif"]),
+    default=None,
+    help="Output format (default text).",
+)
 @click.option("--fix", is_flag=True, help="Apply safe fixes (backed up, verified).")
 @click.option(
     "--unsafe-fixes", is_flag=True, help="With --fix, also apply unsafe fixes; else list them."
@@ -461,6 +470,7 @@ def lint(
     collections: tuple[str, ...],
     profile: str | None,
     as_json: bool,
+    output_format: str | None,
     fix: bool,
     unsafe_fixes: bool,
     diff_only: bool,
@@ -479,6 +489,7 @@ def lint(
     """
     config, root = _bootstrap(ctx)
     quiet = bool(ctx.find_root().params.get("quiet"))
+    fmt = output_format or ("json" if as_json else "text")
     try:
         selected = config.select_collections(collections or None)
     except SteersyncError as exc:
@@ -487,7 +498,7 @@ def lint(
     if not paths and root is None:
         _fail(SteersyncError("no paths given and not inside a git repository"))
         return
-    fix_code = 0
+    outcome = cli_fix.FixOutcome(0, (), False)
     if fix or diff_only:
         forced = config.collections[collections[0]] if collections else None
 
@@ -500,8 +511,8 @@ def lint(
         found = cli_fix.targets(
             config, root, paths, list(selected.values()), collection_for, profile
         )
-        interaction = interaction_from({"yes": yes, "no_input": no_input, "as_json": as_json})
-        fix_code = cli_fix.run_fix(
+        interaction = interaction_from({"yes": yes, "no_input": no_input, "as_json": fmt != "text"})
+        outcome = cli_fix.run_fix(
             config,
             root,
             found,
@@ -512,12 +523,24 @@ def lint(
             select=select,
             ignore=ignore,
             allow_dirty=allow_dirty,
+            machine=fmt != "text",
         )
-        if diff_only:
-            sys.exit(fix_code)
     report = _lint_report(config, root, paths, collections, profile, selected)
-    _print_lint(report, as_json=as_json, quiet=quiet)
-    cli_fix.exit_with(fix_code, report, config.lint.fail_level)
+    if fmt == "text":
+        if not diff_only:
+            _print_lint(report, as_json=False, quiet=quiet)
+    elif fmt == "json":
+        document = lint_output.to_json(report, outcome.fixes, applied=outcome.applied)
+        click.echo(json.dumps(document, indent=2))
+    else:
+        catalogue = [
+            (fixer.rule_id, safety, fixer.summary)
+            for fixer, safety in fix_registry.catalogue(config.lint.fix)
+        ]
+        click.echo(json.dumps(lint_output.to_sarif(report, outcome.fixes, catalogue), indent=2))
+    if diff_only:
+        sys.exit(outcome.code)
+    cli_fix.exit_with(outcome.code, report, config.lint.fail_level)
 
 
 def _lint_report(
@@ -600,41 +623,8 @@ def _lint_explicit_paths(
     return merge_reports(reports)
 
 
-def _collection_for_profile(config: Config, profile: str | None) -> CollectionConfig | None:
-    """The first collection using ``profile``, so its file patterns apply to a directory."""
-    if profile is None:
-        return None
-    return next((c for c in config.collections.values() if c.lint == profile), None)
-
-
-def _collection_for_path(config: Config, root: Path | None, path: Path) -> str | None:
-    """Return the enabled collection whose workspace directory contains ``path``."""
-    if root is None:
-        return None
-    resolved = path.resolve()
-    root_resolved = root.resolve()
-    best: tuple[int, str] | None = None
-    for name, collection in config.enabled_collections().items():
-        target = workspace_collection_dir(collection, root)
-        if target is None:
-            continue
-        base = target.resolve()
-        if base == root_resolved:
-            # A collection rooted at the workspace (AGENTS.md, .kiroignore) owns only the
-            # files its patterns select, never every path under the repository.
-            spec = FileSpec(collection.include, collection.exclude, collection.max_depth)
-            if (
-                resolved.is_file()
-                and base in resolved.parents
-                and spec.matcher()(resolved.relative_to(base).as_posix())
-            ):
-                best = best or (0, name)
-            continue
-        if resolved == base or base in resolved.parents:
-            depth = len(base.parts)
-            if best is None or depth > best[0]:
-                best = (depth, name)
-    return best[1] if best else None
+_collection_for_profile = cli_fix.collection_for_profile
+_collection_for_path = cli_fix.collection_for_path
 
 
 def _profile(name: str) -> LintProfile:

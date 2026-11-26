@@ -15,6 +15,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- `steersync lint --format text|json|sarif`: the JSON document (`version`, `findings`,
+  `fixes` with their diffs and safety, `summary`) and SARIF 2.1.0 with the rule catalogue
+  and each fix as `artifactChanges` with `properties.safety`, validated against the SARIF
+  schema in the tests.
+- MCP tools `plan_setup`, `plan_fleet`, `apply_plan`, `propose_fixes` and `apply_fixes`:
+  propose without writing, then apply after one approval (one elicitation form, or
+  `confirm=true` when the client cannot ask), refusing stale plans.
+
 - Markdown fixes for `lint --fix`: PyMarkdown fix mode on the body only, for the rules the
   installed version reports it can fix (`md-final-newline`, `md-trailing-space`,
   `md-hard-tabs`, `md-ul-style`, `md-hr-style`, `md-fence-style`, `md-heading-space`,
