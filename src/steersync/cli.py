@@ -21,6 +21,7 @@ from steersync import (
     setup_plan,
     sync,
 )
+from steersync import schema as schema_models
 from steersync import setup as setup_steps
 from steersync.cli_common import (
     _bootstrap,
@@ -991,6 +992,39 @@ def _kiro_lines(status: kiro_version.KiroStatus) -> list[str]:
     lines.extend(f"legacy agent: {path}" for path in status.legacy_agents)
     lines.append("kiro: supported" if status.supported else "kiro: below the supported baseline")
     return lines
+
+
+@main.group("schema")
+def schema_group() -> None:
+    """JSON Schemas of the Kiro files steersync understands."""
+
+
+@schema_group.command("export")
+@click.option(
+    "--kind",
+    "kinds",
+    multiple=True,
+    type=click.Choice(sorted(schema_models.KINDS)),
+    help="Which schema (repeatable; default: all).",
+)
+@click.option(
+    "--out",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory to write <kind>.schema.json into (default: print to stdout).",
+)
+def schema_export(kinds: tuple[str, ...], out: Path | None) -> None:
+    """Write the JSON Schema for steering, skill, agent and hook files (by Kiro field name)."""
+    chosen = kinds or tuple(sorted(schema_models.KINDS))
+    for kind in chosen:
+        text = json.dumps(schema_models.json_schema(kind), indent=2, sort_keys=True) + "\n"
+        if out is None:
+            click.echo(text, nl=False)
+            continue
+        out.mkdir(parents=True, exist_ok=True)
+        target = out / f"{kind}.schema.json"
+        target.write_text(text, encoding="utf-8")
+        click.echo(f"written: {target}")
 
 
 @main.group()

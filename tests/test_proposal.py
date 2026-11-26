@@ -37,9 +37,7 @@ def test_description_summarises_then_folds_the_file_list() -> None:
         user="jdoe",
         plan=changes,
         prefixes=PREFIXES,
-        lint_errors=(
-            LintFinding("steering/product.md", "front-matter-yaml", "error", "quote it", 4),
-        ),
+        lint_errors=(LintFinding("steering/product.md", "fm-yaml", "error", "quote it", 4),),
         source="gitlab.example.com/acme/payments-api",
         base="d52d91920000",
         reason="Adds the payments steering.",

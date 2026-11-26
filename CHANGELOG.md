@@ -15,6 +15,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- A front matter schema: Kiro native keys versus one `metadata` map of strings, with
+  pydantic models (`steersync.schema`) and `steersync schema export` writing the JSON
+  Schemas committed in `schemas/`. New rules: `fm-filematch-comma`,
+  `fm-filematch-relative`, `fm-metadata` (against `lint.frontmatter.metadata_fields`, or
+  the `.kiro/steersync.meta.yaml` sidecar), `fm-knowledge-in-steering`, `ref-syntax`,
+  `ref-unresolved` (line ranges and folders; global steering and `AGENTS.md` resolve from
+  their own folder), `steering-ext`, `steering-size`, `steering-dup-rule`, `skill-name`,
+  `skill-size`, and `spec-ears` (info) for specs, which get their own `spec` profile.
+  Every number is in `lint.budgets`, `lint.kiro_limits` or `lint.spec`.
+
 - Configuration: `ux` (`confirm_after_select`, `remember_selection`, `show_undo_hint`) and
   `setup` (`last`, the selection preselected next time, and named `profiles`).
 
@@ -25,6 +35,17 @@ Keep a Changelog and the project uses semantic versioning.
   `lint.agent_fields`, and `agent-resource-budget` (warning) against `lint.kiro_limits`.
 
 ### Changed (breaking)
+
+- Rule ids: `front-matter-position` is `fm-position` (also a byte order mark or a space),
+  `front-matter-yaml` is `fm-yaml` (also a front matter that is not a mapping),
+  `inclusion-value` is `fm-inclusion`, `filematch-pattern-*` is `fm-filematch-*`,
+  `auto-requires-metadata` is `fm-auto-fields`, `unknown-key` is `fm-unknown-key`,
+  `file-reference-*` is `ref-unresolved` (now an error), `skill-name-format` and
+  `skill-name-mismatch` are `skill-name` (now an error), `skill-body-length` is
+  `skill-size`, `steering-always-budget` is `steering-size`. `steering-filematch-prefix`
+  and `steering-document-control-key` are folded into `fm-filematch-relative` and
+  `fm-unknown-key`. `lint.allowed_extra_keys` moved to `lint.frontmatter.allowed_extra_keys`
+  (default empty).
 
 - `fleet push` and `fleet pull` show one plan (a step per repository) and ask once; the
   `Proceed?` questions and the typed `overwrite` word are gone. Overwriting local edits is

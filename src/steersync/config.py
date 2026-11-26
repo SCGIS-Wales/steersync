@@ -17,6 +17,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from steersync.errors import ConfigError
+from steersync.schema.frontmatter import FieldSpec
 
 ENV_CONFIG = "STEERSYNC_CONFIG"
 ENV_REMOTE = "STEERSYNC_REMOTE"
@@ -41,6 +42,7 @@ _COLLECTION_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 LintProfile = Literal[
     "steering",
     "markdown",
+    "spec",
     "skill",
     "agent",
     "hooks",
@@ -54,6 +56,7 @@ LintProfile = Literal[
 LINT_PROFILES: tuple[str, ...] = (
     "steering",
     "markdown",
+    "spec",
     "skill",
     "agent",
     "hooks",
@@ -114,6 +117,52 @@ class PracticeLimitsConfig(_Strict):
     prompt_name_max_chars: int = Field(default=50, ge=1)
 
 
+_DEFAULT_METADATA_FIELDS: dict[str, dict[str, Any]] = {
+    "owner": {"pattern": r"^@?[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$"},
+    "tags": {"list": True, "separator": ","},
+    "references": {"list": True, "separator": " ", "pattern": r"^(https://|#\[\[(file|folder):)"},
+    "review-by": {"type": "date", "warn_when_past": True},
+    "verified-on": {"type": "date"},
+    "status": {"enum": ["draft", "active", "partial", "superseded", "deprecated"]},
+    "version": {"pattern": r"^\d+\.\d+(\.\d+)?$"},
+}
+
+
+class FrontMatterConfig(_Strict):
+    """Kiro native keys versus organisational metadata in steering and skill front matter."""
+
+    # embedded: one `metadata` map in the front matter; sidecar: .kiro/steersync.meta.yaml.
+    metadata_placement: Literal["embedded", "sidecar"] = "embedded"
+    metadata_key: str = "metadata"
+    allowed_extra_keys: tuple[str, ...] = ()
+    metadata_fields: dict[str, FieldSpec] = Field(
+        default_factory=lambda: {k: FieldSpec(**v) for k, v in _DEFAULT_METADATA_FIELDS.items()}
+    )
+    # Keys of the knowledge note schema: a steering file with these and no inclusion is a
+    # knowledge note that would load on every turn (fm-knowledge-in-steering).
+    knowledge_keys: tuple[str, ...] = ("title", "domain", "verified_on", "sources", "relations")
+    sidecar: str = ".kiro/steersync.meta.yaml"
+
+
+class BudgetsConfig(_Strict):
+    """Context budgets: what loads on every turn, and skill size."""
+
+    always_chars: int = Field(default=49_152, ge=1)
+    skill_lines: int = Field(default=500, ge=1)
+    skill_tokens: int = Field(default=5_000, ge=1)
+    chars_per_token: int = Field(default=4, ge=1)
+    # A bullet repeated in more than one steering file (steering-dup-rule) when it has at
+    # least this many characters after normalising.
+    dup_rule_min_chars: int = Field(default=24, ge=1)
+
+
+class SpecConfig(_Strict):
+    """spec-ears: acceptance criteria in EARS form (WHEN/IF/WHILE/WHERE ... SHALL)."""
+
+    criteria_heading: str = r"(?i)^#+\s*acceptance criteria"
+    ears_pattern: str = r"(?i)^(WHEN|IF|WHILE|WHERE|THE)\b.*\bSHALL\b"
+
+
 class KiroLimitsConfig(_Strict):
     """Documented Kiro limits for file:// agent resources (Kiro CLI 3.1)."""
 
@@ -156,11 +205,13 @@ class LintConfig(_Strict):
     practices: bool = True
     practice_limits: PracticeLimitsConfig = PracticeLimitsConfig()
     require_h1: bool = True
-    allowed_extra_keys: tuple[str, ...] = ("x-steersync",)
     file_reference_check: bool = True
     pymarkdown: PyMarkdownConfig = PyMarkdownConfig()
     forbidden_patterns: tuple[ForbiddenPattern, ...] = ()
     kiro_limits: KiroLimitsConfig = KiroLimitsConfig()
+    frontmatter: FrontMatterConfig = FrontMatterConfig()
+    budgets: BudgetsConfig = BudgetsConfig()
+    spec: SpecConfig = SpecConfig()
     agent_fields: tuple[str, ...] = _V3_AGENT_FIELDS
     legacy_agent_keys: dict[str, str] = Field(default_factory=lambda: dict(_LEGACY_AGENT_KEYS))
     upgraded_agent_keys: tuple[str, ...] = _UPGRADED_AGENT_KEYS

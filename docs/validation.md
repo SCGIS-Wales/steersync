@@ -20,24 +20,29 @@ configuration, Prompts, Code intelligence).
 
 | Rule | Severity | Check | Source |
 |---|---|---|---|
-| `front-matter-position` | error | Front matter must start on line 1; after a blank line Kiro ignores it. | Steering |
-| `front-matter-yaml` | error | Front matter must be valid YAML. | Steering |
-| `inclusion-value` | error | `inclusion` is `always`, `fileMatch`, `manual` or `auto`. | Steering |
-| `filematch-pattern-required`, `filematch-pattern-type` | error | `fileMatch` needs a string or list of strings. | Steering |
-| `filematch-pattern-unused` | warning | `fileMatchPattern` only applies to `fileMatch`. | Steering |
-| `auto-requires-metadata` | error | `auto` needs `name` and `description`. | Steering |
-| `unknown-key` | warning | Kiro ignores keys it does not know (`x-steersync` is allowed). | Steering |
+| `fm-position` | error | Front matter must be the first content: no byte order mark, blank line or space before `---`. | Steering |
+| `fm-yaml` | error | Front matter must be valid YAML and a mapping; a value containing `: ` names the key and shows the quoted fix. | Steering |
+| `fm-inclusion` | error | `inclusion` is exactly `always`, `fileMatch`, `manual` or `auto`. | Steering |
+| `fm-filematch-required`, `fm-filematch-type` | error | `fileMatch` needs a glob string or a list of globs. | Steering |
+| `fm-filematch-comma` | error | A comma separated `fileMatchPattern` string never matches and Kiro does not warn (kirodotdev/Kiro#11095); the message shows the YAML list. | Steering |
+| `fm-filematch-relative` | warning | Patterns are relative to the workspace root, no leading `/` or `./`. | Steering |
+| `fm-filematch-unused` | warning | `fileMatchPattern` only applies to `fileMatch`. | Steering |
+| `fm-auto-fields` | error | `auto` needs `name` and `description`; Kiro loads only those until the model judges the file relevant (it is not vector search). | Steering |
+| `fm-unknown-key` | warning | A top level key that is not a Kiro key, not `metadata` and not in `lint.frontmatter.allowed_extra_keys`; the message says to move it under `metadata` (or to the sidecar). | Steering |
+| `fm-metadata` | warning, error | The `metadata` map: strings only, checked against `lint.frontmatter.metadata_fields` (owner, tags, references, review-by, verified-on, status, version), including a `review-by` date that has passed. | steersync |
+| `fm-knowledge-in-steering` | error | Knowledge note keys (`title`, `domain`, `verified_on`, `sources`, `relations`) with no `inclusion`: a note that would load on every turn. | steersync |
+| `ref-syntax` | error | A malformed `#[[file:...]]` or `#[[folder:...]]` (empty path, a folder with lines, an empty range). | Steering |
+| `ref-unresolved` | error | The target is missing, outside its base, or the line range is past the end of the file. Workspace steering resolves from the workspace root, global steering from `~/.kiro/steering`, `AGENTS.md` from its folder. | Steering |
+| `steering-ext` | error | A file under the steering folder without `.md` is never loaded. | Steering |
+| `steering-size` | warning | A file over `lint.kiro_limits.file_chars_truncate` characters (truncated), or the `always` set over `lint.budgets.always_chars` (collection). | Steering |
+| `steering-dup-rule` | warning (collection) | The same normalised bullet in more than one steering file; state each rule once. | steersync |
 | `steering-globs-key` | warning | `globs` is Cursor syntax; Kiro reads `fileMatchPattern`, so the file never matches. | Steering |
-| `steering-filematch-prefix` | warning | Patterns are relative to the workspace root, no leading `/` or `./`. | Steering |
 | `steering-auto-description` | warning | Kiro matches `description` against the request; write it as a trigger ("Use when ...") of at least 20 characters. | Steering |
 | `steering-numeric-prefix` | warning | Numeric prefixes collide and become the `#reference` and slash command name; Kiro's examples are domain first kebab case. | Steering |
 | `steering-file-name` | warning | Lowercase kebab case file names. | Steering |
-| `steering-document-control-key` | warning | `owner`, `status`, `last_updated` and similar keys are not Kiro keys; keep them in a footer line. | Steering |
 | `steering-always-size` | warning | An always included file above 16 KiB costs context in every session. | Steering |
-| `steering-always-budget` | warning (collection) | More than 48 KiB of always included steering in one collection. | Steering |
 | `steering-foundation-missing` | warning (collection) | `product.md`, `tech.md` and `structure.md` are included in every interaction by default. | Steering |
 | `require-h1` | warning | A level one heading is expected. | style |
-| `file-reference-missing`, `file-reference-escape` | warning, error | `#[[file:...]]` and `#[[folder:...]]` targets must exist inside the workspace. | Steering |
 | `markdown-MD*` | configurable | pymarkdown style rules. | style |
 
 ## agent (`.kiro/agents`, `~/.kiro/agents`)
@@ -86,10 +91,10 @@ universal format written by `/upgrade-agent` (both `toolsSettings` and `permissi
 |---|---|---|---|
 | `skill-front-matter-required` | error | `SKILL.md` starts with front matter. | Agent Skills |
 | `skill-requires-metadata` | error | `name` and `description` are required. | Agent Skills |
-| `skill-name-mismatch` | warning | `name` should match the directory. | Agent Skills |
-| `skill-name-format` | warning | Lowercase letters, digits and dashes, at most 64 characters. | Agent Skills standard |
+| `skill-name` | error | Lowercase letters, digits and single hyphens, at most 64 characters, and the same as the directory. | Agent Skills specification |
 | `skill-description-length` | warning | At most 1024 characters; only name and description load at startup. | Agent Skills standard |
-| `skill-body-length` | warning | More than 500 lines; move the full runbook under `references/`. | Agent Skills |
+| `skill-size` | warning | A body over `lint.budgets.skill_lines` (500) lines or about `lint.budgets.skill_tokens` (5,000) tokens; move detail under `references/`. | Agent Skills |
+| `fm-metadata` | warning, error | The specification's `metadata` map, checked like steering metadata. | Agent Skills specification |
 | `skill-misplaced` | warning (collection) | `SKILL.md` directly in the skills folder is not discovered. | Agent Skills |
 
 Scripts and assets are scanned for secrets; there is no per file size limit (the
@@ -152,16 +157,26 @@ authoring documentation and the recipe schema shipped with Kiro CLI 3.5.
 
 Plus the markdown profile.
 
-## markdown (specs, nested `AGENTS.md`, prompt files, references)
+## markdown (nested `AGENTS.md`, prompt files, references)
 
-Encoding, secret patterns and pymarkdown style. No Kiro front matter rules.
+Encoding, secret patterns and pymarkdown style. No Kiro front matter rules. `AGENTS.md`
+also gets `ref-syntax` and `ref-unresolved`, resolved from the folder that holds it.
+
+## spec (`.kiro/specs`)
+
+The markdown profile, plus:
+
+| Rule | Severity | Check |
+|---|---|---|
+| `spec-ears` | info | An acceptance criterion (a list item under a heading matching `lint.spec.criteria_heading`) not in EARS form (`lint.spec.ears_pattern`: WHEN/IF/WHILE/WHERE ... SHALL). Info never fails lint. |
 
 ## Workspace checks (whole workspace lint only)
 
 | Rule | Severity | Check |
 |---|---|---|
-| `autoload-hook-missing` | warning | No `SessionStart` hook runs `steersync pull`, so a Kiro session starts with whatever is on disk. `steersync init` writes it. |
-| `autoload-mcp-missing` | warning | The steersync MCP server is not registered in `.kiro/settings/mcp.json`, so "pull kiro config" is not available in chat. `steersync init` writes it. |
+| `autoload-hook-missing` | warning | No `SessionStart` hook in the repository or `~/.kiro` runs `steersync pull`, so a Kiro session starts with whatever is on disk. `steersync setup` adds it to `~/.kiro`. |
+| `fm-metadata` | warning, error | `.kiro/steersync.meta.yaml` (the sidecar, `lint.frontmatter.sidecar`) maps existing paths to metadata maps checked against `lint.frontmatter.metadata_fields`. |
+| `autoload-mcp-missing` | warning | No server that runs steersync is registered in the repository's or `~/.kiro`'s `settings/mcp.json`, so "pull kiro config" is not available in chat. `steersync setup` adds it. |
 
 ## Secret patterns (every profile)
 

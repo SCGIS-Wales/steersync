@@ -3,14 +3,20 @@
   "findings": [
     {
       "path": "01-bad.md",
-      "rule": "auto-requires-metadata",
+      "rule": "fm-auto-fields",
       "severity": "error",
       "line": 2
     },
     {
       "path": "01-bad.md",
-      "rule": "auto-requires-metadata",
+      "rule": "fm-auto-fields",
       "severity": "error",
+      "line": 2
+    },
+    {
+      "path": "01-bad.md",
+      "rule": "fm-unknown-key",
+      "severity": "warning",
       "line": 2
     },
     {
@@ -26,14 +32,8 @@
       "line": null
     },
     {
-      "path": "01-bad.md",
-      "rule": "unknown-key",
-      "severity": "warning",
-      "line": 2
-    },
-    {
       "path": "sometimes.md",
-      "rule": "inclusion-value",
+      "rule": "fm-inclusion",
       "severity": "error",
       "line": 2
     }
