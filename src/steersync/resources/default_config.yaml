@@ -201,6 +201,12 @@ collections:
 
 # `steersync fleet`: every repository steersync has seen on this machine. The registry
 # and backups live in $XDG_STATE_HOME/steersync (~/.local/state/steersync).
+# Commands that change state show one plan and ask once.
+ux:
+  confirm_after_select: false   # enter on the checkbox is the approval
+  remember_selection: true      # preselect the last accepted steps (setup.last)
+  show_undo_hint: true          # end with "Undo with: steersync restore <backup id>"
+
 fleet:
   # How deep `steersync fleet scan` looks below each root for git repositories.
   scan_max_depth: 4
