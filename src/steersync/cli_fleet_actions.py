@@ -15,7 +15,7 @@ from typing import NamedTuple
 import click
 
 from steersync import backups, fleet, fleet_plan, plan_flow, plan_select, registry
-from steersync.cli_fleet import EXIT_PARTIAL
+from steersync.cli_fleet import EXIT_PARTIAL, global_option, wants_global
 from steersync.cli_fleet import fleet as fleet_group
 from steersync.cli_options import plan_options
 from steersync.cli_plan import run_plan
@@ -47,18 +47,32 @@ def questionary_prompts() -> Prompts:
     )
 
 
+def global_path() -> str:
+    """Where the global row lives (the home directory can change in tests)."""
+    return str(Path("~/.kiro").expanduser().resolve())
+
+
 def short(path: str) -> str:
     """``~/code/app`` instead of the full home directory, as in the status table."""
     home = str(Path.home())
     return "~" + path[len(home) :] if path.startswith(home + "/") else path
 
 
-def _report(env: dict[str, str] | os._Environ[str], *, refresh: bool | None = None) -> FleetReport:
+def _report(
+    env: dict[str, str] | os._Environ[str],
+    *,
+    refresh: bool | None = None,
+    include_global: bool | None = None,
+) -> FleetReport:
     def retried(event: RetryEvent) -> None:
         click.echo(f"  {event.render()}", err=True)
 
     entries = registry.load(registry_path(env)).paths()
-    return fleet.collect(entries, env, refresh=refresh, on_retry=retried)
+    if include_global is None:
+        include_global = wants_global()
+    return fleet.collect(
+        entries, env, refresh=refresh, include_global=include_global, on_retry=retried
+    )
 
 
 def _select(
@@ -75,12 +89,12 @@ def _select(
     rows = []
     for row in report.repositories:
         key_matches = row.path in wanted_paths or (
-            row.is_global() and wanted_paths & {str(Path("~/.kiro").expanduser().resolve())}
+            row.is_global() and wanted_paths & {global_path()}
         )
         if key_matches or row.state in wanted_states or (all_rows and reason(row) is None):
             rows.append(row)
     unknown = wanted_paths - {r.path for r in report.repositories}
-    unknown.discard(str(Path("~/.kiro").expanduser().resolve()))
+    unknown.discard(global_path())
     if unknown:
         raise click.UsageError(f"not registered: {', '.join(sorted(unknown))}")
     return rows
@@ -133,7 +147,9 @@ def _run_fleet(
     overwrite: bool = False,
 ) -> None:
     # Act on the current central state: always refresh before changing anything.
-    report = _report(os.environ, refresh=True)
+    # --repo ~/.kiro asks for the global row by name, whatever the default.
+    named_global = any(str(Path(p).expanduser().resolve()) == global_path() for p in repos)
+    report = _report(os.environ, refresh=True, include_global=wants_global(forced=named_global))
     reason = fleet.push_reason if action == "push" else fleet.pull_reason
     rows = _select(report, repos, states, all_rows, reason)
     if not rows:
@@ -159,6 +175,7 @@ def _run_fleet(
 @repo_option
 @click.option("--state", "states", multiple=True, type=click.Choice(fleet.STATE_ORDER))
 @click.option("--all", "all_rows", is_flag=True, help="Every repository with something to push.")
+@global_option
 @plan_options
 def fleet_push(
     repos: tuple[Path, ...], states: tuple[str, ...], all_rows: bool, **plan_flags: object
@@ -180,6 +197,7 @@ def fleet_push(
     help="Preselect replacing locally edited files with the central versions (a verified "
     "backup is taken first; `steersync restore` undoes it).",
 )
+@global_option
 @plan_options
 def fleet_pull(
     repos: tuple[Path, ...],

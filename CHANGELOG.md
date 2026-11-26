@@ -71,6 +71,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed (breaking)
 
+- `steersync fleet` leaves the `~/.kiro` (global) row out of status, push and pull by
+  default. `--global` (on `fleet`, `fleet status`, `push` and `pull`) includes it for one run,
+  `fleet.include_global: true` always, and `--repo ~/.kiro` names it.
 - Rule ids: `front-matter-position` is `fm-position` (also a byte order mark or a space),
   `front-matter-yaml` is `fm-yaml` (also a front matter that is not a mapping),
   `inclusion-value` is `fm-inclusion`, `filematch-pattern-*` is `fm-filematch-*`,

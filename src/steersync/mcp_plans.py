@@ -134,8 +134,15 @@ def _setup(cwd: str | None) -> tuple[Plan, list[str]]:
 def _fleet(
     action: fleet_plan.Action, repos: Sequence[str], states: Sequence[str]
 ) -> tuple[Plan, list[str]]:
-    report = fleet.collect(registry.load(registry_path(os.environ)).paths(), os.environ)
     wanted = {str(Path(r).expanduser().resolve()) for r in repos}
+    named_global = str(Path("~/.kiro").expanduser().resolve()) in wanted
+    report = fleet.collect(
+        registry.load(registry_path(os.environ)).paths(),
+        os.environ,
+        include_global=True if named_global else None,
+    )
+    if named_global:
+        wanted.add("~/.kiro")
     rows = [
         r
         for r in report.repositories

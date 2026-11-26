@@ -332,11 +332,14 @@ def collect(
     env: Mapping[str, str],
     *,
     refresh: bool | None = None,
-    include_global: bool = True,
+    include_global: bool | None = None,
     on_event: OnEvent = _quiet,
     on_retry: Callable[[RetryEvent], None] | None = None,
 ) -> FleetReport:
-    """Status for every repository in ``paths`` (and ``~/.kiro``), one refresh per remote.
+    """Status for every repository in ``paths``, one refresh per remote.
+
+    ``include_global`` adds the ``~/.kiro`` row; None follows ``fleet.include_global``
+    in the machine configuration (off by default).
 
     ``refresh`` None refreshes a remote whose cache is older than
     ``fleet.refresh_max_age_seconds``; True always refreshes; False uses the cache.
@@ -352,6 +355,8 @@ def collect(
     machine: Config | None = None
     try:
         machine = load_config(workspace_root=None, env=env)
+        if include_global is None:
+            include_global = machine.fleet.include_global
         if include_global and machine.remote.url:
             by_remote.setdefault(sync.central_url(machine), [])
     except SteersyncError as exc:

@@ -48,7 +48,8 @@ The counts are shown as `+added ~updated -deleted`. The repository's state is th
 applies: `error`, `diverged` (any conflict), `proposed` (local changes already on an open
 proposal branch), `local-ahead`, `central-ahead`, `in-sync`. Rows that cannot be compared
 are `missing` (the folder is gone) or `unconfigured` (for example no `origin` remote); the
-note says why. The `g` row is `~/.kiro`, compared with `global/` in the central repository.
+note says why. The `g` row is `~/.kiro`, compared with `global/` in the central repository; it is shown
+only with `--global`, `fleet.include_global: true` or `--repo ~/.kiro`.
 
 When the central repository cannot be reached and a cache clone exists, its rows are shown
 from the cached copy, marked `offline`, and push and pull are refused for them. Without a
