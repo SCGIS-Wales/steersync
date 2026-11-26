@@ -1,7 +1,32 @@
 # Central repository layout
 
+```text
+kiro-config/
+├── global/                        # applied to every machine (~/.kiro)
+│   ├── steering/engineering-rules.md
+│   ├── skills/release-checklist/SKILL.md
+│   └── hooks/steersync.json
+└── projects/
+    └── acme/platform/api/         # derived from the project's origin URL
+        ├── steering/product.md
+        ├── specs/tls-cert-staged-rotation/tasks.md
+        ├── skills/venafi-tpp-websdk/SKILL.md
+        ├── agents/entra-app-registration.json
+        ├── hooks/tests-on-stop.json
+        └── settings/lsp.json
+```
+
+The project slug is the remote path with the host and `.git` removed and unsafe characters
+replaced, so `ssh://git@gitlab.example.com/acme/platform/api.git` becomes
+`acme/platform/api`. The `global` and `projects` directory names and every collection
+directory are configurable. Repositories created with steersync 0.1, which kept steering
+directly under `global/` and `projects/<slug>/`, need their files moved into a `steering/`
+subdirectory; `pull` and `status` print a warning pointing at them until that is done.
+
+## A worked example
+
 This page shows how a complete `.kiro/` tree is stored in the central repository and how
-each part maps onto a collection. The example is a Unity Deploy resource for Entra ID app
+each part maps onto a collection. The example is a deployment resource for Entra ID app
 registrations whose steering was reorganised from numeric prefixes into domain prefixes,
 plans moved into specs and a runbook turned into a skill.
 
@@ -17,7 +42,7 @@ my-service/
     │   ├── structure.md                        always
     │   ├── dev-code-intelligence.md            always
     │   ├── dev-local-environment.md            manual
-    │   ├── unity-sdk-capabilities.md           fileMatch **/*.groovy
+    │   ├── sdk-capabilities.md                 fileMatch **/*.groovy
     │   ├── lang-groovy-conventions.md          fileMatch ["**/*.groovy", "**/*.gradle"]
     │   ├── lang-terraform-conventions.md       fileMatch ["**/*.tf", "**/*.tfvars"]
     │   ├── entra-oauth2-app-registration.md    auto

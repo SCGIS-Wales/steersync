@@ -206,8 +206,8 @@ The patterns are configurable under `lint.forbidden_patterns`.
 ## Fixes (`steersync lint --fix`)
 
 Every fix id, with its default class (configurable under `lint.fix.safety`). A fix runs only
-for profiles it applies to and is verified before anything is written; see "Fixing lint
-findings" in the README.
+for profiles it applies to and is verified before anything is written; see [Fixing lint
+findings](https://github.com/SCGIS-Wales/steersync/blob/main/docs/lint.md#fixing-lint-findings).
 
 | Fix | Class | What it does |
 |---|---|---|
