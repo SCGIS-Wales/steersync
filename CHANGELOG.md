@@ -5,6 +5,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- `steersync fleet` leaves the `~/.kiro` (global) row out of status, push and pull by
+  default. `--global` (on `fleet`, `fleet status`, `push` and `pull`) includes it for one run,
+  `fleet.include_global: true` always, and `--repo ~/.kiro` names it.
+
+### Changed
+
+- The README is short: install, quick start, how it works and collections, with a
+  documentation table. Everything else moved to pages under `docs/` (getting started, fleet,
+  Kiro integration, commands, configuration, git hook and merge requests, lint and fixes,
+  writing steering, knowledge notes).
+
 ## [0.10.0] - 2026-11-26
 
 Kiro V3 only; setup, init and fleet show one plan and ask once; a front matter schema with
@@ -71,9 +84,6 @@ and SARIF lint output; MCP tools that propose and then apply after one approval.
 
 ### Changed (breaking)
 
-- `steersync fleet` leaves the `~/.kiro` (global) row out of status, push and pull by
-  default. `--global` (on `fleet`, `fleet status`, `push` and `pull`) includes it for one run,
-  `fleet.include_global: true` always, and `--repo ~/.kiro` names it.
 - Rule ids: `front-matter-position` is `fm-position` (also a byte order mark or a space),
   `front-matter-yaml` is `fm-yaml` (also a front matter that is not a mapping),
   `inclusion-value` is `fm-inclusion`, `filematch-pattern-*` is `fm-filematch-*`,

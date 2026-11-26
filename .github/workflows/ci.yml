@@ -360,11 +360,11 @@ jobs:
           uv run --no-sync --python "${PYTHON_VERSION}" python scripts/prepare_release.py apply \
             --version "${next}" --fallback-note "${note}" \
             --replace "README.md::VERSION=${version}::VERSION=${next}" \
-            --replace "README.md::rev: v${version}::rev: v${next}" \
+            --replace "docs/pushing.md::rev: v${version}::rev: v${next}" \
             --replace "src/steersync/hooks.py::\"v${version}\"::\"v${next}\""
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/steersync/__init__.py CHANGELOG.md README.md src/steersync/hooks.py
+          git add src/steersync/__init__.py CHANGELOG.md README.md docs/pushing.md src/steersync/hooks.py
           git commit --quiet -m "Release ${next}" \
             -m "Bump ${version} to ${next} (${bump}) after ${note}. Automated by the CI workflow."
           if ! git push origin HEAD:main; then

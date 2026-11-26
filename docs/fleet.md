@@ -2,8 +2,84 @@
 
 `steersync fleet` works with every repository on the machine that steersync knows about: it
 shows which have Kiro changes that are not pushed and which are behind the central
-repository, and pushes or pulls a chosen set. This page is the reference; the README has the
-[short version](https://github.com/SCGIS-Wales/steersync#working-across-many-repositories).
+repository, and pushes or pulls a chosen set.
+
+## Working across many repositories
+
+`steersync fleet` answers "which of my repositories have Kiro changes that are not pushed,
+and which are behind the central repository?" for every repository on the machine, and
+pushes or pulls a chosen set in one go.
+
+**Which repositories.** Every repository where you run `pull`, `push`, `status`, `init` or
+`setup`, or where Kiro starts the MCP server, is remembered in
+`$XDG_STATE_HOME/steersync/workspaces.json` (default `~/.local/state/steersync/`). Add the
+ones you set up earlier with `steersync fleet scan ~/code` (searches four folder levels by
+default; `--no-add` only lists them) or `steersync fleet add PATH`. `fleet list` shows the
+registry, `fleet remove PATH` forgets a repository without touching its files, and
+`fleet prune` forgets the ones that no longer exist.
+
+**States.** Each repository is compared three ways: your files, the central default
+branch, and the record of the last sync. Files that only line endings separate (a Windows
+checkout with `core.autocrlf`) count as equal.
+
+| State | Meaning | What to do |
+|---|---|---|
+| `diverged` | A file changed both locally and centrally since the last sync. | `fleet pull` keeps your edit; compare, then push yours or overwrite with the central copy. |
+| `local-ahead` | You have changes the central repository does not. | `fleet push`. |
+| `central-ahead` | The central repository has merged changes you do not have. | `fleet pull`. |
+| `proposed` | Your changes are already on a proposal branch or merge request. | Get it reviewed and merged. |
+| `in-sync` | Nothing differs. | Nothing. |
+| `unconfigured` | steersync cannot work out the project, for example no `origin` remote. | `steersync doctor` in that repository. |
+| `missing` | The folder is gone or is no longer a git work tree. | `fleet prune`. |
+| `error` | Comparing this repository failed; the note says why. | Fix it; every other repository is still shown. |
+
+The `~/.kiro` row (`g`, your global configuration) is left out by default: add `--global`
+to `fleet`, `fleet status`, `push` or `pull` for one run, set `fleet.include_global: true`
+to always show it, or name it with `--repo ~/.kiro`. Each central repository is refreshed
+once per run, not once per repository; `--no-refresh` uses the cached copy, and by default
+a copy younger than `fleet.refresh_max_age_seconds` (300) is reused. When the central
+repository cannot be reached the table says `offline` and shows the cached copy; pushes and
+pulls for those rows are refused until it answers again.
+
+**Pushing and pulling.** On a terminal, bare `steersync fleet` shows the table and asks what
+to do: details of one repository, push, pull, refresh or quit. Without a terminal it prints
+the table. The same actions take flags for scripts:
+
+```bash
+steersync fleet push --repo ~/code/a --repo ~/code/b      # or --state local-ahead, or --all
+steersync fleet pull --all --yes
+steersync fleet status --json                            # the stable machine readable view
+```
+
+Push and pull show one plan, a step per repository, and ask once (one checkbox; `--yes`
+applies the default selection; without a terminal they exit 2 naming `--yes`). Each
+repository gets its own proposal branch and merge request, exactly as `steersync push` in
+that repository would. One failure never stops the others: the summary lists what was
+done, skipped and failed, each failure with the command to rerun it, and the exit code is 5
+when anything failed.
+
+**Local edits are never lost.** `fleet pull` keeps every file you edited locally and says
+so. For a repository whose local edits also changed centrally, the plan has a separate
+`overwrite:` step (risk `review`, off by default; `--overwrite-local` preselects it) that
+replaces them with the central versions, only after a verified backup:
+
+1. every file about to be replaced or deleted is copied to
+   `~/.local/state/steersync/backups/<UTC time>/<project>/` with a `manifest.json` of
+   hashes, modes and sizes, and the copy is checked against it;
+2. just before writing, the originals are hashed again, and a file that changed since the
+   backup stops the overwrite;
+3. any failure, such as a full disk, stops the overwrite and leaves your files untouched.
+
+`steersync fleet restore --list` shows the backups and `steersync fleet restore STAMP`
+puts the files back (the backup is verified first). Backups older than
+`fleet.backup_keep_days` (14) or beyond `fleet.backup_max_bytes` (512 MiB) are pruned by
+`steersync fleet doctor --repair`.
+
+**Health check.** `steersync fleet doctor` checks the registry, every work tree, every sync
+record, the cache clones (`git fsck`), the cache locks and the backups. `--repair` applies
+the safe fixes: a damaged registry or sync record is set aside (renamed, never deleted) and
+rebuilt, a broken cache clone is cloned again, old backups are pruned. It never changes a
+work tree. Details are in [docs/fleet.md](https://github.com/SCGIS-Wales/steersync/blob/main/docs/fleet.md).
 
 ## Registry
 

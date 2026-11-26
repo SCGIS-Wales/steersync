@@ -56,8 +56,8 @@ or pushes tags by hand.
 3. Merge. The `CI` workflow on `main` finds the merged pull request, computes the version
    (`scripts/prepare_release.py`), moves the Unreleased notes under `## [X.Y.Z] - date`
    (using the pull request title as the note when the section was empty), bumps
-   `__version__`, the README install snippet and the pre-commit example, and commits that
-   to `main` as `github-actions[bot]`. The same run then builds from that commit, publishes
+   `__version__`, the README install snippet and the pre-commit example in
+   `docs/pushing.md`, and commits that to `main` as `github-actions[bot]`. The same run then builds from that commit, publishes
    to PyPI, writes `SHA256SUMS`, attests provenance, creates the annotated tag and the
    GitHub release with the changelog section as notes.
 4. A version bumped by hand in the pull request is released as it is, with its changelog
